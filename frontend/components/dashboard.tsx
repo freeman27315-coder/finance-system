@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, RefreshCcw } from "lucide-react";
+import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, RefreshCcw, Rows3, Wallet } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,32 +39,43 @@ function ModuleCard({ section, wallets }: { section: ModuleSection; wallets: Wal
   const scopedWallets = walletsByType(wallets, section.walletTypes);
   const totals = totalByCurrency(scopedWallets);
   const totalEntries = Object.entries(totals) as [Currency, number][];
+  const currencies = [...new Set(scopedWallets.map((wallet) => wallet.currency))];
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
+    <Card className="overflow-hidden">
+      <CardHeader className="pb-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <CardTitle>{section.title}</CardTitle>
             <p className="mt-1 text-sm leading-5 text-muted-foreground">{section.description}</p>
           </div>
-          <Badge>{scopedWallets.length} 钱包</Badge>
+          <Badge>{scopedWallets.length} WALLET</Badge>
         </div>
       </CardHeader>
       <CardContent>
-        <div className="space-y-2">
+        <div className="space-y-3">
           {totalEntries.length > 0 ? (
             totalEntries.map(([currency, amount]) => (
-              <div key={currency} className="flex items-baseline justify-between gap-3">
-                <span className="text-xs font-medium text-muted-foreground">{currency}</span>
-                <span className="tabular-nums text-lg font-semibold">
+              <div
+                key={currency}
+                className="flex items-baseline justify-between gap-3 rounded-xl border border-border/70 bg-muted/35 px-3 py-3"
+              >
+                <span className="text-xs font-semibold tracking-[0.12em] text-muted-foreground">{currency}</span>
+                <span className="tabular-nums text-lg font-semibold text-foreground">
                   {formatMoney(amount, currency, { compact: true })}
                 </span>
               </div>
             ))
           ) : (
-            <div className="text-sm text-muted-foreground">等待 API 数据</div>
+            <div className="rounded-xl border border-dashed border-border bg-muted/25 px-3 py-4 text-sm text-muted-foreground">
+              等待 API 数据
+            </div>
           )}
+        </div>
+
+        <div className="mt-4 flex items-center justify-between border-t border-border/70 pt-4 text-xs text-muted-foreground">
+          <span>覆盖币种</span>
+          <span className="font-medium text-foreground">{currencies.length > 0 ? currencies.join(" / ") : "-"}</span>
         </div>
       </CardContent>
     </Card>
@@ -153,8 +164,127 @@ function WalletTable({ wallets }: { wallets: WalletBalance[] }) {
                 </TableCell>
               </TableRow>
             ))}
+            {sortedWallets.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={4} className="py-10 text-center text-muted-foreground">
+                  暂无钱包数据，等待后端接口或 mock 返回。
+                </TableCell>
+              </TableRow>
+            ) : null}
           </TableBody>
         </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+function HeroPanel({ data, cnyTotal }: { data?: DashboardData; cnyTotal: number }) {
+  const wallets = data?.wallets ?? [];
+  const populatedModules = sections.filter(
+    (section) => section.id !== "dashboard" && walletsByType(wallets, section.walletTypes).length > 0
+  ).length;
+
+  const items = [
+    {
+      label: "已接入模块",
+      value: populatedModules,
+      note: "业务模块"
+    },
+    {
+      label: "钱包数量",
+      value: wallets.length,
+      note: "可展示账户"
+    },
+    {
+      label: "主币种",
+      value: primaryCurrency(wallets),
+      note: "当前默认视图"
+    }
+  ];
+
+  return (
+    <Card className="overflow-hidden border-primary/10">
+      <CardContent className="p-0">
+        <div className="grid gap-0 xl:grid-cols-[1.3fr_0.7fr]">
+          <div className="border-b border-border/70 p-6 xl:border-b-0 xl:border-r">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone="success">CAPITAL OVERVIEW</Badge>
+              <Badge tone="transfer">LOCAL PREVIEW</Badge>
+            </div>
+            <div className="mt-5">
+              <div className="text-sm font-medium text-muted-foreground">CNY 资产总视图</div>
+              <div className="mt-3 tabular-nums text-4xl font-semibold tracking-tight text-foreground md:text-5xl">
+                {formatMoney(cnyTotal, "CNY")}
+              </div>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
+                当前首页聚合资产钱包、供应商往来和业务模块资金状态。接口可用时直读 FastAPI，不可用时自动回落 mock。
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-0 divide-y divide-border/70">
+            {items.map((item) => (
+              <div key={item.label} className="flex items-center justify-between px-6 py-5">
+                <div>
+                  <div className="text-sm text-muted-foreground">{item.label}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{item.note}</div>
+                </div>
+                <div className="tabular-nums text-2xl font-semibold text-foreground">{item.value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function OperationsPanel({ data }: { data?: DashboardData }) {
+  const wallets = data?.wallets ?? [];
+  const currencyCount = new Set(wallets.map((wallet) => wallet.currency)).size;
+  const summary = data?.vendorSummary;
+
+  return (
+    <Card>
+      <CardHeader className="pb-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <CardTitle>运行状态</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">接口来源、供应商净额和当前账户覆盖度。</p>
+          </div>
+          <Rows3 className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="rounded-xl border border-border/70 bg-muted/35 px-4 py-3">
+          <div className="text-xs font-semibold tracking-[0.12em] text-muted-foreground">DATA SOURCE</div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Badge tone="transfer">FASTAPI</Badge>
+            <Badge>MOCK FALLBACK</Badge>
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="rounded-xl border border-border/70 bg-card px-4 py-4">
+            <div className="text-sm text-muted-foreground">供应商净额</div>
+            <div className="mt-2 tabular-nums text-2xl font-semibold">
+              {summary
+                ? formatMoney(summary.netMinor, summary.currency, {
+                    accounting: summary.netMinor < 0,
+                    signed: summary.netMinor > 0
+                  })
+                : formatMoney(0, "CNY")}
+            </div>
+          </div>
+          <div className="rounded-xl border border-border/70 bg-card px-4 py-4">
+            <div className="text-sm text-muted-foreground">币种覆盖</div>
+            <div className="mt-2 tabular-nums text-2xl font-semibold">{currencyCount}</div>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-dashed border-border px-4 py-4 text-sm leading-6 text-muted-foreground">
+          金额显示已按最小单位整数处理。负值展示会根据场景切换为括号或带符号格式。
+        </div>
       </CardContent>
     </Card>
   );
@@ -171,11 +301,11 @@ export function Dashboard() {
   const cnyTotal = sumMinor(cnyWallets.map((wallet) => wallet.balanceMinor));
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div className="flex flex-col justify-between gap-3 md:flex-row md:items-end">
         <div>
-          <h2 className="text-2xl font-semibold tracking-normal">总览</h2>
-          <p className="mt-1 text-sm text-muted-foreground">优先读取 FastAPI；接口不可用时自动使用本地 mock 数据。</p>
+          <h2 className="text-3xl font-semibold tracking-normal">总览</h2>
+          <p className="mt-2 text-sm text-muted-foreground">跨钱包、供应商和业务模块的资金状态汇总。</p>
         </div>
         <Button variant="outline" onClick={() => refetch()} disabled={isFetching}>
           <RefreshCcw className="h-4 w-4" aria-hidden="true" />
@@ -183,7 +313,9 @@ export function Dashboard() {
         </Button>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-3">
+      <HeroPanel data={dashboardData} cnyTotal={cnyTotal} />
+
+      <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardContent className="p-5">
             <div className="text-sm text-muted-foreground">CNY 资产视图</div>
@@ -206,9 +338,12 @@ export function Dashboard() {
         </Card>
       </div>
 
-      {dashboardData ? <VendorSummary data={dashboardData} /> : null}
+      <div className="grid gap-4 xl:grid-cols-[1.25fr_0.75fr]">
+        {dashboardData ? <VendorSummary data={dashboardData} /> : <div />}
+        <OperationsPanel data={dashboardData} />
+      </div>
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {sections
           .filter((section) => section.id !== "dashboard")
           .map((section) => (
@@ -216,7 +351,31 @@ export function Dashboard() {
           ))}
       </div>
 
-      <WalletTable wallets={dashboardData?.wallets ?? []} />
+      <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+        <WalletTable wallets={dashboardData?.wallets ?? []} />
+        <Card>
+          <CardHeader className="pb-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <CardTitle>口径说明</CardTitle>
+                <p className="mt-1 text-sm text-muted-foreground">首页展示规则和当前视图口径。</p>
+              </div>
+              <Wallet className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm leading-6 text-muted-foreground">
+            <div className="rounded-xl border border-border/70 bg-muted/35 px-4 py-4">
+              首页默认按模块聚合，不做跨币种自动换汇。
+            </div>
+            <div className="rounded-xl border border-border/70 bg-muted/35 px-4 py-4">
+              各模块页面保留独立操作入口，首页负责状态判断和快速定位。
+            </div>
+            <div className="rounded-xl border border-border/70 bg-muted/35 px-4 py-4">
+              接口为空时仍会保留布局密度，避免页面退化成裸列表。
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
