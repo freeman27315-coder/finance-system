@@ -25,6 +25,15 @@ engine = create_engine(DATABASE_URL, connect_args=_connect_args(DATABASE_URL))
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
+def configure_database(database_url: str) -> None:
+    """Reconfigure the database connection, mainly for isolated tests."""
+    global DATABASE_URL, SessionLocal, engine
+
+    DATABASE_URL = database_url
+    engine = create_engine(DATABASE_URL, connect_args=_connect_args(DATABASE_URL))
+    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
 def init_db() -> None:
     """Create all database tables used by the finance system."""
     # Import models so their metadata is registered before create_all runs.
