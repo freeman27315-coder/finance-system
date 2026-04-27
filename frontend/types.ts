@@ -86,6 +86,27 @@ export type XboxSummary = {
   ukLocalBalanceMinor: number;
 };
 
+export type TaobaoAccount = {
+  id: string;
+  name: string;
+  unsettledWalletId: string;
+  settledWalletId: string;
+  unsettledBalanceMinor: number;
+  settledBalanceMinor: number;
+  remark?: string | null;
+  createdAt?: string;
+};
+
+export type TaobaoTransaction = {
+  id: string;
+  walletId: string;
+  walletScope: "unsettled" | "settled";
+  amountMinor: number;
+  direction: "in" | "out";
+  remark?: string | null;
+  createdAt?: string;
+};
+
 export type ModuleSection = {
   id: string;
   title: string;

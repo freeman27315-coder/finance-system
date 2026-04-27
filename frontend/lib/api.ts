@@ -12,7 +12,9 @@ import type {
   XboxAccount,
   XboxCountry,
   XboxSummary,
-  XboxTransaction
+  XboxTransaction,
+  TaobaoAccount,
+  TaobaoTransaction
 } from "@/types";
 
 type AssetWalletResponse = {
@@ -108,6 +110,35 @@ type XboxTransactionResponse = {
   local_amount?: string | number;
   localAmount?: string | number;
   type: "recharge" | "consume";
+  remark?: string | null;
+  created_at?: string;
+  createdAt?: string;
+};
+
+type TaobaoAccountResponse = {
+  id: string | number;
+  name: string;
+  unsettled_wallet_id?: string | number;
+  unsettledWalletId?: string | number;
+  settled_wallet_id?: string | number;
+  settledWalletId?: string | number;
+  unsettled_balance?: string | number;
+  unsettledBalance?: string | number;
+  settled_balance?: string | number;
+  settledBalance?: string | number;
+  remark?: string | null;
+  created_at?: string;
+  createdAt?: string;
+};
+
+type TaobaoTransactionResponse = {
+  id: string | number;
+  wallet_id?: string | number;
+  walletId?: string | number;
+  wallet_scope?: "unsettled" | "settled";
+  walletScope?: "unsettled" | "settled";
+  amount: string | number;
+  direction: "in" | "out";
   remark?: string | null;
   created_at?: string;
   createdAt?: string;
@@ -390,4 +421,67 @@ export function consumeXboxAccount(accountId: string, localAmount: string, remar
     local_amount: localAmount,
     remark
   });
+}
+
+function normalizeTaobaoAccount(account: TaobaoAccountResponse): TaobaoAccount {
+  return {
+    id: String(account.id),
+    name: account.name,
+    unsettledWalletId: String(account.unsettled_wallet_id ?? account.unsettledWalletId ?? ""),
+    settledWalletId: String(account.settled_wallet_id ?? account.settledWalletId ?? ""),
+    unsettledBalanceMinor: decimalToMinor(account.unsettled_balance ?? account.unsettledBalance ?? 0, "CNY"),
+    settledBalanceMinor: decimalToMinor(account.settled_balance ?? account.settledBalance ?? 0, "CNY"),
+    remark: account.remark,
+    createdAt: account.created_at ?? account.createdAt
+  };
+}
+
+function normalizeTaobaoTransaction(transaction: TaobaoTransactionResponse): TaobaoTransaction {
+  return {
+    id: String(transaction.id),
+    walletId: String(transaction.wallet_id ?? transaction.walletId ?? ""),
+    walletScope: transaction.wallet_scope ?? transaction.walletScope ?? "settled",
+    amountMinor: decimalToMinor(transaction.amount, "CNY"),
+    direction: transaction.direction,
+    remark: transaction.remark,
+    createdAt: transaction.created_at ?? transaction.createdAt
+  };
+}
+
+export async function getTaobaoAccounts(): Promise<TaobaoAccount[]> {
+  try {
+    const accounts = await fetchJson<TaobaoAccountResponse[]>("/api/taobao/accounts");
+    return accounts.map(normalizeTaobaoAccount);
+  } catch {
+    const { mockTaobaoAccounts } = await import("@/lib/mock-data");
+    return mockTaobaoAccounts;
+  }
+}
+
+export async function getTaobaoTransactions(account: TaobaoAccount): Promise<TaobaoTransaction[]> {
+  try {
+    const transactions = await fetchJson<TaobaoTransactionResponse[]>(
+      `/api/taobao/accounts/${account.id}/transactions`
+    );
+    return transactions.map(normalizeTaobaoTransaction);
+  } catch {
+    const { mockTaobaoTransactions } = await import("@/lib/mock-data");
+    return mockTaobaoTransactions[account.id] ?? [];
+  }
+}
+
+export function createTaobaoAccount(name: string, remark: string) {
+  return postJson("/api/taobao/accounts", { name, remark });
+}
+
+export function creditTaobaoUnsettled(accountId: string, amount: string, remark: string) {
+  return postJson(`/api/taobao/accounts/${accountId}/unsettled/credit`, { amount, remark });
+}
+
+export function creditTaobaoSettled(accountId: string, amount: string, remark: string) {
+  return postJson(`/api/taobao/accounts/${accountId}/settled/credit`, { amount, remark });
+}
+
+export function debitTaobaoSettled(accountId: string, amount: string, remark: string) {
+  return postJson(`/api/taobao/accounts/${accountId}/settled/debit`, { amount, remark });
 }
