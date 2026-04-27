@@ -1,4 +1,13 @@
-import type { AssetTransaction, DashboardData, Vendor, VendorBill, WalletBalance } from "@/types";
+import type {
+  AssetTransaction,
+  DashboardData,
+  Vendor,
+  VendorBill,
+  WalletBalance,
+  XboxAccount,
+  XboxSummary,
+  XboxTransaction
+} from "@/types";
 
 export const mockWallets: WalletBalance[] = [
   {
@@ -174,6 +183,76 @@ export const mockVendorBills: Record<string, VendorBill[]> = {
       remark: "服务垫款",
       createdAt: "2026-04-24T03:00:00.000Z",
       currency: "CNY"
+    }
+  ]
+};
+
+export const mockXboxAccounts: XboxAccount[] = [
+  {
+    id: "xbox-us-1",
+    name: "US Game Pass",
+    country: "US",
+    currency: "USD",
+    rmbCostMinor: 48_600_00,
+    localBalanceMinor: 7_850_00,
+    remark: "美国区主账户",
+    createdAt: "2026-04-12T02:00:00.000Z"
+  },
+  {
+    id: "xbox-uk-1",
+    name: "UK Store",
+    country: "UK",
+    currency: "GBP",
+    rmbCostMinor: 39_200_00,
+    localBalanceMinor: 5_430_00,
+    remark: "英国区主账户",
+    createdAt: "2026-04-16T02:00:00.000Z"
+  }
+];
+
+export const mockXboxSummary: XboxSummary = {
+  usRmbCostMinor: 48_600_00,
+  usLocalBalanceMinor: 7_850_00,
+  ukRmbCostMinor: 39_200_00,
+  ukLocalBalanceMinor: 5_430_00
+};
+
+export const mockXboxTransactions: Record<string, XboxTransaction[]> = {
+  "xbox-us-1": [
+    {
+      id: "xbox-tx-1",
+      accountId: "xbox-us-1",
+      accountName: "US Game Pass",
+      rmbAmountMinor: 15_000_00,
+      localAmountMinor: 2_000_00,
+      type: "recharge",
+      remark: "礼品卡充值",
+      createdAt: "2026-04-20T04:30:00.000Z",
+      currency: "USD"
+    },
+    {
+      id: "xbox-tx-2",
+      accountId: "xbox-us-1",
+      accountName: "US Game Pass",
+      rmbAmountMinor: 0,
+      localAmountMinor: 320_00,
+      type: "consume",
+      remark: "订阅扣费",
+      createdAt: "2026-04-24T08:30:00.000Z",
+      currency: "USD"
+    }
+  ],
+  "xbox-uk-1": [
+    {
+      id: "xbox-tx-3",
+      accountId: "xbox-uk-1",
+      accountName: "UK Store",
+      rmbAmountMinor: 12_000_00,
+      localAmountMinor: 1_300_00,
+      type: "recharge",
+      remark: "英国区充值",
+      createdAt: "2026-04-22T09:00:00.000Z",
+      currency: "GBP"
     }
   ]
 };

@@ -54,6 +54,38 @@ export type VendorBill = {
   currency: "CNY";
 };
 
+export type XboxCountry = "US" | "UK";
+
+export type XboxAccount = {
+  id: string;
+  name: string;
+  country: XboxCountry;
+  currency: "USD" | "GBP";
+  rmbCostMinor: number;
+  localBalanceMinor: number;
+  remark?: string | null;
+  createdAt?: string;
+};
+
+export type XboxTransaction = {
+  id: string;
+  accountId: string;
+  accountName: string;
+  rmbAmountMinor: number;
+  localAmountMinor: number;
+  type: "recharge" | "consume";
+  remark?: string | null;
+  createdAt?: string;
+  currency: "USD" | "GBP";
+};
+
+export type XboxSummary = {
+  usRmbCostMinor: number;
+  usLocalBalanceMinor: number;
+  ukRmbCostMinor: number;
+  ukLocalBalanceMinor: number;
+};
+
 export type ModuleSection = {
   id: string;
   title: string;
