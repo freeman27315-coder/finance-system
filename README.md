@@ -25,6 +25,13 @@ Claude PM (代码审查 → 汇报结果)
 | `done` | 已完成并合并 |
 | `blocked` | 有阻塞需要人工介入 |
 
+## Agent 协作规则
+
+- 主动工作期间默认每 90 秒轮询 GitHub 状态，范围包括 `ready-for-dev`、`in-progress`、`needs-revision`、PR review/comment、Issue 评论和 CI / check 状态。
+- 收到新的可执行任务后，Agent 先向 CEO 反馈“已收到任务 #n，开始开发”，然后直接开工。
+- 阻塞不是停止工作：关键字段乱码、字段缺失、业务名称不清、验收标准不明或指令冲突时，Agent 必须列出无法确认的字段并询问 CEO / PM，同时继续轮询其他可执行任务，不能空转。
+- 会进入数据库 / API 合同的字段必须逐字确认，不能凭业务直觉补全。
+
 ## 目录结构
 
 ```
