@@ -38,6 +38,7 @@ def init_db() -> None:
     """Create all database tables used by the finance system."""
     # Import models so their metadata is registered before create_all runs.
     from src.models import wallet  # noqa: F401
+    from src.models import vendor  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
 
