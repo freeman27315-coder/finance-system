@@ -40,6 +40,7 @@ def init_db() -> None:
     from src.models import wallet  # noqa: F401
     from src.models import vendor  # noqa: F401
     from src.models import xbox  # noqa: F401
+    from src.models import taobao  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
 
