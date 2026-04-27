@@ -10,9 +10,14 @@ import os
 import subprocess
 import sys
 
-GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GH = os.environ.get("GH_PATH", "gh")
 REPO = "freeman27315-coder/finance-system"
 REPO_URL = f"https://{GITHUB_TOKEN}@github.com/{REPO}.git"
+
+if not GITHUB_TOKEN:
+    print("错误: GITHUB_TOKEN 未设置，请检查 .env 并执行 source .env")
+    sys.exit(1)
 
 
 def run(cmd: list, cwd: str = None, check: bool = True) -> str:
@@ -43,7 +48,7 @@ def cmd_submit(issue_number: str):
 
     # 获取 Issue 标题
     issue_info = run([
-        "gh", "issue", "view", issue_number,
+        GH, "issue", "view", issue_number,
         "--repo", REPO,
         "--json", "title,body",
     ])
@@ -70,7 +75,7 @@ Closes #{issue_number}
 
     result = subprocess.run(
         [
-            "gh", "pr", "create",
+            GH, "pr", "create",
             "--repo", REPO,
             "--title", f"[PR] {title}",
             "--body", pr_body,
@@ -89,7 +94,7 @@ Closes #{issue_number}
 
     # 更新 Issue 标签
     subprocess.run([
-        "gh", "issue", "edit", issue_number,
+        GH, "issue", "edit", issue_number,
         "--repo", REPO,
         "--remove-label", "in-progress",
         "--add-label", "in-review",
@@ -102,7 +107,7 @@ Closes #{issue_number}
 def cmd_list():
     """列出所有待开发的 Issues"""
     result = run([
-        "gh", "issue", "list",
+        GH, "issue", "list",
         "--repo", REPO,
         "--label", "ready-for-dev",
         "--json", "number,title,createdAt",

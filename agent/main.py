@@ -16,9 +16,16 @@ from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 
 app = FastAPI(title="Dev Agent")
 
-GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
-WEBHOOK_SECRET = os.environ["WEBHOOK_SECRET"]
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+# gh 可执行文件路径，默认 "gh"，找不到时在 .env 里设置 GH_PATH=/full/path/to/gh
+GH = os.environ.get("GH_PATH", "gh")
 REPO = "freeman27315-coder/finance-system"
+
+if not GITHUB_TOKEN:
+    raise RuntimeError("GITHUB_TOKEN 未设置，请检查 .env 文件")
+if not WEBHOOK_SECRET:
+    raise RuntimeError("WEBHOOK_SECRET 未设置，请检查 .env 文件")
 
 
 def verify_signature(payload: bytes, sig_header: str) -> bool:
@@ -32,7 +39,7 @@ def mark_in_progress(issue_number: int, issue_title: str, issue_url: str):
     """将 Issue 标记为 in-progress，并在终端输出任务提示"""
     subprocess.run(
         [
-            "gh", "issue", "edit", str(issue_number),
+            GH, "issue", "edit", str(issue_number),
             "--repo", REPO,
             "--remove-label", "ready-for-dev",
             "--add-label", "in-progress",
