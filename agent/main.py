@@ -17,6 +17,12 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
+
+# 强制 stdout/stderr 使用 UTF-8
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 
@@ -56,7 +62,14 @@ def mark_in_progress(issue_number: int, issue_title: str, issue_url: str):
             "--remove-label", "ready-for-dev",
             "--add-label", "in-progress",
         ],
-        env={**os.environ, "GH_TOKEN": GITHUB_TOKEN},
+        encoding="utf-8",
+        env={
+            **os.environ,
+            "GH_TOKEN": GITHUB_TOKEN,
+            "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+            "LC_ALL": os.environ.get("LC_ALL", "en_US.UTF-8"),
+            "PYTHONIOENCODING": "utf-8",
+        },
     )
     print("\n" + "=" * 60)
     print(f"  [{AGENT_LABEL.upper()}] 新任务 #{issue_number}: {issue_title}")
