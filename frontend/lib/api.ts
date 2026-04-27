@@ -4,6 +4,8 @@ import type {
   AssetTransaction,
   Currency,
   DashboardData,
+  Vendor,
+  VendorBill,
   VendorSummary,
   WalletBalance,
   WalletType
@@ -40,6 +42,30 @@ type AssetTransactionResponse = {
   created_at?: string;
   createdAt?: string;
   currency?: Currency;
+};
+
+type VendorResponse = {
+  id: string | number;
+  name: string;
+  remark?: string | null;
+  created_at?: string;
+  createdAt?: string;
+};
+
+type VendorBillResponse = {
+  id: string | number;
+  vendor_id?: string | number;
+  vendorId?: string | number;
+  vendor_name?: string;
+  vendorName?: string;
+  direction: "payable" | "receivable";
+  amount: string | number;
+  status: "pending" | "settled";
+  due_date?: string | null;
+  dueDate?: string | null;
+  remark?: string | null;
+  created_at?: string;
+  createdAt?: string;
 };
 
 async function fetchJson<T>(path: string): Promise<T> {
@@ -156,4 +182,81 @@ export function creditAssetWallet(walletId: string, amount: string, remark: stri
 
 export function debitAssetWallet(walletId: string, amount: string, remark: string) {
   return postJson(`/api/wallets/assets/${walletId}/debit`, { amount, remark });
+}
+
+function normalizeVendor(vendor: VendorResponse): Vendor {
+  return {
+    id: String(vendor.id),
+    name: vendor.name,
+    remark: vendor.remark,
+    createdAt: vendor.created_at ?? vendor.createdAt
+  };
+}
+
+function normalizeVendorBill(bill: VendorBillResponse, vendor: Vendor): VendorBill {
+  return {
+    id: String(bill.id),
+    vendorId: String(bill.vendor_id ?? bill.vendorId ?? vendor.id),
+    vendorName: bill.vendor_name ?? bill.vendorName ?? vendor.name,
+    direction: bill.direction,
+    amountMinor: decimalToMinor(bill.amount, "CNY"),
+    status: bill.status,
+    dueDate: bill.due_date ?? bill.dueDate,
+    remark: bill.remark,
+    createdAt: bill.created_at ?? bill.createdAt,
+    currency: "CNY"
+  };
+}
+
+export async function getVendors(): Promise<Vendor[]> {
+  try {
+    const vendors = await fetchJson<VendorResponse[]>("/api/vendors");
+    return vendors.map(normalizeVendor);
+  } catch {
+    const { mockVendors } = await import("@/lib/mock-data");
+    return mockVendors;
+  }
+}
+
+export async function getVendorBills(vendor: Vendor): Promise<VendorBill[]> {
+  try {
+    const bills = await fetchJson<VendorBillResponse[]>(`/api/vendors/${vendor.id}/bills`);
+    return bills.map((bill) => normalizeVendorBill(bill, vendor));
+  } catch {
+    const { mockVendorBills } = await import("@/lib/mock-data");
+    return mockVendorBills[vendor.id] ?? [];
+  }
+}
+
+export function createVendor(name: string, remark: string) {
+  return postJson("/api/vendors", { name, remark });
+}
+
+export function createVendorBill(
+  vendorId: string,
+  direction: "payable" | "receivable",
+  amount: string,
+  dueDate: string,
+  remark: string
+) {
+  return postJson(`/api/vendors/${vendorId}/bills`, {
+    direction,
+    amount,
+    due_date: dueDate || undefined,
+    remark
+  });
+}
+
+export function settleVendorBill(billId: string) {
+  return fetch(`/api/vendors/bills/${billId}/settle`, {
+    method: "PATCH",
+    headers: {
+      accept: "application/json"
+    }
+  }).then((response) => {
+    if (!response.ok) {
+      throw new Error(`settle returned ${response.status}`);
+    }
+    return response.json();
+  });
 }

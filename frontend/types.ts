@@ -34,6 +34,26 @@ export type AssetTransaction = {
   currency: Currency;
 };
 
+export type Vendor = {
+  id: string;
+  name: string;
+  remark?: string | null;
+  createdAt?: string;
+};
+
+export type VendorBill = {
+  id: string;
+  vendorId: string;
+  vendorName: string;
+  direction: "payable" | "receivable";
+  amountMinor: number;
+  status: "pending" | "settled";
+  dueDate?: string | null;
+  remark?: string | null;
+  createdAt?: string;
+  currency: "CNY";
+};
+
 export type ModuleSection = {
   id: string;
   title: string;
