@@ -1,6 +1,13 @@
-import { mockDashboardData } from "@/lib/mock-data";
+import { mockAssetTransactions, mockDashboardData } from "@/lib/mock-data";
 import { decimalToMinor } from "@/lib/money";
-import type { Currency, DashboardData, VendorSummary, WalletBalance, WalletType } from "@/types";
+import type {
+  AssetTransaction,
+  Currency,
+  DashboardData,
+  VendorSummary,
+  WalletBalance,
+  WalletType
+} from "@/types";
 
 type AssetWalletResponse = {
   id: string | number;
@@ -19,6 +26,20 @@ type VendorSummaryResponse = {
   payable_cny?: string | number;
   receivable_cny?: string | number;
   net_cny?: string | number;
+};
+
+type AssetTransactionResponse = {
+  id: string | number;
+  wallet_id?: string | number;
+  walletId?: string | number;
+  wallet_name?: string;
+  walletName?: string;
+  amount: string | number;
+  direction: "in" | "out";
+  remark?: string | null;
+  created_at?: string;
+  createdAt?: string;
+  currency?: Currency;
 };
 
 async function fetchJson<T>(path: string): Promise<T> {
@@ -73,4 +94,66 @@ export async function getDashboardData(): Promise<DashboardData> {
   } catch {
     return mockDashboardData;
   }
+}
+
+export async function getAssetWallets(): Promise<WalletBalance[]> {
+  try {
+    const wallets = await fetchJson<AssetWalletResponse[]>("/api/wallets/assets");
+    return wallets.map(normalizeWallet);
+  } catch {
+    return mockDashboardData.wallets.filter((wallet) => wallet.type === "ASSET_RMB" || wallet.type === "ASSET_USDT");
+  }
+}
+
+function normalizeTransaction(transaction: AssetTransactionResponse, wallet: WalletBalance): AssetTransaction {
+  return {
+    id: String(transaction.id),
+    walletId: String(transaction.wallet_id ?? transaction.walletId ?? wallet.id),
+    walletName: transaction.wallet_name ?? transaction.walletName ?? wallet.name,
+    amountMinor: decimalToMinor(transaction.amount, transaction.currency ?? wallet.currency),
+    direction: transaction.direction,
+    remark: transaction.remark,
+    createdAt: transaction.created_at ?? transaction.createdAt ?? "",
+    currency: transaction.currency ?? wallet.currency
+  };
+}
+
+export async function getAssetTransactions(wallet: WalletBalance): Promise<AssetTransaction[]> {
+  try {
+    const transactions = await fetchJson<AssetTransactionResponse[]>(
+      `/api/wallets/assets/${wallet.id}/transactions`
+    );
+    return transactions.map((transaction) => normalizeTransaction(transaction, wallet));
+  } catch {
+    return mockAssetTransactions[wallet.id] ?? [];
+  }
+}
+
+async function postJson(path: string, body: unknown) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    throw new Error(`${path} returned ${response.status}`);
+  }
+
+  return response.json();
+}
+
+export function createAssetSubWallet(walletId: string, name: string) {
+  return postJson(`/api/wallets/assets/${walletId}/sub`, { name });
+}
+
+export function creditAssetWallet(walletId: string, amount: string, remark: string) {
+  return postJson(`/api/wallets/assets/${walletId}/credit`, { amount, remark });
+}
+
+export function debitAssetWallet(walletId: string, amount: string, remark: string) {
+  return postJson(`/api/wallets/assets/${walletId}/debit`, { amount, remark });
 }

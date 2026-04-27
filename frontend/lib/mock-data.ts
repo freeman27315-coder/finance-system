@@ -1,4 +1,4 @@
-import type { DashboardData, WalletBalance } from "@/types";
+import type { AssetTransaction, DashboardData, WalletBalance } from "@/types";
 
 export const mockWallets: WalletBalance[] = [
   {
@@ -81,4 +81,41 @@ export const mockDashboardData: DashboardData = {
     netMinor: 76_320_00,
     currency: "CNY"
   }
+};
+
+export const mockAssetTransactions: Record<string, AssetTransaction[]> = {
+  "asset-cny-main": [
+    {
+      id: "asset-cny-tx-1",
+      walletId: "asset-cny-main",
+      walletName: "RMB 主钱包",
+      amountMinor: 120_000_00,
+      direction: "in",
+      remark: "期初转入",
+      createdAt: "2026-04-20T02:30:00.000Z",
+      currency: "CNY"
+    },
+    {
+      id: "asset-cny-tx-2",
+      walletId: "asset-cny-main",
+      walletName: "RMB 主钱包",
+      amountMinor: 18_500_00,
+      direction: "out",
+      remark: "供应商付款",
+      createdAt: "2026-04-24T07:15:00.000Z",
+      currency: "CNY"
+    }
+  ],
+  "asset-usdt-main": [
+    {
+      id: "asset-usdt-tx-1",
+      walletId: "asset-usdt-main",
+      walletName: "USDT 主钱包",
+      amountMinor: 24_000_000000,
+      direction: "in",
+      remark: "链上充值",
+      createdAt: "2026-04-23T11:10:00.000Z",
+      currency: "USDT"
+    }
+  ]
 };
