@@ -1,4 +1,4 @@
-import type { AssetTransaction, DashboardData, WalletBalance } from "@/types";
+import type { AssetTransaction, DashboardData, Vendor, VendorBill, WalletBalance } from "@/types";
 
 export const mockWallets: WalletBalance[] = [
   {
@@ -116,6 +116,64 @@ export const mockAssetTransactions: Record<string, AssetTransaction[]> = {
       remark: "链上充值",
       createdAt: "2026-04-23T11:10:00.000Z",
       currency: "USDT"
+    }
+  ]
+};
+
+export const mockVendors: Vendor[] = [
+  {
+    id: "vendor-1",
+    name: "华东渠道商",
+    remark: "月结供应商",
+    createdAt: "2026-04-10T02:00:00.000Z"
+  },
+  {
+    id: "vendor-2",
+    name: "跨境结算服务",
+    remark: "USDT 相关费用",
+    createdAt: "2026-04-18T06:30:00.000Z"
+  }
+];
+
+export const mockVendorBills: Record<string, VendorBill[]> = {
+  "vendor-1": [
+    {
+      id: "bill-1",
+      vendorId: "vendor-1",
+      vendorName: "华东渠道商",
+      direction: "payable",
+      amountMinor: 128_500_00,
+      status: "pending",
+      dueDate: "2026-05-05",
+      remark: "采购款",
+      createdAt: "2026-04-21T04:00:00.000Z",
+      currency: "CNY"
+    },
+    {
+      id: "bill-2",
+      vendorId: "vendor-1",
+      vendorName: "华东渠道商",
+      direction: "receivable",
+      amountMinor: 86_300_00,
+      status: "settled",
+      dueDate: "2026-04-25",
+      remark: "返利",
+      createdAt: "2026-04-15T05:00:00.000Z",
+      currency: "CNY"
+    }
+  ],
+  "vendor-2": [
+    {
+      id: "bill-3",
+      vendorId: "vendor-2",
+      vendorName: "跨境结算服务",
+      direction: "receivable",
+      amountMinor: 208_720_00,
+      status: "pending",
+      dueDate: "2026-05-12",
+      remark: "服务垫款",
+      createdAt: "2026-04-24T03:00:00.000Z",
+      currency: "CNY"
     }
   ]
 };
