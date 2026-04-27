@@ -4,6 +4,8 @@ import type {
   Vendor,
   VendorBill,
   WalletBalance,
+  TaobaoAccount,
+  TaobaoTransaction,
   XboxAccount,
   XboxSummary,
   XboxTransaction
@@ -253,6 +255,51 @@ export const mockXboxTransactions: Record<string, XboxTransaction[]> = {
       remark: "英国区充值",
       createdAt: "2026-04-22T09:00:00.000Z",
       currency: "GBP"
+    }
+  ]
+};
+
+export const mockTaobaoAccounts: TaobaoAccount[] = [
+  {
+    id: "taobao-1",
+    name: "淘宝主店",
+    unsettledWalletId: "taobao-unsettled",
+    settledWalletId: "taobao-settled",
+    unsettledBalanceMinor: 93_400_00,
+    settledBalanceMinor: 41_250_00,
+    remark: "默认淘宝账户",
+    createdAt: "2026-04-14T03:00:00.000Z"
+  }
+];
+
+export const mockTaobaoTransactions: Record<string, TaobaoTransaction[]> = {
+  "taobao-1": [
+    {
+      id: "taobao-tx-1",
+      walletId: "taobao-unsettled",
+      walletScope: "unsettled",
+      amountMinor: 23_000_00,
+      direction: "in",
+      remark: "未结算订单",
+      createdAt: "2026-04-21T05:00:00.000Z"
+    },
+    {
+      id: "taobao-tx-2",
+      walletId: "taobao-settled",
+      walletScope: "settled",
+      amountMinor: 18_500_00,
+      direction: "in",
+      remark: "已结算订单",
+      createdAt: "2026-04-24T09:00:00.000Z"
+    },
+    {
+      id: "taobao-tx-3",
+      walletId: "taobao-settled",
+      walletScope: "settled",
+      amountMinor: 5_000_00,
+      direction: "out",
+      remark: "提现",
+      createdAt: "2026-04-25T10:00:00.000Z"
     }
   ]
 };
