@@ -35,3 +35,19 @@ Claude PM (代码审查 → 汇报结果)
 ├── docs/                  # 项目文档
 └── src/                   # 财务系统源代码 (由 Agent 生成)
 ```
+
+## 本地运行财务系统 API
+
+```bash
+pip3 install -r requirements.txt
+uvicorn src.main:app --reload
+```
+
+默认会创建一个管理员账号：
+
+```text
+username: admin
+password: admin123456
+```
+
+生产环境请通过环境变量设置 `JWT_SECRET_KEY`、`DEFAULT_ADMIN_USERNAME` 和 `DEFAULT_ADMIN_PASSWORD`。
