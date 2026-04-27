@@ -14,7 +14,10 @@ import type {
   XboxSummary,
   XboxTransaction,
   TaobaoAccount,
-  TaobaoTransaction
+  TaobaoTransaction,
+  TaiwanSummary,
+  TaiwanTransaction,
+  TaiwanWallet
 } from "@/types";
 
 type AssetWalletResponse = {
@@ -137,6 +140,36 @@ type TaobaoTransactionResponse = {
   walletId?: string | number;
   wallet_scope?: "unsettled" | "settled";
   walletScope?: "unsettled" | "settled";
+  amount: string | number;
+  direction: "in" | "out";
+  remark?: string | null;
+  created_at?: string;
+  createdAt?: string;
+};
+
+type TaiwanWalletResponse = {
+  id: string | number;
+  name: string;
+  type?: "TAIWAN";
+  currency?: "TWD";
+  balance: string | number;
+  created_at?: string;
+  createdAt?: string;
+};
+
+type TaiwanSummaryResponse = {
+  total_balance?: string | number;
+  totalBalance?: string | number;
+  wallet_count?: number;
+  walletCount?: number;
+};
+
+type TaiwanTransactionResponse = {
+  id: string | number;
+  wallet_id?: string | number;
+  walletId?: string | number;
+  wallet_name?: string;
+  walletName?: string;
   amount: string | number;
   direction: "in" | "out";
   remark?: string | null;
@@ -484,4 +517,77 @@ export function creditTaobaoSettled(accountId: string, amount: string, remark: s
 
 export function debitTaobaoSettled(accountId: string, amount: string, remark: string) {
   return postJson(`/api/taobao/accounts/${accountId}/settled/debit`, { amount, remark });
+}
+
+function normalizeTaiwanWallet(wallet: TaiwanWalletResponse): TaiwanWallet {
+  return {
+    id: String(wallet.id),
+    name: wallet.name,
+    type: "TAIWAN",
+    currency: "TWD",
+    balanceMinor: decimalToMinor(wallet.balance, "TWD"),
+    createdAt: wallet.created_at ?? wallet.createdAt
+  };
+}
+
+function normalizeTaiwanSummary(summary: TaiwanSummaryResponse): TaiwanSummary {
+  return {
+    totalBalanceMinor: decimalToMinor(summary.total_balance ?? summary.totalBalance ?? 0, "TWD"),
+    walletCount: summary.wallet_count ?? summary.walletCount ?? 0
+  };
+}
+
+function normalizeTaiwanTransaction(
+  transaction: TaiwanTransactionResponse,
+  wallet: TaiwanWallet
+): TaiwanTransaction {
+  return {
+    id: String(transaction.id),
+    walletId: String(transaction.wallet_id ?? transaction.walletId ?? wallet.id),
+    walletName: transaction.wallet_name ?? transaction.walletName ?? wallet.name,
+    amountMinor: decimalToMinor(transaction.amount, "TWD"),
+    direction: transaction.direction,
+    remark: transaction.remark,
+    createdAt: transaction.created_at ?? transaction.createdAt
+  };
+}
+
+export async function getTaiwanWallets(): Promise<TaiwanWallet[]> {
+  try {
+    const wallets = await fetchJson<TaiwanWalletResponse[]>("/api/taiwan/wallets");
+    return wallets.map(normalizeTaiwanWallet);
+  } catch {
+    const { mockTaiwanWallets } = await import("@/lib/mock-data");
+    return mockTaiwanWallets;
+  }
+}
+
+export async function getTaiwanSummary(): Promise<TaiwanSummary> {
+  try {
+    const summary = await fetchJson<TaiwanSummaryResponse>("/api/taiwan/summary");
+    return normalizeTaiwanSummary(summary);
+  } catch {
+    const { mockTaiwanSummary } = await import("@/lib/mock-data");
+    return mockTaiwanSummary;
+  }
+}
+
+export async function getTaiwanTransactions(wallet: TaiwanWallet): Promise<TaiwanTransaction[]> {
+  try {
+    const transactions = await fetchJson<TaiwanTransactionResponse[]>(
+      `/api/taiwan/wallets/${wallet.id}/transactions`
+    );
+    return transactions.map((transaction) => normalizeTaiwanTransaction(transaction, wallet));
+  } catch {
+    const { mockTaiwanTransactions } = await import("@/lib/mock-data");
+    return mockTaiwanTransactions[wallet.id] ?? [];
+  }
+}
+
+export function creditTaiwanWallet(walletId: string, amount: string, remark: string) {
+  return postJson(`/api/taiwan/wallets/${walletId}/credit`, { amount, remark });
+}
+
+export function debitTaiwanWallet(walletId: string, amount: string, remark: string) {
+  return postJson(`/api/taiwan/wallets/${walletId}/debit`, { amount, remark });
 }

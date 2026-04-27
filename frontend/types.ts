@@ -107,6 +107,30 @@ export type TaobaoTransaction = {
   createdAt?: string;
 };
 
+export type TaiwanWallet = {
+  id: string;
+  name: string;
+  type: "TAIWAN";
+  currency: "TWD";
+  balanceMinor: number;
+  createdAt?: string;
+};
+
+export type TaiwanTransaction = {
+  id: string;
+  walletId: string;
+  walletName: string;
+  amountMinor: number;
+  direction: "in" | "out";
+  remark?: string | null;
+  createdAt?: string;
+};
+
+export type TaiwanSummary = {
+  totalBalanceMinor: number;
+  walletCount: number;
+};
+
 export type ModuleSection = {
   id: string;
   title: string;
