@@ -4,6 +4,7 @@ import { ModuleOverview } from "@/components/module-overview";
 import { VendorsPage } from "@/components/vendors-page";
 import { XboxPage } from "@/components/xbox-page";
 import { TaobaoPage } from "@/components/taobao-page";
+import { TaiwanPage } from "@/components/taiwan-page";
 import { sectionById, sectionIds } from "@/lib/navigation";
 
 type SectionPageProps = {
@@ -21,7 +22,12 @@ export default function SectionPage({ params }: SectionPageProps) {
       {section.id === "vendors" ? <VendorsPage /> : null}
       {section.id === "xbox" ? <XboxPage /> : null}
       {section.id === "taobao" ? <TaobaoPage /> : null}
-      {section.id !== "assets" && section.id !== "vendors" && section.id !== "xbox" && section.id !== "taobao" ? (
+      {section.id === "taiwan" ? <TaiwanPage /> : null}
+      {section.id !== "assets" &&
+      section.id !== "vendors" &&
+      section.id !== "xbox" &&
+      section.id !== "taobao" &&
+      section.id !== "taiwan" ? (
         <ModuleOverview section={section} />
       ) : null}
     </AppShell>
