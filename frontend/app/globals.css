@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 210 20% 98%;
+  --foreground: 220 35% 12%;
+  --muted: 210 18% 94%;
+  --muted-foreground: 215 12% 43%;
+  --card: 0 0% 100%;
+  --card-foreground: 220 35% 12%;
+  --border: 214 18% 86%;
+  --primary: 217 35% 28%;
+  --primary-foreground: 0 0% 100%;
+  --destructive: 0 67% 45%;
+  --destructive-foreground: 0 0% 100%;
+  --success: 145 55% 31%;
+  --transfer: 210 70% 36%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(45, 82, 130, 0.18);
+}

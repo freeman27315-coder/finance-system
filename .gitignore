@@ -12,4 +12,9 @@ __pycache__/
 .mypy_cache/
 .venv/
 venv/
+node_modules/
+.next/
+dist/
+build/
+*.tsbuildinfo
 .DS_Store
