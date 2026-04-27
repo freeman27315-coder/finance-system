@@ -40,5 +40,18 @@ Claude PM (代码审查 → 汇报结果)
 ├── pm/                    # Claude PM 脚本 (Windows)
 ├── agent/                 # GPT Dev Agent (Mac M4)
 ├── docs/                  # 项目文档
+├── frontend/              # Next.js 前端 Dashboard
 └── src/                   # 财务系统源代码 (由 Agent 生成)
 ```
+
+## Frontend
+
+前端项目在 `frontend/`，独立于 Python 后端：
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Next.js 会将 `/api/:path*` 代理到本地 FastAPI：`http://localhost:8000/:path*`。当前 Dashboard 使用 `GET /wallets/assets` 和 `GET /vendors/summary`，接口不可用时会使用本地 mock 数据。
