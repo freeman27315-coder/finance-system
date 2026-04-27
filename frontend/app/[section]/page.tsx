@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/app-shell";
+import { AssetsPage } from "@/components/assets-page";
 import { ModuleOverview } from "@/components/module-overview";
 import { sectionById, sectionIds } from "@/lib/navigation";
 
@@ -13,7 +14,7 @@ export default function SectionPage({ params }: SectionPageProps) {
 
   return (
     <AppShell activeSection={section.id}>
-      <ModuleOverview section={section} />
+      {section.id === "assets" ? <AssetsPage /> : <ModuleOverview section={section} />}
     </AppShell>
   );
 }

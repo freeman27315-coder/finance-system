@@ -23,6 +23,17 @@ export type DashboardData = {
   vendorSummary: VendorSummary;
 };
 
+export type AssetTransaction = {
+  id: string;
+  walletId: string;
+  walletName: string;
+  amountMinor: number;
+  direction: "in" | "out";
+  remark?: string | null;
+  createdAt: string;
+  currency: Currency;
+};
+
 export type ModuleSection = {
   id: string;
   title: string;
