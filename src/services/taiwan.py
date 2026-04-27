@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from src.models.wallet import Currency, Wallet, WalletType, create_wallet
 
 
-DEFAULT_TAIWAN_WALLET_NAMES = ("8591 收入", "提现", "待处理")
+DEFAULT_TAIWAN_WALLET_NAMES = ("8591余额", "银行卡", "超商代收金流余额")
 
 
 def ensure_default_taiwan_wallets(session: Session) -> None:

@@ -28,7 +28,7 @@ def test_default_taiwan_wallets_are_listed(client):
 
     assert response.status_code == 200, response.text
     wallets = response.json()
-    assert {wallet["name"] for wallet in wallets} == {"8591 收入", "提现", "待处理"}
+    assert {wallet["name"] for wallet in wallets} == {"8591余额", "银行卡", "超商代收金流余额"}
     assert {wallet["type"] for wallet in wallets} == {"TAIWAN"}
     assert {wallet["currency"] for wallet in wallets} == {"TWD"}
 
