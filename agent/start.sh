@@ -27,7 +27,11 @@ fi
 
 # 启动 FastAPI 服务（后台）
 source .env
-export GITHUB_TOKEN OPENAI_API_KEY WEBHOOK_SECRET
+export LANG="${LANG:-en_US.UTF-8}"
+export LC_ALL="${LC_ALL:-en_US.UTF-8}"
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
+export GITHUB_TOKEN OPENAI_API_KEY WEBHOOK_SECRET AGENT_LABEL GH_PATH LANG LC_ALL PYTHONUTF8 PYTHONIOENCODING
 uvicorn main:app --host 0.0.0.0 --port 8080 &
 AGENT_PID=$!
 echo "Agent 已启动 PID: $AGENT_PID"

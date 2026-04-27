@@ -38,16 +38,46 @@ cd finance-system/agent
 cp .env.example .env
 ```
 
-编辑 `.env`，填入两个值：
+编辑 `.env`，填入这些值：
 
 ```
 GITHUB_TOKEN=ghp_...        # 与 Windows 端相同的 Token
 WEBHOOK_SECRET=...          # 随机字符串，用以下命令生成：
+AGENT_LABEL=backend         # backend 或 frontend
 ```
 
 ```bash
 python3 -c "import secrets; print(secrets.token_hex(32))"
 ```
+
+### 多 Agent 配置隔离
+
+不要让 backend / frontend 共用同一个 `.env`。分别复制：
+
+```bash
+cp .env.backend.example .env.backend
+cp .env.frontend.example .env.frontend
+```
+
+然后分别填入相同的 `GITHUB_TOKEN` / `WEBHOOK_SECRET`，但保持：
+
+```bash
+# .env.backend
+AGENT_LABEL=backend
+
+# .env.frontend
+AGENT_LABEL=frontend
+```
+
+启动时使用对应脚本：
+
+```bash
+./start_backend.sh
+# 或
+./start_frontend.sh
+```
+
+这样 backend 和 frontend 的任务标签不会互相覆盖。
 
 ## 第三步：gh CLI 登录
 
@@ -66,7 +96,7 @@ pip3 install -r requirements.txt
 启动 Webhook 服务（保持终端开着）：
 ```bash
 source .env
-export GITHUB_TOKEN WEBHOOK_SECRET
+export GITHUB_TOKEN WEBHOOK_SECRET AGENT_LABEL GH_PATH
 uvicorn main:app --host 0.0.0.0 --port 8080
 ```
 

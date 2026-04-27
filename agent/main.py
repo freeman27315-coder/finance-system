@@ -19,14 +19,20 @@ import os
 import subprocess
 import sys
 
-# 强制 stdout/stderr 使用 UTF-8
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stderr.reconfigure(encoding="utf-8")
-
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 
 app = FastAPI(title="Dev Agent")
+
+# GitHub payloads and gh output contain UTF-8 Chinese. Make the agent robust
+# even when launched from a shell that did not inherit a UTF-8 locale.
+os.environ.setdefault("LANG", "en_US.UTF-8")
+os.environ.setdefault("LC_ALL", "en_US.UTF-8")
+os.environ.setdefault("PYTHONUTF8", "1")
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
@@ -53,6 +59,17 @@ def get_issue_labels(issue: dict) -> list[str]:
     return [lbl["name"] for lbl in issue.get("labels", [])]
 
 
+def utf8_subprocess_env() -> dict[str, str]:
+    return {
+        **os.environ,
+        "GH_TOKEN": GITHUB_TOKEN,
+        "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+        "LC_ALL": os.environ.get("LC_ALL", "en_US.UTF-8"),
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+    }
+
+
 def mark_in_progress(issue_number: int, issue_title: str, issue_url: str):
     """将 Issue 标记为 in-progress，并在终端输出任务提示"""
     subprocess.run(
@@ -62,14 +79,7 @@ def mark_in_progress(issue_number: int, issue_title: str, issue_url: str):
             "--remove-label", "ready-for-dev",
             "--add-label", "in-progress",
         ],
-        encoding="utf-8",
-        env={
-            **os.environ,
-            "GH_TOKEN": GITHUB_TOKEN,
-            "LANG": os.environ.get("LANG", "en_US.UTF-8"),
-            "LC_ALL": os.environ.get("LC_ALL", "en_US.UTF-8"),
-            "PYTHONIOENCODING": "utf-8",
-        },
+        env=utf8_subprocess_env(),
     )
     print("\n" + "=" * 60)
     print(f"  [{AGENT_LABEL.upper()}] 新任务 #{issue_number}: {issue_title}")
@@ -88,7 +98,7 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=403, detail="Invalid signature")
 
     event = request.headers.get("X-GitHub-Event")
-    data = json.loads(payload)
+    data = json.loads(payload.decode("utf-8"))
 
     if event == "issues" and data.get("action") == "labeled":
         if data["label"]["name"] == "ready-for-dev":
