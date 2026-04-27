@@ -2,6 +2,7 @@ import { AppShell } from "@/components/app-shell";
 import { AssetsPage } from "@/components/assets-page";
 import { ModuleOverview } from "@/components/module-overview";
 import { VendorsPage } from "@/components/vendors-page";
+import { XboxPage } from "@/components/xbox-page";
 import { sectionById, sectionIds } from "@/lib/navigation";
 
 type SectionPageProps = {
@@ -17,7 +18,10 @@ export default function SectionPage({ params }: SectionPageProps) {
     <AppShell activeSection={section.id}>
       {section.id === "assets" ? <AssetsPage /> : null}
       {section.id === "vendors" ? <VendorsPage /> : null}
-      {section.id !== "assets" && section.id !== "vendors" ? <ModuleOverview section={section} /> : null}
+      {section.id === "xbox" ? <XboxPage /> : null}
+      {section.id !== "assets" && section.id !== "vendors" && section.id !== "xbox" ? (
+        <ModuleOverview section={section} />
+      ) : null}
     </AppShell>
   );
 }
