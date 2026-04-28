@@ -1,4 +1,13 @@
-import type { AssetTransaction, DashboardData, Vendor, VendorBill, WalletBalance } from "@/types";
+import type {
+  AssetTransaction,
+  DashboardData,
+  Vendor,
+  VendorBill,
+  WalletBalance,
+  XboxAccount,
+  XboxSummary,
+  XboxTransaction
+} from "@/types";
 
 export const mockWallets: WalletBalance[] = [
   {
@@ -303,6 +312,113 @@ export const mockVendorBills: Record<string, VendorBill[]> = {
       createdAt: "2026-03-30T06:30:00.000Z"
     }
   ]
+};
+
+export const mockXboxAccounts: XboxAccount[] = [
+  {
+    id: "xbox-us-1",
+    name: "US-Main",
+    country: "US",
+    currency: "USD",
+    rmbCostMinor: 28_000_00,
+    localBalanceMinor: 3_840_00,
+    remark: "主号",
+    createdAt: "2026-03-12T08:00:00.000Z"
+  },
+  {
+    id: "xbox-us-2",
+    name: "US-Backup",
+    country: "US",
+    currency: "USD",
+    rmbCostMinor: 12_500_00,
+    localBalanceMinor: 1_720_00,
+    remark: null,
+    createdAt: "2026-03-30T03:20:00.000Z"
+  },
+  {
+    id: "xbox-uk-1",
+    name: "UK-Main",
+    country: "UK",
+    currency: "GBP",
+    rmbCostMinor: 18_400_00,
+    localBalanceMinor: 2_100_00,
+    remark: "英区主力",
+    createdAt: "2026-04-02T05:00:00.000Z"
+  }
+];
+
+export const mockXboxTransactions: Record<string, XboxTransaction[]> = {
+  "xbox-us-1": [
+    {
+      id: "xbox-us-1-tx-1",
+      accountId: "xbox-us-1",
+      rmbAmountMinor: 14_000_00,
+      localAmountMinor: 2_000_00,
+      type: "recharge",
+      remark: "首充",
+      createdAt: "2026-03-12T08:30:00.000Z",
+      currency: "USD"
+    },
+    {
+      id: "xbox-us-1-tx-2",
+      accountId: "xbox-us-1",
+      rmbAmountMinor: 0,
+      localAmountMinor: 160_00,
+      type: "consume",
+      remark: "购买游戏",
+      createdAt: "2026-04-10T11:00:00.000Z",
+      currency: "USD"
+    }
+  ],
+  "xbox-us-2": [
+    {
+      id: "xbox-us-2-tx-1",
+      accountId: "xbox-us-2",
+      rmbAmountMinor: 12_500_00,
+      localAmountMinor: 1_800_00,
+      type: "recharge",
+      remark: null,
+      createdAt: "2026-03-30T03:25:00.000Z",
+      currency: "USD"
+    }
+  ],
+  "xbox-uk-1": [
+    {
+      id: "xbox-uk-1-tx-1",
+      accountId: "xbox-uk-1",
+      rmbAmountMinor: 18_400_00,
+      localAmountMinor: 2_200_00,
+      type: "recharge",
+      remark: "英区开号",
+      createdAt: "2026-04-02T05:10:00.000Z",
+      currency: "GBP"
+    },
+    {
+      id: "xbox-uk-1-tx-2",
+      accountId: "xbox-uk-1",
+      rmbAmountMinor: 0,
+      localAmountMinor: 100_00,
+      type: "consume",
+      remark: "Game Pass",
+      createdAt: "2026-04-20T09:00:00.000Z",
+      currency: "GBP"
+    }
+  ]
+};
+
+export const mockXboxSummary: XboxSummary = {
+  us: {
+    rmbCostMinor: 40_500_00,
+    localBalanceMinor: 5_560_00,
+    accountCount: 2,
+    currency: "USD"
+  },
+  uk: {
+    rmbCostMinor: 18_400_00,
+    localBalanceMinor: 2_100_00,
+    accountCount: 1,
+    currency: "GBP"
+  }
 };
 
 export const mockAssetTransactions: Record<string, AssetTransaction[]> = {

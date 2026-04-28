@@ -1,4 +1,12 @@
-import { mockAssetTransactions, mockDashboardData, mockVendorBills, mockVendors } from "@/lib/mock-data";
+import {
+  mockAssetTransactions,
+  mockDashboardData,
+  mockVendorBills,
+  mockVendors,
+  mockXboxAccounts,
+  mockXboxSummary,
+  mockXboxTransactions
+} from "@/lib/mock-data";
 import { decimalToMinor } from "@/lib/money";
 import type {
   AssetTransaction,
@@ -9,7 +17,12 @@ import type {
   VendorBill,
   VendorSummary,
   WalletBalance,
-  WalletType
+  WalletType,
+  XboxAccount,
+  XboxCountry,
+  XboxSummary,
+  XboxTransaction,
+  XboxTransactionType
 } from "@/types";
 
 type AssetWalletResponse = {
@@ -318,6 +331,162 @@ export async function createVendorBill(
 export async function settleVendorBill(billId: string): Promise<VendorBill> {
   const data = (await sendJson(`/api/vendors/bills/${billId}/settle`, "PATCH")) as VendorBillResponse;
   return normalizeVendorBill(data);
+}
+
+type XboxAccountResponse = {
+  id: string | number;
+  name: string;
+  country: string;
+  currency: string;
+  rmb_cost?: string | number;
+  rmbCost?: string | number;
+  local_balance?: string | number;
+  localBalance?: string | number;
+  remark?: string | null;
+  created_at?: string;
+  createdAt?: string;
+};
+
+type XboxTransactionResponse = {
+  id: string | number;
+  account_id?: string | number;
+  accountId?: string | number;
+  rmb_amount?: string | number;
+  rmbAmount?: string | number;
+  local_amount?: string | number;
+  localAmount?: string | number;
+  type: XboxTransactionType;
+  remark?: string | null;
+  created_at?: string;
+  createdAt?: string;
+};
+
+type XboxSummaryResponse = {
+  USD?: { rmb_cost?: string | number; local_balance?: string | number; rmbCost?: string | number; localBalance?: string | number };
+  GBP?: { rmb_cost?: string | number; local_balance?: string | number; rmbCost?: string | number; localBalance?: string | number };
+};
+
+function normalizeXboxAccount(account: XboxAccountResponse): XboxAccount {
+  const country = (account.country === "UK" ? "UK" : "US") as XboxCountry;
+  const currency: Currency = country === "US" ? "USD" : "GBP";
+  return {
+    id: String(account.id),
+    name: account.name,
+    country,
+    currency,
+    rmbCostMinor: decimalToMinor(account.rmb_cost ?? account.rmbCost ?? 0, "CNY"),
+    localBalanceMinor: decimalToMinor(account.local_balance ?? account.localBalance ?? 0, currency),
+    remark: account.remark ?? null,
+    createdAt: account.created_at ?? account.createdAt ?? ""
+  };
+}
+
+function normalizeXboxTransaction(transaction: XboxTransactionResponse, currency: Currency): XboxTransaction {
+  return {
+    id: String(transaction.id),
+    accountId: String(transaction.account_id ?? transaction.accountId ?? ""),
+    rmbAmountMinor: decimalToMinor(transaction.rmb_amount ?? transaction.rmbAmount ?? 0, "CNY"),
+    localAmountMinor: decimalToMinor(transaction.local_amount ?? transaction.localAmount ?? 0, currency),
+    type: transaction.type,
+    remark: transaction.remark ?? null,
+    createdAt: transaction.created_at ?? transaction.createdAt ?? "",
+    currency
+  };
+}
+
+export async function getXboxAccounts(country?: XboxCountry): Promise<XboxAccount[]> {
+  try {
+    const path = country ? `/api/xbox/accounts?country=${country}` : "/api/xbox/accounts";
+    const data = await fetchJson<XboxAccountResponse[]>(path);
+    return data.map(normalizeXboxAccount);
+  } catch {
+    return country ? mockXboxAccounts.filter((acc) => acc.country === country) : mockXboxAccounts;
+  }
+}
+
+export async function createXboxAccount(payload: {
+  name: string;
+  country: XboxCountry;
+  remark?: string;
+}): Promise<XboxAccount> {
+  const body: Record<string, unknown> = {
+    name: payload.name,
+    country: payload.country
+  };
+  if (payload.remark) {
+    body.remark = payload.remark;
+  }
+  const data = (await postJson("/api/xbox/accounts", body)) as XboxAccountResponse;
+  return normalizeXboxAccount(data);
+}
+
+export async function rechargeXbox(
+  accountId: string,
+  payload: { rmbAmount: string; localAmount: string; remark?: string }
+): Promise<XboxTransaction> {
+  const body: Record<string, unknown> = {
+    rmb_amount: payload.rmbAmount,
+    local_amount: payload.localAmount
+  };
+  if (payload.remark) {
+    body.remark = payload.remark;
+  }
+  const data = (await postJson(`/api/xbox/accounts/${accountId}/recharge`, body)) as XboxTransactionResponse;
+  // currency unknown without account context; default USD-safe normalization happens via currency arg below
+  const account = mockXboxAccounts.find((acc) => acc.id === accountId);
+  return normalizeXboxTransaction({ ...data, account_id: data.account_id ?? accountId }, account?.currency ?? "USD");
+}
+
+export async function consumeXbox(
+  accountId: string,
+  payload: { localAmount: string; remark?: string }
+): Promise<XboxTransaction> {
+  const body: Record<string, unknown> = {
+    local_amount: payload.localAmount
+  };
+  if (payload.remark) {
+    body.remark = payload.remark;
+  }
+  const data = (await postJson(`/api/xbox/accounts/${accountId}/consume`, body)) as XboxTransactionResponse;
+  const account = mockXboxAccounts.find((acc) => acc.id === accountId);
+  return normalizeXboxTransaction({ ...data, account_id: data.account_id ?? accountId }, account?.currency ?? "USD");
+}
+
+export async function getXboxTransactions(account: XboxAccount): Promise<XboxTransaction[]> {
+  try {
+    const data = await fetchJson<XboxTransactionResponse[]>(`/api/xbox/accounts/${account.id}/transactions`);
+    return data.map((tx) => normalizeXboxTransaction({ ...tx, account_id: tx.account_id ?? account.id }, account.currency));
+  } catch {
+    return mockXboxTransactions[account.id] ?? [];
+  }
+}
+
+export async function getXboxSummary(): Promise<XboxSummary> {
+  try {
+    const data = await fetchJson<XboxSummaryResponse>("/api/xbox/summary");
+    const usd = data.USD ?? {};
+    const gbp = data.GBP ?? {};
+    // accountCount unknown from summary endpoint — fetch accounts lazily on consumer if needed
+    const accounts = await fetchJson<XboxAccountResponse[]>("/api/xbox/accounts").catch(() => [] as XboxAccountResponse[]);
+    const usCount = accounts.filter((acc) => acc.country === "US").length;
+    const ukCount = accounts.filter((acc) => acc.country === "UK").length;
+    return {
+      us: {
+        rmbCostMinor: decimalToMinor(usd.rmb_cost ?? usd.rmbCost ?? 0, "CNY"),
+        localBalanceMinor: decimalToMinor(usd.local_balance ?? usd.localBalance ?? 0, "USD"),
+        accountCount: usCount,
+        currency: "USD"
+      },
+      uk: {
+        rmbCostMinor: decimalToMinor(gbp.rmb_cost ?? gbp.rmbCost ?? 0, "CNY"),
+        localBalanceMinor: decimalToMinor(gbp.local_balance ?? gbp.localBalance ?? 0, "GBP"),
+        accountCount: ukCount,
+        currency: "GBP"
+      }
+    };
+  } catch {
+    return mockXboxSummary;
+  }
 }
 
 export async function getVendorSummary(): Promise<VendorSummary> {
