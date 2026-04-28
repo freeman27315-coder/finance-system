@@ -99,6 +99,27 @@ export type XboxSummary = {
   uk: XboxCountrySummary;
 };
 
+export type TaiwanWallet = {
+  id: string;
+  name: string;
+  balanceMinor: number;
+  createdAt: string;
+};
+
+export type TaiwanTransaction = {
+  id: string;
+  walletId: string;
+  amountMinor: number;
+  direction: "in" | "out";
+  remark: string | null;
+  createdAt: string;
+};
+
+export type TaiwanSummary = {
+  totalBalanceMinor: number;
+  walletCount: number;
+};
+
 export type ModuleSection = {
   id: string;
   title: string;
