@@ -15,6 +15,9 @@ type AssetWalletResponse = {
   type: WalletType;
   currency: Currency;
   balance: string | number;
+  is_group?: boolean;
+  isGroup?: boolean;
+  children?: AssetWalletResponse[];
   parent_id?: string | number | null;
   parentId?: string | number | null;
 };
@@ -56,14 +59,18 @@ async function fetchJson<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-function normalizeWallet(wallet: AssetWalletResponse): WalletBalance {
+function normalizeWallet(wallet: AssetWalletResponse, parentId?: string | null): WalletBalance {
   return {
     id: String(wallet.id),
     name: wallet.name,
     type: wallet.type,
     currency: wallet.currency,
     balanceMinor: decimalToMinor(wallet.balance, wallet.currency),
-    parentId: wallet.parent_id === undefined ? wallet.parentId?.toString() ?? null : wallet.parent_id?.toString() ?? null
+    isGroup: Boolean(wallet.is_group ?? wallet.isGroup ?? false),
+    parentId:
+      parentId ??
+      (wallet.parent_id === undefined ? wallet.parentId?.toString() ?? null : wallet.parent_id?.toString() ?? null),
+    children: wallet.children?.map((child) => normalizeWallet(child, String(wallet.id))) ?? []
   };
 }
 
@@ -88,7 +95,7 @@ export async function getDashboardData(): Promise<DashboardData> {
     ]);
 
     return {
-      wallets: wallets.map(normalizeWallet),
+      wallets: wallets.map((wallet) => normalizeWallet(wallet)),
       vendorSummary: normalizeVendorSummary(vendorSummary)
     };
   } catch {
@@ -99,7 +106,7 @@ export async function getDashboardData(): Promise<DashboardData> {
 export async function getAssetWallets(): Promise<WalletBalance[]> {
   try {
     const wallets = await fetchJson<AssetWalletResponse[]>("/api/wallets/assets");
-    return wallets.map(normalizeWallet);
+    return wallets.map((wallet) => normalizeWallet(wallet));
   } catch {
     return mockDashboardData.wallets.filter((wallet) => wallet.type === "ASSET_RMB" || wallet.type === "ASSET_USDT");
   }
@@ -139,15 +146,26 @@ async function postJson(path: string, body: unknown) {
     body: JSON.stringify(body)
   });
 
+  const text = await response.text();
+
   if (!response.ok) {
-    throw new Error(`${path} returned ${response.status}`);
+    let message = `${path} returned ${response.status}`;
+    if (text) {
+      try {
+        const parsed = JSON.parse(text) as { detail?: string; message?: string; error?: string };
+        message = parsed.detail ?? parsed.message ?? parsed.error ?? text;
+      } catch {
+        message = text;
+      }
+    }
+    throw new Error(message);
   }
 
-  return response.json();
+  return text ? JSON.parse(text) : null;
 }
 
 export function createAssetSubWallet(walletId: string, name: string) {
-  return postJson(`/api/wallets/assets/${walletId}/sub`, { name });
+  return postJson(`/api/wallets/assets/${walletId}/sub`, { name, is_group: false });
 }
 
 export function creditAssetWallet(walletId: string, amount: string, remark: string) {
