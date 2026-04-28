@@ -56,6 +56,9 @@ AGENT_DISPATCH_CMD = os.environ.get("AGENT_DISPATCH_CMD", "")
 TASKS_DIR = os.environ.get("TASKS_DIR", os.path.expanduser("~/finance-system-tasks"))
 os.makedirs(TASKS_DIR, exist_ok=True)
 
+# Inbox 文件：codex listener 用 tail -f 监听此文件，新任务出现即触发 codex 干活
+INBOX_FILE = os.environ.get("INBOX_FILE", os.path.join(TASKS_DIR, "inbox.txt"))
+
 # macOS 桌面通知（可选，靠 osascript）
 DESKTOP_NOTIFY = os.environ.get("DESKTOP_NOTIFY", "1") == "1"
 
@@ -149,17 +152,29 @@ def desktop_notify(title: str, message: str):
         pass
 
 
+def append_to_inbox(task_file: str):
+    """往 inbox.txt 追加一行任务文件路径，codex listener 监听该文件触发 codex"""
+    try:
+        with open(INBOX_FILE, "a", encoding="utf-8") as f:
+            f.write(task_file + "\n")
+            f.flush()
+    except Exception as exc:
+        print(f"  ⚠️  写入 inbox 失败: {exc}", flush=True)
+
+
 def dispatch_to_assistant(issue_number: int, issue_title: str, issue_url: str, action_hint: str = ""):
-    """事件驱动通知开发者：写任务文件 + 终端高亮 + 桌面通知"""
+    """事件驱动通知 codex agent：写任务文件 + 追加 inbox + 终端高亮 + 桌面通知"""
     task_file = write_task_file(issue_number, issue_title, issue_url, action_hint)
+    append_to_inbox(task_file)
 
     print("\n" + "🟢" * 30)
     print(f"  [{AGENT_LABEL.upper()}] 新任务 #{issue_number}: {issue_title}")
     print(f"  任务文件: {task_file}")
+    print(f"  已追加到 inbox: {INBOX_FILE}")
     print(f"  Issue 链接: {issue_url}")
     if action_hint:
         print(f"  修改提示: {action_hint[:200]}")
-    print(f"  → 把上面的任务文件丢给 ChatGPT，让它按工作流完成")
+    print(f"  → codex listener 应已自动触发 codex 处理此任务")
     print("🟢" * 30 + "\n", flush=True)
 
     desktop_notify(

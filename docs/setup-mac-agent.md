@@ -128,17 +128,28 @@ curl https://abcd-1234.trycloudflare.com/health
 
 ## 日常开发流程
 
-### Webhook / 事件驱动规则（零轮询）
+### Webhook / 事件驱动规则（Codex AI Agent + inbox 模式）
 
-- **完全由 GitHub 事件触发**：`main.py` 收到 webhook 后做三件事：
-  1. 更新 Issue / PR 标签（in-progress / needs-revision）
-  2. 写完整任务到 `~/finance-system-tasks/issue-N.md`（或 `TASKS_DIR` 指定的目录）
-  3. 终端醒目打印 + macOS 桌面通知
-- **开发者用 ChatGPT 的工作流：** 收到通知后打开 ChatGPT 网页/桌面版，把 `issue-N.md` 文件内容粘贴给 ChatGPT 让它按"工作流"部分干活。
-- **开发者用 Claude Code 的工作流：** 在 `.env` 设置 `AGENT_DISPATCH_CMD=claude -p "请完成任务 #{issue_number}..."`，agent 收到事件后会自动 Popen 启动 Claude CLI。
-- **触发动作映射：**
-  - 收到 `ready-for-dev` + 本 agent 标签 → 标 in-progress + 通知开发者
-  - 收到 PR `changes_requested` review → 标 needs-revision + 把 review 意见写进任务文件，让 ChatGPT 按 review 修
+工作机制：
+1. **webhook server**（`./start_backend.sh` 或 `start_frontend.sh`）收到 GitHub 事件后：
+   - 更新 Issue/PR 标签（in-progress / needs-revision）
+   - 写完整任务到 `~/finance-system-tasks/issue-N.md`
+   - 把任务文件路径追加到 `~/finance-system-tasks/inbox.txt`
+   - 终端高亮 + macOS 桌面通知
+2. **codex listener**（`./codex_listener.sh`，单独一个终端窗口跑）：
+   - `tail -fn0` 监听 inbox.txt 新行
+   - 每出现一行（任务文件路径），cat 文件内容当作 prompt 喂给 `codex exec`
+   - codex 按"工作流"部分自动认领分支、写代码、提 PR
+
+**Mac 上要开两个终端窗口：**
+```
+终端 1: ./start_backend.sh    # webhook server + cloudflared
+终端 2: ./codex_listener.sh   # 监听 inbox 自动喂 codex
+```
+
+触发动作映射：
+- `ready-for-dev` + 本 agent 标签 → 标 in-progress → 写任务 → inbox 触发 codex 开发
+- PR `changes_requested` review → 标 needs-revision → review 意见写进任务文件 → codex 修复
 - **AI 助手的工作约束：**
   - 收到任务先在 Issue/PR 评论反馈「已收到任务 #N，开始开发」，然后直接开工，不要请求二次同意
   - 发现需求里关键字段乱码、缺失、业务名称不清、验收标准不明、指令冲突时，**立即在 Issue 评论 @CEO/@PM** 列出无法确认的字段，等待确认；不要凭直觉补全
