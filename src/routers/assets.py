@@ -19,6 +19,7 @@ router = APIRouter(prefix="/wallets/assets", tags=["asset-wallets"])
 
 class SubWalletCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
+    is_group: bool = False
 
 
 class WalletMovementRequest(BaseModel):
@@ -32,12 +33,10 @@ class WalletOut(BaseModel):
     type: str
     currency: str
     balance: Decimal
+    is_group: bool
     parent_id: Optional[int]
     created_at: str
-
-
-class AssetWalletOut(WalletOut):
-    children: list[WalletOut] = []
+    children: list["WalletOut"] = Field(default_factory=list)
 
 
 class TransactionOut(BaseModel):
@@ -55,15 +54,27 @@ def _value(value):
     return value
 
 
-def serialize_wallet(wallet: Wallet) -> WalletOut:
+def _computed_balance(wallet: Wallet, children_by_parent: dict[int, list[Wallet]]) -> Decimal:
+    if not wallet.is_group:
+        return wallet.balance
+    return sum(
+        (_computed_balance(child, children_by_parent) for child in children_by_parent.get(wallet.id, [])),
+        Decimal("0"),
+    )
+
+
+def serialize_wallet(wallet: Wallet, children_by_parent: dict[int, list[Wallet]] | None = None) -> WalletOut:
+    child_wallets = children_by_parent.get(wallet.id, []) if children_by_parent is not None else []
     return WalletOut(
         id=wallet.id,
         name=wallet.name,
         type=_value(wallet.type),
         currency=_value(wallet.currency),
-        balance=wallet.balance,
+        balance=_computed_balance(wallet, children_by_parent) if children_by_parent is not None else wallet.balance,
+        is_group=bool(wallet.is_group),
         parent_id=wallet.parent_id,
         created_at=wallet.created_at.isoformat() if wallet.created_at else "",
+        children=[serialize_wallet(child, children_by_parent) for child in child_wallets],
     )
 
 
@@ -87,25 +98,29 @@ def get_asset_wallet_or_404(session: Session, wallet_id: int) -> Wallet:
     return wallet
 
 
-@router.get("", response_model=list[AssetWalletOut])
-def list_assets(db: Session = Depends(get_db)) -> list[AssetWalletOut]:
+def get_postable_asset_wallet_or_404(session: Session, wallet_id: int) -> Wallet:
+    wallet = get_asset_wallet_or_404(session, wallet_id)
+    if wallet.is_group:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="分组钱包不可直接记账，请操作叶子钱包",
+        )
+    return wallet
+
+
+@router.get("", response_model=list[WalletOut])
+def list_assets(db: Session = Depends(get_db)) -> list[WalletOut]:
     wallets = list_asset_wallets(db)
-    children_by_parent: dict[int, list[WalletOut]] = {}
+    children_by_parent: dict[int, list[Wallet]] = {}
     roots: list[Wallet] = []
 
     for wallet in wallets:
         if wallet.parent_id is None:
             roots.append(wallet)
         else:
-            children_by_parent.setdefault(wallet.parent_id, []).append(serialize_wallet(wallet))
+            children_by_parent.setdefault(wallet.parent_id, []).append(wallet)
 
-    return [
-        AssetWalletOut(
-            **serialize_wallet(root).model_dump(),
-            children=children_by_parent.get(root.id, []),
-        )
-        for root in roots
-    ]
+    return [serialize_wallet(root, children_by_parent) for root in roots]
 
 
 @router.post("/{wallet_id}/sub", response_model=WalletOut, status_code=status.HTTP_201_CREATED)
@@ -115,7 +130,7 @@ def create_sub_wallet(
     db: Session = Depends(get_db),
 ) -> WalletOut:
     parent = get_asset_wallet_or_404(db, wallet_id)
-    sub_wallet = create_asset_sub_wallet(db, parent, request.name)
+    sub_wallet = create_asset_sub_wallet(db, parent, request.name, is_group=request.is_group)
     db.commit()
     db.refresh(sub_wallet)
     return serialize_wallet(sub_wallet)
@@ -127,7 +142,7 @@ def credit_asset_wallet(
     request: WalletMovementRequest,
     db: Session = Depends(get_db),
 ) -> TransactionOut:
-    get_asset_wallet_or_404(db, wallet_id)
+    get_postable_asset_wallet_or_404(db, wallet_id)
     transaction = credit(db, wallet_id, request.amount, request.remark)
     db.commit()
     db.refresh(transaction)
@@ -140,7 +155,7 @@ def debit_asset_wallet(
     request: WalletMovementRequest,
     db: Session = Depends(get_db),
 ) -> TransactionOut:
-    get_asset_wallet_or_404(db, wallet_id)
+    get_postable_asset_wallet_or_404(db, wallet_id)
     try:
         transaction = debit(db, wallet_id, request.amount, request.remark)
     except ValueError as exc:

@@ -6,7 +6,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, func, select
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, func, select
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 from src.database import Base
@@ -42,6 +42,7 @@ class Wallet(Base):
     type: Mapped[WalletType] = mapped_column(String(32), nullable=False)
     currency: Mapped[Currency] = mapped_column(String(16), nullable=False)
     balance: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False, default=Decimal("0"))
+    is_group: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("wallets.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -99,11 +100,14 @@ def create_wallet(
     currency: Currency | str,
     parent_id: int | None = None,
     opening_balance: Decimal | int | float | str = Decimal("0"),
+    is_group: bool = False,
 ) -> Wallet:
     """Create a wallet or sub-wallet and flush it into the current session."""
     balance = Decimal(str(opening_balance))
     if balance < 0:
         raise ValueError("opening_balance cannot be negative")
+    if is_group:
+        balance = Decimal("0")
     if parent_id is not None:
         get_wallet(session, parent_id)
 
@@ -113,6 +117,7 @@ def create_wallet(
         currency=Currency(currency),
         parent_id=parent_id,
         balance=balance,
+        is_group=is_group,
     )
     session.add(wallet)
     session.flush()

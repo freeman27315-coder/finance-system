@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from typing import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
@@ -43,6 +43,24 @@ def init_db() -> None:
     from src.models import taobao  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    _ensure_wallet_is_group_column()
+
+
+def _ensure_wallet_is_group_column() -> None:
+    """Add the wallet group marker to existing SQLite dev databases."""
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+
+    inspector = inspect(engine)
+    if "wallets" not in inspector.get_table_names():
+        return
+
+    column_names = {column["name"] for column in inspector.get_columns("wallets")}
+    if "is_group" in column_names:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE wallets ADD COLUMN is_group BOOLEAN NOT NULL DEFAULT 0"))
 
 
 def get_db() -> Iterator[Session]:
