@@ -1,6 +1,9 @@
 import type {
   AssetTransaction,
   DashboardData,
+  TaiwanSummary,
+  TaiwanTransaction,
+  TaiwanWallet,
   TaobaoAccount,
   TaobaoTransaction,
   Vendor,
@@ -558,3 +561,79 @@ export const mockAssetTransactions: Record<string, AssetTransaction[]> = {
     }
   ]
 };
+
+export const mockTaiwanWallets: TaiwanWallet[] = [
+  {
+    id: "taiwan-8591",
+    name: "8591余额",
+    balanceMinor: 385_000_00,
+    createdAt: "2026-03-01T08:00:00.000Z"
+  },
+  {
+    id: "taiwan-bank",
+    name: "银行卡",
+    balanceMinor: 128_500_00,
+    createdAt: "2026-03-01T08:00:00.000Z"
+  },
+  {
+    id: "taiwan-store",
+    name: "超商代收金流余额",
+    balanceMinor: 62_800_00,
+    createdAt: "2026-03-01T08:00:00.000Z"
+  }
+];
+
+export const mockTaiwanTransactions: Record<string, TaiwanTransaction[]> = {
+  "taiwan-8591": [
+    {
+      id: "taiwan-8591-tx-1",
+      walletId: "taiwan-8591",
+      amountMinor: 200_000_00,
+      direction: "in",
+      remark: "期初入账",
+      createdAt: "2026-03-05T03:00:00.000Z"
+    },
+    {
+      id: "taiwan-8591-tx-2",
+      walletId: "taiwan-8591",
+      amountMinor: 15_000_00,
+      direction: "out",
+      remark: "提现",
+      createdAt: "2026-04-15T07:30:00.000Z"
+    }
+  ],
+  "taiwan-bank": [
+    {
+      id: "taiwan-bank-tx-1",
+      walletId: "taiwan-bank",
+      amountMinor: 128_500_00,
+      direction: "in",
+      remark: "银行汇入",
+      createdAt: "2026-03-10T09:00:00.000Z"
+    }
+  ],
+  "taiwan-store": [
+    {
+      id: "taiwan-store-tx-1",
+      walletId: "taiwan-store",
+      amountMinor: 80_000_00,
+      direction: "in",
+      remark: "超商代收",
+      createdAt: "2026-03-20T05:00:00.000Z"
+    },
+    {
+      id: "taiwan-store-tx-2",
+      walletId: "taiwan-store",
+      amountMinor: 17_200_00,
+      direction: "out",
+      remark: "结算转出",
+      createdAt: "2026-04-12T08:00:00.000Z"
+    }
+  ]
+};
+
+export const mockTaiwanSummary: TaiwanSummary = {
+  totalBalanceMinor: 385_000_00 + 128_500_00 + 62_800_00,
+  walletCount: 3
+};
+
