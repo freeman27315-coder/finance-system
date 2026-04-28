@@ -8,6 +8,8 @@ export const mockWallets: WalletBalance[] = [
     currency: "CNY",
     balanceMinor: 628_450_00,
     isGroup: true,
+    remark: null,
+    deletedAt: null,
     children: [
       {
         id: "asset-cny-alipay",
@@ -17,6 +19,8 @@ export const mockWallets: WalletBalance[] = [
         balanceMinor: 508_450_00,
         isGroup: true,
         parentId: "asset-cny-root",
+        remark: null,
+        deletedAt: null,
         children: [
           {
             id: "asset-cny-bh",
@@ -25,7 +29,9 @@ export const mockWallets: WalletBalance[] = [
             currency: "CNY",
             balanceMinor: 228_150_00,
             isGroup: false,
-            parentId: "asset-cny-alipay"
+            parentId: "asset-cny-alipay",
+            remark: null,
+            deletedAt: null
           },
           {
             id: "asset-cny-tom",
@@ -34,7 +40,9 @@ export const mockWallets: WalletBalance[] = [
             currency: "CNY",
             balanceMinor: 164_300_00,
             isGroup: false,
-            parentId: "asset-cny-alipay"
+            parentId: "asset-cny-alipay",
+            remark: null,
+            deletedAt: null
           },
           {
             id: "asset-cny-boss",
@@ -43,7 +51,9 @@ export const mockWallets: WalletBalance[] = [
             currency: "CNY",
             balanceMinor: 116_000_00,
             isGroup: false,
-            parentId: "asset-cny-alipay"
+            parentId: "asset-cny-alipay",
+            remark: null,
+            deletedAt: null
           }
         ]
       },
@@ -55,6 +65,8 @@ export const mockWallets: WalletBalance[] = [
         balanceMinor: 120_000_00,
         isGroup: true,
         parentId: "asset-cny-root",
+        remark: null,
+        deletedAt: null,
         children: [
           {
             id: "asset-cny-dancer",
@@ -63,7 +75,9 @@ export const mockWallets: WalletBalance[] = [
             currency: "CNY",
             balanceMinor: 120_000_00,
             isGroup: false,
-            parentId: "asset-cny-wechat"
+            parentId: "asset-cny-wechat",
+            remark: null,
+            deletedAt: null
           }
         ]
       }
@@ -76,6 +90,8 @@ export const mockWallets: WalletBalance[] = [
     currency: "USDT",
     balanceMinor: 184_250_000000,
     isGroup: true,
+    remark: null,
+    deletedAt: null,
     children: [
       {
         id: "asset-usdt-freeman",
@@ -84,7 +100,9 @@ export const mockWallets: WalletBalance[] = [
         currency: "USDT",
         balanceMinor: 96_500_000000,
         isGroup: false,
-        parentId: "asset-usdt-root"
+        parentId: "asset-usdt-root",
+        remark: null,
+        deletedAt: null
       },
       {
         id: "asset-usdt-zhang",
@@ -93,7 +111,9 @@ export const mockWallets: WalletBalance[] = [
         currency: "USDT",
         balanceMinor: 87_750_000000,
         isGroup: false,
-        parentId: "asset-usdt-root"
+        parentId: "asset-usdt-root",
+        remark: null,
+        deletedAt: null
       }
     ]
   },
@@ -103,7 +123,9 @@ export const mockWallets: WalletBalance[] = [
     type: "VENDOR",
     currency: "CNY",
     balanceMinor: 76_320_00,
-    isGroup: false
+    isGroup: false,
+    remark: null,
+    deletedAt: null
   },
   {
     id: "xbox-us",
@@ -111,7 +133,9 @@ export const mockWallets: WalletBalance[] = [
     type: "XBOX",
     currency: "USD",
     balanceMinor: 12_840_00,
-    isGroup: false
+    isGroup: false,
+    remark: null,
+    deletedAt: null
   },
   {
     id: "xbox-uk",
@@ -119,7 +143,9 @@ export const mockWallets: WalletBalance[] = [
     type: "XBOX",
     currency: "GBP",
     balanceMinor: 8_620_00,
-    isGroup: false
+    isGroup: false,
+    remark: null,
+    deletedAt: null
   },
   {
     id: "taobao-unsettled",
@@ -127,7 +153,9 @@ export const mockWallets: WalletBalance[] = [
     type: "TAOBAO",
     currency: "CNY",
     balanceMinor: 93_400_00,
-    isGroup: false
+    isGroup: false,
+    remark: null,
+    deletedAt: null
   },
   {
     id: "taobao-settled",
@@ -135,7 +163,9 @@ export const mockWallets: WalletBalance[] = [
     type: "TAOBAO",
     currency: "CNY",
     balanceMinor: 41_250_00,
-    isGroup: false
+    isGroup: false,
+    remark: null,
+    deletedAt: null
   },
   {
     id: "taiwan-8591",
@@ -143,7 +173,9 @@ export const mockWallets: WalletBalance[] = [
     type: "TAIWAN",
     currency: "TWD",
     balanceMinor: 385_000_00,
-    isGroup: false
+    isGroup: false,
+    remark: null,
+    deletedAt: null
   },
   {
     id: "taiwan-bank",
@@ -151,7 +183,9 @@ export const mockWallets: WalletBalance[] = [
     type: "TAIWAN",
     currency: "TWD",
     balanceMinor: 128_500_00,
-    isGroup: false
+    isGroup: false,
+    remark: null,
+    deletedAt: null
   },
   {
     id: "taiwan-store",
@@ -159,7 +193,9 @@ export const mockWallets: WalletBalance[] = [
     type: "TAIWAN",
     currency: "TWD",
     balanceMinor: 62_800_00,
-    isGroup: false
+    isGroup: false,
+    remark: null,
+    deletedAt: null
   }
 ];
 

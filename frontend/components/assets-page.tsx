@@ -8,7 +8,9 @@ import {
   ChevronRight,
   FolderPlus,
   List,
-  RefreshCcw
+  Pencil,
+  RefreshCcw,
+  Trash2
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -19,8 +21,10 @@ import {
   createAssetSubWallet,
   creditAssetWallet,
   debitAssetWallet,
+  deleteAssetWallet,
   getAssetTransactions,
-  getAssetWallets
+  getAssetWallets,
+  patchAssetWallet
 } from "@/lib/api";
 import { formatMoney, sumMinor } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -60,17 +64,8 @@ function collectGroupIds(wallets: WalletBalance[]): string[] {
   ]);
 }
 
-function findWalletById(wallets: WalletBalance[], walletId: string): WalletBalance | undefined {
-  for (const wallet of wallets) {
-    if (wallet.id === walletId) {
-      return wallet;
-    }
-    const childMatch = findWalletById(wallet.children ?? [], walletId);
-    if (childMatch) {
-      return childMatch;
-    }
-  }
-  return undefined;
+function isTopLevelWallet(wallet: WalletBalance): boolean {
+  return !wallet.parentId && wallet.isGroup;
 }
 
 function AssetSummaryCards({ wallets, currency }: { wallets: WalletBalance[]; currency: Currency }) {
@@ -280,6 +275,147 @@ function AssetActions({
   );
 }
 
+function EditWalletModal({
+  wallet,
+  onClose
+}: {
+  wallet: WalletBalance;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState(wallet.name);
+  const [remark, setRemark] = useState(wallet.remark ?? "");
+  const [error, setError] = useState<string | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!name.trim()) {
+        throw new Error("钱包名不能为空");
+      }
+      const payload: { name?: string; remark?: string | null } = {};
+      if (name.trim() !== wallet.name) {
+        payload.name = name.trim();
+      }
+      const nextRemark = remark.trim() === "" ? null : remark;
+      if (nextRemark !== (wallet.remark ?? null)) {
+        payload.remark = nextRemark;
+      }
+      if (Object.keys(payload).length === 0) {
+        return null;
+      }
+      return patchAssetWallet(wallet.id, payload);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["assets"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      onClose();
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : "保存失败");
+    }
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Card className="w-full max-w-md">
+        <CardHeader>
+          <CardTitle>编辑钱包</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">钱包名</div>
+            <input
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="钱包名"
+              autoFocus
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">备注（选填）</div>
+            <textarea
+              className="min-h-[80px] w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={remark}
+              onChange={(event) => setRemark(event.target.value)}
+              placeholder="备注"
+            />
+          </div>
+          {error ? (
+            <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
+              {error}
+            </div>
+          ) : null}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>
+              取消
+            </Button>
+            <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+              {mutation.isPending ? "保存中..." : "保存"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function DeleteWalletModal({
+  wallet,
+  onClose
+}: {
+  wallet: WalletBalance;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: async () => deleteAssetWallet(wallet.id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["assets"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      onClose();
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : "删除失败");
+    }
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Card className="w-full max-w-md">
+        <CardHeader>
+          <CardTitle>删除钱包</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="text-sm">
+            确认删除「{wallet.name}」？删除后流水保留，钱包不再显示。
+          </div>
+          {error ? (
+            <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
+              {error}
+            </div>
+          ) : null}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>
+              取消
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => mutation.mutate()}
+              disabled={mutation.isPending}
+            >
+              <Trash2 className="h-4 w-4" />
+              {mutation.isPending ? "删除中..." : "确认删除"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function AssetTree({
   wallets,
   expandedIds,
@@ -287,7 +423,9 @@ function AssetTree({
   onToggle,
   onSelectLeaf,
   onSelectGroup,
-  onShowTransactions
+  onShowTransactions,
+  onEdit,
+  onDelete
 }: {
   wallets: WalletBalance[];
   expandedIds: Set<string>;
@@ -296,10 +434,13 @@ function AssetTree({
   onSelectLeaf: (walletId: string, mode?: MovementMode) => void;
   onSelectGroup: (walletId: string) => void;
   onShowTransactions: (walletId: string) => void;
+  onEdit: (wallet: WalletBalance) => void;
+  onDelete: (wallet: WalletBalance) => void;
 }) {
   const renderNode = (wallet: WalletBalance, depth: number) => {
     const hasChildren = Boolean(wallet.children?.length);
     const expanded = expandedIds.has(wallet.id);
+    const topLevel = isTopLevelWallet(wallet);
 
     return (
       <div key={wallet.id} className="space-y-2">
@@ -329,6 +470,9 @@ function AssetTree({
                   {wallet.isGroup ? <Badge>汇总</Badge> : <Badge tone="transfer">叶子</Badge>}
                 </div>
                 <div className="mt-1 text-xs text-muted-foreground">{wallet.currency}</div>
+                {wallet.remark ? (
+                  <div className="mt-1 text-xs text-muted-foreground">{wallet.remark}</div>
+                ) : null}
               </div>
             </div>
 
@@ -361,6 +505,16 @@ function AssetTree({
                       流水
                     </Button>
                   </>
+                )}
+                <Button variant="outline" size="sm" onClick={() => onEdit(wallet)}>
+                  <Pencil className="h-4 w-4" aria-hidden="true" />
+                  编辑
+                </Button>
+                {topLevel ? null : (
+                  <Button variant="ghost" size="sm" onClick={() => onDelete(wallet)}>
+                    <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    删除
+                  </Button>
                 )}
               </div>
             </div>
@@ -444,6 +598,8 @@ export function AssetsPage() {
   const [selectedGroupId, setSelectedGroupId] = useState("");
   const [movementMode, setMovementMode] = useState<MovementMode>("credit");
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [editTarget, setEditTarget] = useState<WalletBalance | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<WalletBalance | null>(null);
   const { data: wallets = [], isFetching, refetch } = useQuery({
     queryKey: ["assets"],
     queryFn: getAssetWallets
@@ -541,6 +697,8 @@ export function AssetsPage() {
           setSelectedWalletId(walletId);
           document.getElementById("asset-transactions")?.scrollIntoView({ behavior: "smooth", block: "start" });
         }}
+        onEdit={setEditTarget}
+        onDelete={setDeleteTarget}
       />
       <AssetActions
         leafWallets={leafWallets}
@@ -553,6 +711,12 @@ export function AssetsPage() {
         onSelectGroup={setSelectedGroupId}
       />
       <AssetTransactionTable transactions={transactions} />
+      {editTarget ? (
+        <EditWalletModal wallet={editTarget} onClose={() => setEditTarget(null)} />
+      ) : null}
+      {deleteTarget ? (
+        <DeleteWalletModal wallet={deleteTarget} onClose={() => setDeleteTarget(null)} />
+      ) : null}
     </div>
   );
 }
