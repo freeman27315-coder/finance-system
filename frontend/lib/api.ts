@@ -1,9 +1,12 @@
-import { mockAssetTransactions, mockDashboardData } from "@/lib/mock-data";
+import { mockAssetTransactions, mockDashboardData, mockVendorBills, mockVendors } from "@/lib/mock-data";
 import { decimalToMinor } from "@/lib/money";
 import type {
   AssetTransaction,
+  BillDirection,
   Currency,
   DashboardData,
+  Vendor,
+  VendorBill,
   VendorSummary,
   WalletBalance,
   WalletType
@@ -218,4 +221,110 @@ export function creditAssetWallet(walletId: string, amount: string, remark: stri
 
 export function debitAssetWallet(walletId: string, amount: string, remark: string) {
   return postJson(`/api/wallets/assets/${walletId}/debit`, { amount, remark });
+}
+
+type VendorResponse = {
+  id: string | number;
+  name: string;
+  remark?: string | null;
+  created_at?: string;
+  createdAt?: string;
+};
+
+type VendorBillResponse = {
+  id: string | number;
+  vendor_id?: string | number;
+  vendorId?: string | number;
+  direction: BillDirection;
+  amount: string | number;
+  currency?: Currency;
+  status: "pending" | "settled";
+  due_date?: string | null;
+  dueDate?: string | null;
+  remark?: string | null;
+  created_at?: string;
+  createdAt?: string;
+};
+
+function normalizeVendor(vendor: VendorResponse): Vendor {
+  return {
+    id: String(vendor.id),
+    name: vendor.name,
+    remark: vendor.remark ?? null,
+    createdAt: vendor.created_at ?? vendor.createdAt ?? ""
+  };
+}
+
+function normalizeVendorBill(bill: VendorBillResponse): VendorBill {
+  const currency: Currency = bill.currency ?? "CNY";
+  return {
+    id: String(bill.id),
+    vendorId: String(bill.vendor_id ?? bill.vendorId ?? ""),
+    direction: bill.direction,
+    amountMinor: decimalToMinor(bill.amount, currency),
+    currency,
+    status: bill.status,
+    dueDate: bill.due_date ?? bill.dueDate ?? null,
+    remark: bill.remark ?? null,
+    createdAt: bill.created_at ?? bill.createdAt ?? ""
+  };
+}
+
+export async function getVendors(): Promise<Vendor[]> {
+  try {
+    const data = await fetchJson<VendorResponse[]>("/api/vendors");
+    return data.map(normalizeVendor);
+  } catch {
+    return mockVendors;
+  }
+}
+
+export async function createVendor(payload: { name: string; remark?: string }): Promise<Vendor> {
+  try {
+    const data = (await postJson("/api/vendors", payload)) as VendorResponse;
+    return normalizeVendor(data);
+  } catch (error) {
+    throw error instanceof Error ? error : new Error("创建供应商失败");
+  }
+}
+
+export async function getVendorBills(vendorId: string): Promise<VendorBill[]> {
+  try {
+    const data = await fetchJson<VendorBillResponse[]>(`/api/vendors/${vendorId}/bills`);
+    return data.map((bill) => normalizeVendorBill({ ...bill, vendor_id: bill.vendor_id ?? vendorId }));
+  } catch {
+    return (mockVendorBills[vendorId] ?? []).map((bill) => ({ ...bill }));
+  }
+}
+
+export async function createVendorBill(
+  vendorId: string,
+  payload: { direction: BillDirection; amount: string; dueDate?: string; remark?: string }
+): Promise<VendorBill> {
+  const body: Record<string, unknown> = {
+    direction: payload.direction,
+    amount: payload.amount
+  };
+  if (payload.dueDate) {
+    body.due_date = payload.dueDate;
+  }
+  if (payload.remark) {
+    body.remark = payload.remark;
+  }
+  const data = (await postJson(`/api/vendors/${vendorId}/bills`, body)) as VendorBillResponse;
+  return normalizeVendorBill({ ...data, vendor_id: data.vendor_id ?? vendorId });
+}
+
+export async function settleVendorBill(billId: string): Promise<VendorBill> {
+  const data = (await sendJson(`/api/vendors/bills/${billId}/settle`, "PATCH")) as VendorBillResponse;
+  return normalizeVendorBill(data);
+}
+
+export async function getVendorSummary(): Promise<VendorSummary> {
+  try {
+    const data = await fetchJson<VendorSummaryResponse>("/api/vendors/summary");
+    return normalizeVendorSummary(data);
+  } catch {
+    return mockDashboardData.vendorSummary;
+  }
 }

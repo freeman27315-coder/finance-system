@@ -1,4 +1,4 @@
-import type { AssetTransaction, DashboardData, WalletBalance } from "@/types";
+import type { AssetTransaction, DashboardData, Vendor, VendorBill, WalletBalance } from "@/types";
 
 export const mockWallets: WalletBalance[] = [
   {
@@ -207,6 +207,102 @@ export const mockDashboardData: DashboardData = {
     netMinor: 76_320_00,
     currency: "CNY"
   }
+};
+
+export const mockVendors: Vendor[] = [
+  {
+    id: "vendor-aurora",
+    name: "极光物流",
+    remark: "USDT 通道，月结",
+    createdAt: "2026-03-15T08:00:00.000Z"
+  },
+  {
+    id: "vendor-blue-river",
+    name: "蓝河供应链",
+    remark: null,
+    createdAt: "2026-03-22T09:30:00.000Z"
+  },
+  {
+    id: "vendor-cosmo",
+    name: "Cosmo 渠道商",
+    remark: "境外结算",
+    createdAt: "2026-04-02T03:10:00.000Z"
+  }
+];
+
+export const mockVendorBills: Record<string, VendorBill[]> = {
+  "vendor-aurora": [
+    {
+      id: "bill-aurora-1",
+      vendorId: "vendor-aurora",
+      direction: "payable",
+      amountMinor: 128_500_00,
+      currency: "CNY",
+      status: "pending",
+      dueDate: "2026-05-10",
+      remark: "4 月物流费",
+      createdAt: "2026-04-20T02:30:00.000Z"
+    },
+    {
+      id: "bill-aurora-2",
+      vendorId: "vendor-aurora",
+      direction: "payable",
+      amountMinor: 64_300_00,
+      currency: "CNY",
+      status: "settled",
+      dueDate: "2026-04-05",
+      remark: "3 月尾款",
+      createdAt: "2026-03-28T05:00:00.000Z"
+    }
+  ],
+  "vendor-blue-river": [
+    {
+      id: "bill-blue-1",
+      vendorId: "vendor-blue-river",
+      direction: "receivable",
+      amountMinor: 188_000_00,
+      currency: "CNY",
+      status: "pending",
+      dueDate: "2026-05-15",
+      remark: "渠道返点",
+      createdAt: "2026-04-18T07:00:00.000Z"
+    },
+    {
+      id: "bill-blue-2",
+      vendorId: "vendor-blue-river",
+      direction: "payable",
+      amountMinor: 25_900_00,
+      currency: "CNY",
+      status: "pending",
+      dueDate: null,
+      remark: null,
+      createdAt: "2026-04-25T03:20:00.000Z"
+    }
+  ],
+  "vendor-cosmo": [
+    {
+      id: "bill-cosmo-1",
+      vendorId: "vendor-cosmo",
+      direction: "receivable",
+      amountMinor: 107_020_00,
+      currency: "CNY",
+      status: "pending",
+      dueDate: "2026-05-20",
+      remark: "Cosmo 季度返佣",
+      createdAt: "2026-04-15T10:00:00.000Z"
+    },
+    {
+      id: "bill-cosmo-2",
+      vendorId: "vendor-cosmo",
+      direction: "receivable",
+      amountMinor: 32_000_00,
+      currency: "CNY",
+      status: "settled",
+      dueDate: "2026-04-10",
+      remark: null,
+      createdAt: "2026-03-30T06:30:00.000Z"
+    }
+  ]
 };
 
 export const mockAssetTransactions: Record<string, AssetTransaction[]> = {
