@@ -183,6 +183,128 @@ def test_group_wallet_rejects_direct_credit(client):
     assert response.json()["detail"] == "分组钱包不可直接记账，请操作叶子钱包"
 
 
+def test_patch_wallet_updates_name(client):
+    wallets = client.get("/wallets/assets").json()
+    leaf = _find_wallet(wallets, "TOM支付宝")
+    assert leaf is not None
+
+    response = client.patch(
+        f"/wallets/assets/{leaf['id']}",
+        json={"name": "TOM支付宝（个人）"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["name"] == "TOM支付宝（个人）"
+
+    refreshed = client.get("/wallets/assets").json()
+    assert _find_wallet(refreshed, "TOM支付宝（个人）") is not None
+
+
+def test_patch_wallet_updates_remark(client):
+    wallets = client.get("/wallets/assets").json()
+    leaf = _find_wallet(wallets, "BOSS支付宝")
+    assert leaf is not None
+
+    response = client.patch(
+        f"/wallets/assets/{leaf['id']}",
+        json={"remark": "用于公司日常报销"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["remark"] == "用于公司日常报销"
+
+
+def test_patch_wallet_requires_at_least_one_field(client):
+    wallets = client.get("/wallets/assets").json()
+    leaf = _find_wallet(wallets, "BOSS支付宝")
+
+    response = client.patch(f"/wallets/assets/{leaf['id']}", json={})
+
+    assert response.status_code == 400
+
+
+def test_delete_empty_leaf_wallet(client):
+    wallets = client.get("/wallets/assets").json()
+    leaf = _find_wallet(wallets, "BOSS支付宝")
+    assert leaf is not None
+
+    response = client.delete(f"/wallets/assets/{leaf['id']}")
+    assert response.status_code == 204, response.text
+
+    refreshed = client.get("/wallets/assets").json()
+    assert _find_wallet(refreshed, "BOSS支付宝") is None
+
+    full = client.get("/wallets/assets?include_deleted=true").json()
+    deleted = _find_wallet(full, "BOSS支付宝")
+    assert deleted is not None
+    assert deleted["deleted_at"] is not None
+
+
+def test_delete_rejects_wallet_with_balance(client):
+    wallets = client.get("/wallets/assets").json()
+    leaf = _find_wallet(wallets, "丙火网络支付宝")
+    assert leaf is not None
+
+    client.post(
+        f"/wallets/assets/{leaf['id']}/credit",
+        json={"amount": "10", "remark": "seed"},
+    )
+
+    response = client.delete(f"/wallets/assets/{leaf['id']}")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "钱包余额非 0，请先全部出账"
+
+
+def test_delete_rejects_top_level_wallet(client):
+    wallets = client.get("/wallets/assets").json()
+    rmb = next(wallet for wallet in wallets if wallet["name"] == "RMB钱包")
+
+    response = client.delete(f"/wallets/assets/{rmb['id']}")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "顶级钱包受保护"
+
+
+def test_delete_rejects_group_with_active_children(client):
+    wallets = client.get("/wallets/assets").json()
+    alipay = _find_wallet(wallets, "支付宝钱包")
+    assert alipay is not None
+
+    response = client.delete(f"/wallets/assets/{alipay['id']}")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "请先删除子钱包"
+
+
+def test_credit_rejected_after_soft_delete(client):
+    wallets = client.get("/wallets/assets").json()
+    leaf = _find_wallet(wallets, "跳舞姬微信")
+    assert leaf is not None
+
+    delete_resp = client.delete(f"/wallets/assets/{leaf['id']}")
+    assert delete_resp.status_code == 204, delete_resp.text
+
+    response = client.post(
+        f"/wallets/assets/{leaf['id']}/credit",
+        json={"amount": "1", "remark": "should fail"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "已删除钱包不可记账"
+
+
+def test_patch_rejected_after_soft_delete(client):
+    wallets = client.get("/wallets/assets").json()
+    leaf = _find_wallet(wallets, "张总币安")
+    assert leaf is not None
+
+    assert client.delete(f"/wallets/assets/{leaf['id']}").status_code == 204
+
+    response = client.patch(
+        f"/wallets/assets/{leaf['id']}",
+        json={"name": "新名"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "已删除钱包不可编辑"
+
+
 def test_debit_rejects_insufficient_balance(client):
     wallets = client.get("/wallets/assets").json()
     leaf = _find_wallet(wallets, "FREEMAN币安")

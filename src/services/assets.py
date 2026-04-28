@@ -99,14 +99,12 @@ def is_asset_wallet(wallet: Wallet) -> bool:
     return wallet_type in ASSET_TYPES
 
 
-def list_asset_wallets(session: Session) -> list[Wallet]:
-    return list(
-        session.scalars(
-            select(Wallet)
-            .where(Wallet.type.in_(ASSET_TYPES))
-            .order_by(Wallet.parent_id.is_not(None), Wallet.id)
-        )
-    )
+def list_asset_wallets(session: Session, include_deleted: bool = False) -> list[Wallet]:
+    stmt = select(Wallet).where(Wallet.type.in_(ASSET_TYPES))
+    if not include_deleted:
+        stmt = stmt.where(Wallet.deleted_at.is_(None))
+    stmt = stmt.order_by(Wallet.parent_id.is_not(None), Wallet.id)
+    return list(session.scalars(stmt))
 
 
 def create_asset_sub_wallet(session: Session, parent: Wallet, name: str, is_group: bool = False) -> Wallet:
