@@ -21,6 +21,8 @@ set -a
 source "$ENV_FILE"
 set +a
 
+CLOUDFLARED="${CLOUDFLARED_PATH:-cloudflared}"
+
 export LANG="${LANG:-en_US.UTF-8}"
 export LC_ALL="${LC_ALL:-en_US.UTF-8}"
 export PYTHONUTF8="${PYTHONUTF8:-1}"
@@ -38,4 +40,4 @@ echo "Frontend Agent 已启动 PID: $AGENT_PID, port: $PORT"
 
 echo ""
 echo "=== Cloudflare Tunnel 公网地址 ==="
-cloudflared tunnel --url "$TUNNEL_URL"
+"$CLOUDFLARED" tunnel --url "$TUNNEL_URL"
