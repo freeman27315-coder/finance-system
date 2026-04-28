@@ -8,6 +8,8 @@ export type WalletBalance = {
   type: WalletType;
   currency: Currency;
   balanceMinor: number;
+  isGroup: boolean;
+  children?: WalletBalance[];
   parentId?: string | null;
 };
 

@@ -20,6 +20,18 @@ const typeLabels: Record<WalletType, string> = {
   TAIWAN: "台湾"
 };
 
+function flattenLeafWallets(wallets: WalletBalance[]): WalletBalance[] {
+  return wallets.flatMap((wallet) =>
+    wallet.children && wallet.children.length > 0
+      ? wallet.isGroup
+        ? flattenLeafWallets(wallet.children)
+        : [{ ...wallet, children: [] }, ...flattenLeafWallets(wallet.children)]
+      : wallet.isGroup
+        ? []
+        : [{ ...wallet, children: [] }]
+  );
+}
+
 function walletsByType(wallets: WalletBalance[], walletTypes: WalletType[]) {
   return wallets.filter((wallet) => walletTypes.includes(wallet.type));
 }
@@ -167,7 +179,8 @@ export function Dashboard() {
   });
 
   const dashboardData = data;
-  const cnyWallets = dashboardData?.wallets.filter((wallet) => wallet.currency === "CNY") ?? [];
+  const leafWallets = flattenLeafWallets(dashboardData?.wallets ?? []);
+  const cnyWallets = leafWallets.filter((wallet) => wallet.currency === "CNY");
   const cnyTotal = sumMinor(cnyWallets.map((wallet) => wallet.balanceMinor));
 
   return (
@@ -193,14 +206,14 @@ export function Dashboard() {
         <Card>
           <CardContent className="p-5">
             <div className="text-sm text-muted-foreground">钱包数量</div>
-            <div className="mt-2 tabular-nums text-3xl font-semibold">{dashboardData?.wallets.length ?? 0}</div>
+            <div className="mt-2 tabular-nums text-3xl font-semibold">{leafWallets.length}</div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-5">
             <div className="text-sm text-muted-foreground">主币种</div>
             <div className="mt-2 tabular-nums text-3xl font-semibold">
-              {primaryCurrency(dashboardData?.wallets ?? [])}
+              {primaryCurrency(leafWallets)}
             </div>
           </CardContent>
         </Card>
@@ -212,11 +225,11 @@ export function Dashboard() {
         {sections
           .filter((section) => section.id !== "dashboard")
           .map((section) => (
-            <ModuleCard key={section.id} section={section} wallets={dashboardData?.wallets ?? []} />
+            <ModuleCard key={section.id} section={section} wallets={leafWallets} />
           ))}
       </div>
 
-      <WalletTable wallets={dashboardData?.wallets ?? []} />
+      <WalletTable wallets={leafWallets} />
     </div>
   );
 }

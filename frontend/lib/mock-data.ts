@@ -2,74 +2,164 @@ import type { AssetTransaction, DashboardData, WalletBalance } from "@/types";
 
 export const mockWallets: WalletBalance[] = [
   {
-    id: "asset-cny-main",
-    name: "RMB 主钱包",
+    id: "asset-cny-root",
+    name: "RMB钱包",
     type: "ASSET_RMB",
     currency: "CNY",
-    balanceMinor: 628_450_00
+    balanceMinor: 628_450_00,
+    isGroup: true,
+    children: [
+      {
+        id: "asset-cny-alipay",
+        name: "支付宝钱包",
+        type: "ASSET_RMB",
+        currency: "CNY",
+        balanceMinor: 508_450_00,
+        isGroup: true,
+        parentId: "asset-cny-root",
+        children: [
+          {
+            id: "asset-cny-bh",
+            name: "丙火网络支付宝",
+            type: "ASSET_RMB",
+            currency: "CNY",
+            balanceMinor: 228_150_00,
+            isGroup: false,
+            parentId: "asset-cny-alipay"
+          },
+          {
+            id: "asset-cny-tom",
+            name: "TOM支付宝",
+            type: "ASSET_RMB",
+            currency: "CNY",
+            balanceMinor: 164_300_00,
+            isGroup: false,
+            parentId: "asset-cny-alipay"
+          },
+          {
+            id: "asset-cny-boss",
+            name: "BOSS支付宝",
+            type: "ASSET_RMB",
+            currency: "CNY",
+            balanceMinor: 116_000_00,
+            isGroup: false,
+            parentId: "asset-cny-alipay"
+          }
+        ]
+      },
+      {
+        id: "asset-cny-wechat",
+        name: "微信钱包",
+        type: "ASSET_RMB",
+        currency: "CNY",
+        balanceMinor: 120_000_00,
+        isGroup: true,
+        parentId: "asset-cny-root",
+        children: [
+          {
+            id: "asset-cny-dancer",
+            name: "跳舞姬微信",
+            type: "ASSET_RMB",
+            currency: "CNY",
+            balanceMinor: 120_000_00,
+            isGroup: false,
+            parentId: "asset-cny-wechat"
+          }
+        ]
+      }
+    ]
   },
   {
-    id: "asset-usdt-main",
-    name: "USDT 主钱包",
+    id: "asset-usdt-root",
+    name: "USDT钱包",
     type: "ASSET_USDT",
     currency: "USDT",
-    balanceMinor: 184_250_000000
+    balanceMinor: 184_250_000000,
+    isGroup: true,
+    children: [
+      {
+        id: "asset-usdt-freeman",
+        name: "FREEMAN币安",
+        type: "ASSET_USDT",
+        currency: "USDT",
+        balanceMinor: 96_500_000000,
+        isGroup: false,
+        parentId: "asset-usdt-root"
+      },
+      {
+        id: "asset-usdt-zhang",
+        name: "张总币安",
+        type: "ASSET_USDT",
+        currency: "USDT",
+        balanceMinor: 87_750_000000,
+        isGroup: false,
+        parentId: "asset-usdt-root"
+      }
+    ]
   },
   {
     id: "vendor-cny-net",
     name: "供应商净额",
     type: "VENDOR",
     currency: "CNY",
-    balanceMinor: 76_320_00
+    balanceMinor: 76_320_00,
+    isGroup: false
   },
   {
     id: "xbox-us",
     name: "XBOX 美国账户",
     type: "XBOX",
     currency: "USD",
-    balanceMinor: 12_840_00
+    balanceMinor: 12_840_00,
+    isGroup: false
   },
   {
     id: "xbox-uk",
     name: "XBOX 英国账户",
     type: "XBOX",
     currency: "GBP",
-    balanceMinor: 8_620_00
+    balanceMinor: 8_620_00,
+    isGroup: false
   },
   {
     id: "taobao-unsettled",
     name: "淘宝未结算",
     type: "TAOBAO",
     currency: "CNY",
-    balanceMinor: 93_400_00
+    balanceMinor: 93_400_00,
+    isGroup: false
   },
   {
     id: "taobao-settled",
     name: "淘宝已结算",
     type: "TAOBAO",
     currency: "CNY",
-    balanceMinor: 41_250_00
+    balanceMinor: 41_250_00,
+    isGroup: false
   },
   {
     id: "taiwan-8591",
     name: "8591余额",
     type: "TAIWAN",
     currency: "TWD",
-    balanceMinor: 385_000_00
+    balanceMinor: 385_000_00,
+    isGroup: false
   },
   {
     id: "taiwan-bank",
     name: "银行卡",
     type: "TAIWAN",
     currency: "TWD",
-    balanceMinor: 128_500_00
+    balanceMinor: 128_500_00,
+    isGroup: false
   },
   {
     id: "taiwan-store",
     name: "超商代收金流余额",
     type: "TAIWAN",
     currency: "TWD",
-    balanceMinor: 62_800_00
+    balanceMinor: 62_800_00,
+    isGroup: false
   }
 ];
 
@@ -84,21 +174,21 @@ export const mockDashboardData: DashboardData = {
 };
 
 export const mockAssetTransactions: Record<string, AssetTransaction[]> = {
-  "asset-cny-main": [
+  "asset-cny-bh": [
     {
-      id: "asset-cny-tx-1",
-      walletId: "asset-cny-main",
-      walletName: "RMB 主钱包",
-      amountMinor: 120_000_00,
+      id: "asset-cny-bh-tx-1",
+      walletId: "asset-cny-bh",
+      walletName: "丙火网络支付宝",
+      amountMinor: 88_000_00,
       direction: "in",
       remark: "期初转入",
       createdAt: "2026-04-20T02:30:00.000Z",
       currency: "CNY"
     },
     {
-      id: "asset-cny-tx-2",
-      walletId: "asset-cny-main",
-      walletName: "RMB 主钱包",
+      id: "asset-cny-bh-tx-2",
+      walletId: "asset-cny-bh",
+      walletName: "丙火网络支付宝",
       amountMinor: 18_500_00,
       direction: "out",
       remark: "供应商付款",
@@ -106,15 +196,39 @@ export const mockAssetTransactions: Record<string, AssetTransaction[]> = {
       currency: "CNY"
     }
   ],
-  "asset-usdt-main": [
+  "asset-cny-tom": [
     {
-      id: "asset-usdt-tx-1",
-      walletId: "asset-usdt-main",
-      walletName: "USDT 主钱包",
+      id: "asset-cny-tom-tx-1",
+      walletId: "asset-cny-tom",
+      walletName: "TOM支付宝",
+      amountMinor: 64_300_00,
+      direction: "in",
+      remark: "渠道回款",
+      createdAt: "2026-04-21T10:10:00.000Z",
+      currency: "CNY"
+    }
+  ],
+  "asset-usdt-freeman": [
+    {
+      id: "asset-usdt-freeman-tx-1",
+      walletId: "asset-usdt-freeman",
+      walletName: "FREEMAN币安",
       amountMinor: 24_000_000000,
       direction: "in",
       remark: "链上充值",
       createdAt: "2026-04-23T11:10:00.000Z",
+      currency: "USDT"
+    }
+  ],
+  "asset-usdt-zhang": [
+    {
+      id: "asset-usdt-zhang-tx-1",
+      walletId: "asset-usdt-zhang",
+      walletName: "张总币安",
+      amountMinor: 12_400_000000,
+      direction: "out",
+      remark: "划拨",
+      createdAt: "2026-04-24T11:10:00.000Z",
       currency: "USDT"
     }
   ]
