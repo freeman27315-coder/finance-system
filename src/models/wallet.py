@@ -6,7 +6,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, func, select
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, func, select
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 from src.database import Base
@@ -44,10 +44,15 @@ class Wallet(Base):
     balance: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False, default=Decimal("0"))
     is_group: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("wallets.id"), nullable=True)
+    remark: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
+    )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
 
     parent: Mapped[Optional["Wallet"]] = relationship(
