@@ -66,6 +66,7 @@ export function AppShell({ activeSection, children }: AppShellProps) {
 
             <div className="mt-auto border-t border-border p-4">
               <Badge tone="transfer">Frontend Agent</Badge>
+              <p className="mt-2 text-xs text-muted-foreground">0.1.0</p>
               <p className="mt-2 text-xs leading-5 text-muted-foreground">Next.js Dashboard / API Proxy</p>
             </div>
           </div>
