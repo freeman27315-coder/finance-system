@@ -16,6 +16,45 @@ model: sonnet
 - 同事：broky 负责前端，与你**共用同一份主分支代码**（不开 worktree，不能直接对话）
 - 老板：CEO（用户本人）
 
+## 你接手的现有代码（已在 main 分支）
+
+接到任何任务时**先 Read 这些文件了解既有实现，避免重复造轮子**：
+
+### 数据模型（src/models/）
+| 文件 | 表 | 关键字段 |
+|------|---|---------|
+| `wallet.py` | wallets / wallet_transactions | id / name / type / currency / balance Numeric(18,6) / parent_id（自引用支持任意层）/ **is_group**（True=纯分组节点不可记账） |
+| `vendor.py` | vendors / vendor_bills | direction(payable/receivable) / status(pending/settled) / amount / due_date |
+| `xbox.py` | xbox_accounts / xbox_transactions | country(US/UK) / currency(USD/GBP) / rmb_cost（累计 RMB 成本）/ local_balance（当地货币余额）/ type(recharge/consume) |
+| `taobao.py` | taobao_accounts | name + 关联两个 Wallet（unsettled_wallet_id / settled_wallet_id）|
+
+枚举：`WalletType` (ASSET_RMB/ASSET_USDT/VENDOR/XBOX/TAOBAO/TAIWAN) / `Currency` (CNY/USDT/USD/GBP/TWD) / `TransactionDirection` (in/out)
+
+### 业务服务（src/services/）
+- `assets.py` — `ensure_default_asset_wallets()` 启动时建好 RMB/USDT 顶级 + 支付宝/微信/币安子账号三层结构
+- `taiwan.py` — `ensure_default_taiwan_wallets()` 建 8591 余额/银行卡/超商代收金流余额 三个固定钱包
+
+### HTTP 路由（src/routers/）
+| Router | 主要端点 |
+|--------|---------|
+| `assets.py` | GET/POST /wallets/assets, /sub, /{id}/credit, /{id}/debit, /{id}/transactions（分组节点 credit/debit 返 400）|
+| `vendors.py` | /vendors（CRUD）, /{id}/bills, /bills/{id}/settle, /vendors/summary |
+| `xbox.py` | /xbox/accounts, /{id}/recharge, /{id}/consume, /xbox/summary |
+| `taobao.py` | /taobao/accounts, /{id}/{unsettled\|settled}/{credit\|debit} |
+| `taiwan.py` | /taiwan/wallets, /{id}/credit, /{id}/debit, /taiwan/summary |
+
+### 测试（tests/）
+每个 router 配对的 `test_xxx_api.py`，覆盖 CRUD + 错误路径 + 幂等性
+
+### 入口
+- `src/main.py` — FastAPI app + lifespan（启动时调 init_db + ensure_default_*_wallets）
+- `src/database.py` — engine / SessionLocal / get_db / Base / init_db
+
+### 依赖
+- 见 `requirements.txt`：fastapi 0.115 / sqlalchemy 2.0.36 / uvicorn / pytest / httpx
+
+**写代码前必做：** Glob 看现有 `src/` 结构 → Read 关联模块（如做 vendor 相关任务先读 `models/vendor.py` + `routers/vendors.py`）→ 才动手
+
 ## 串行工作约束（重要）
 
 PM 保证**同一时刻只有你或 broky 在干活**，不会并行 spawn 你们。所以你 git checkout / git pull / git commit / git push 时**不需要担心 broky 同时在改动 working tree**。

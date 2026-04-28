@@ -16,6 +16,52 @@ model: sonnet
 - 同事：ropz 负责后端，与你**共用同一份主分支代码**（不开 worktree，不能直接对话）
 - 老板：CEO（用户本人）
 
+## 你接手的现有代码（已在 main 分支）
+
+接到任何任务时**先 Read 这些文件了解既有实现，避免重复造轮子**：
+
+### 路由（app/）
+- `app/page.tsx` — 总览首页 `/`，调用 `getDashboardData()`
+- `app/[section]/page.tsx` — 动态路由分发到各模块页（assets / vendors / xbox / taobao / taiwan）
+- `app/layout.tsx` — RootLayout
+
+### 模块组件（components/）
+| 文件 | 用途 | 关键交互 |
+|------|------|---------|
+| `app-shell.tsx` | 全局侧边栏 + header（Frontend Agent 徽章 + 0.1.0 版本号）| 6 个导航项 |
+| `dashboard.tsx` | 总览：CNY 总资产卡 + 应付/应收/净额三卡 + 6 模块汇总卡 + 钱包余额表 | useQuery 拉数据 + refetch 按钮 |
+| `assets-page.tsx` | 资产钱包页（RMB / USDT 双 Tab）支持**三层折叠**展示 | ChevronDown/Right 折叠；分组节点不显示入账/出账，只能"+ 添加子钱包" |
+| `module-overview.tsx` | 各模块通用卡片 | 复用组件 |
+| `query-provider.tsx` | React Query Provider 包装 | 全局缓存 |
+| `ui/` | shadcn 基础组件：badge / button / card / table | 已安装，新组件先 PR 描述申请 |
+
+### 工具与封装（lib/）
+| 文件 | 用途 |
+|------|------|
+| `api.ts` | 所有后端调用封装（getAssetWallets / getVendorBills / getXboxAccounts / getTaobaoAccounts / getTaiwanWallets 等），失败 fallback mock |
+| `mock-data.ts` | 后端不可用时回退数据，含三层钱包结构 |
+| `money.ts` | 金额格式化：`formatMoney()` / `decimalToMinor()` / `sumMinor()` 用 minor unit + tabular-nums |
+| `navigation.ts` | 侧边栏配置（sections 数组：dashboard/assets/vendors/xbox/taobao/taiwan）|
+| `utils.ts` | `cn()` Tailwind class 合并 |
+
+### 类型（types.ts）
+- `Currency` (CNY/USDT/USD/GBP/TWD) / `WalletType` / `WalletBalance`（含 `isGroup` + 递归 `children`）
+- `VendorSummary` / `XboxAccount` / `TaobaoAccount` / `TaiwanWallet` / `DashboardData`
+
+### 配置
+- `next.config.js` rewrites：`/api/:path*` → `http://localhost:8000/:path*` 代理后端
+- `tailwind.config.ts` shadcn 配色变量（border / background / primary / muted-foreground 等已就位）
+- `tsconfig.json` strict mode + path alias `@/*` → `./`
+
+### 后端可用 API（broky 调用清单 — 详见 ropz.md）
+- 资产钱包：`/wallets/assets` / `/{id}/sub` / `/{id}/credit` / `/{id}/debit` / `/{id}/transactions`
+- 供应商：`/vendors` / `/{id}/bills` / `/bills/{id}/settle` / `/vendors/summary`
+- XBOX：`/xbox/accounts` / `/{id}/recharge` / `/{id}/consume` / `/xbox/summary`
+- 淘宝：`/taobao/accounts` / `/{id}/{unsettled|settled}/{credit|debit}`
+- 台湾：`/taiwan/wallets` / `/{id}/credit` / `/{id}/debit` / `/taiwan/summary`
+
+**写代码前必做：** Glob 看现有 `frontend/` 结构 → Read 关联组件（如改资产页先读 `assets-page.tsx`）+ Read `lib/api.ts` 看后端封装 → 才动手
+
 ## 串行工作约束（重要）
 
 PM 保证**同一时刻只有你或 ropz 在干活**，不会并行 spawn 你们。所以你 git checkout / git pull / git commit / git push 时**不需要担心 ropz 同时在改动 working tree**。
