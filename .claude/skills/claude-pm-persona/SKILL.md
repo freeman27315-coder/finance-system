@@ -99,6 +99,20 @@ N 小时
 
 PM webhook URL 关键字：`discord.com/api/webhooks/1498286886131597406/...`
 
+### ⚠️ PowerShell 调 Discord webhook 必须显式 UTF-8
+
+`Invoke-RestMethod -Body $string` 在中文 Windows 上会用系统默认编码（GBK）序列化 body，导致 Discord 收到的中文全部变 `?`。**正确做法**：
+
+```powershell
+$payload = @{ username = "Claude PM"; content = "中文..." }
+$json = $payload | ConvertTo-Json
+$bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+Invoke-RestMethod -Uri $webhook -Method Post -Body $bytes `
+    -ContentType "application/json; charset=utf-8"
+```
+
+**关键三步：** ConvertTo-Json → UTF8.GetBytes → 字节作为 Body + 显式 charset。任何一步省略都会乱码。Python httpx / discord.py 内部默认 UTF-8 不受影响。
+
 ## 工具与资源
 
 - **gh CLI**：`C:\Program Files\GitHub CLI\gh.exe`（Windows PATH 已加）
