@@ -46,14 +46,18 @@ AGENT_LABEL = os.environ.get("AGENT_LABEL", "")
 GH = os.environ.get("GH_PATH", "gh")
 REPO = "freeman27315-coder/finance-system"
 
-# 默认用 claude CLI 激活助手；用户可改成 codex/cursor 等其他 CLI
-DEFAULT_DISPATCH_CMD = (
-    'claude -p "请认领并完成任务 #{issue_number}：{issue_title}。'
-    '详情：{issue_url}。{action_hint}'
-    '工作流：1) python github_helper.py start {issue_number}  '
-    '2) 阅读 Issue 写代码  3) python github_helper.py submit {issue_number}"'
-)
-AGENT_DISPATCH_CMD = os.environ.get("AGENT_DISPATCH_CMD", DEFAULT_DISPATCH_CMD)
+# 默认空：agent 收到事件后只标记 + 写任务文件 + 终端通知，不自动激活任何 CLI
+# （适用于开发者用 ChatGPT 网页/桌面版的场景——开发者看到通知后手动让 ChatGPT 读任务文件）
+# 如果用 Claude Code 等支持 -p 模式的 CLI，可以填入：
+#   claude -p "请认领并完成任务 #{issue_number}：{issue_title}。详情：{issue_url}。{action_hint}"
+AGENT_DISPATCH_CMD = os.environ.get("AGENT_DISPATCH_CMD", "")
+
+# 任务文件存放目录（开发者把这个文件丢给 ChatGPT 即可看完整需求）
+TASKS_DIR = os.environ.get("TASKS_DIR", os.path.expanduser("~/finance-system-tasks"))
+os.makedirs(TASKS_DIR, exist_ok=True)
+
+# macOS 桌面通知（可选，靠 osascript）
+DESKTOP_NOTIFY = os.environ.get("DESKTOP_NOTIFY", "1") == "1"
 
 if not GITHUB_TOKEN:
     raise RuntimeError("GITHUB_TOKEN 未设置")
@@ -92,29 +96,95 @@ def edit_issue_label(issue_number: int, remove: Optional[str], add: str):
     subprocess.run(args, env=utf8_env())
 
 
-def dispatch_to_assistant(issue_number: int, issue_title: str, issue_url: str, action_hint: str = ""):
-    """Fire-and-forget 启动 AI 助手子进程"""
-    cmd = AGENT_DISPATCH_CMD.format(
-        issue_number=issue_number,
-        issue_title=issue_title.replace('"', "'"),
-        issue_url=issue_url,
-        action_hint=action_hint,
-    )
-    print("\n" + "=" * 60)
-    print(f"  [{AGENT_LABEL.upper()}] 事件触发任务 #{issue_number}: {issue_title}")
-    print(f"  详情: {issue_url}")
-    print(f"  激活命令: {cmd[:120]}...")
-    print("=" * 60 + "\n")
-    # 后台启动，不等待结果（助手会自己提交 PR）
+def fetch_issue_body(issue_number: int) -> str:
+    """通过 gh 拉 Issue 完整正文，写到任务文件给 AI 助手参考"""
     try:
-        subprocess.Popen(
-            shlex.split(cmd) if os.name != "nt" else cmd,
-            env=utf8_env(),
-            stdin=subprocess.DEVNULL,
-            shell=os.name == "nt",
+        result = subprocess.run(
+            [GH, "issue", "view", str(issue_number), "--repo", REPO, "--json", "title,body,labels"],
+            capture_output=True, text=True, encoding="utf-8", env=utf8_env(), timeout=20,
         )
+        if result.returncode == 0:
+            return result.stdout
     except Exception as exc:
-        print(f"⚠️  启动助手失败（可手动认领 #{issue_number}）：{exc}", flush=True)
+        return f"(获取失败: {exc})"
+    return ""
+
+
+def write_task_file(issue_number: int, issue_title: str, issue_url: str, action_hint: str) -> str:
+    """把完整任务写到本地文件，开发者直接丢给 ChatGPT"""
+    body_json = fetch_issue_body(issue_number)
+    path = os.path.join(TASKS_DIR, f"issue-{issue_number}.md")
+    workflow = (
+        "## 工作流（请 AI 助手按此操作）\n"
+        f"1. 在仓库根目录运行：`python agent/github_helper.py start {issue_number}`（自动创建分支）\n"
+        f"2. 按下方需求写代码，遵循已有代码风格\n"
+        f"3. 提交：`git add -A && git commit -m \"feat: ...\"`\n"
+        f"4. 提交 PR：`python agent/github_helper.py submit {issue_number}`\n"
+    )
+    content = (
+        f"# 任务 #{issue_number}: {issue_title}\n\n"
+        f"**链接：** {issue_url}\n\n"
+        + (f"**修改提示（来自 review）：**\n{action_hint}\n\n" if action_hint else "")
+        + workflow + "\n"
+        + "---\n\n## Issue 完整内容（JSON）\n\n```json\n" + body_json + "\n```\n"
+    )
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return path
+
+
+def desktop_notify(title: str, message: str):
+    """macOS 桌面通知（也兼容 Windows / Linux 失败时静默）"""
+    if not DESKTOP_NOTIFY:
+        return
+    try:
+        if sys.platform == "darwin":
+            safe_title = title.replace('"', "'")
+            safe_msg = message.replace('"', "'")
+            subprocess.Popen(
+                ["osascript", "-e", f'display notification "{safe_msg}" with title "{safe_title}" sound name "Glass"'],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+    except Exception:
+        pass
+
+
+def dispatch_to_assistant(issue_number: int, issue_title: str, issue_url: str, action_hint: str = ""):
+    """事件驱动通知开发者：写任务文件 + 终端高亮 + 桌面通知"""
+    task_file = write_task_file(issue_number, issue_title, issue_url, action_hint)
+
+    print("\n" + "🟢" * 30)
+    print(f"  [{AGENT_LABEL.upper()}] 新任务 #{issue_number}: {issue_title}")
+    print(f"  任务文件: {task_file}")
+    print(f"  Issue 链接: {issue_url}")
+    if action_hint:
+        print(f"  修改提示: {action_hint[:200]}")
+    print(f"  → 把上面的任务文件丢给 ChatGPT，让它按工作流完成")
+    print("🟢" * 30 + "\n", flush=True)
+
+    desktop_notify(
+        f"[{AGENT_LABEL}] 新任务 #{issue_number}",
+        issue_title[:120],
+    )
+
+    # 可选：如配置了 AGENT_DISPATCH_CMD（如 claude -p）则继续启动 CLI 子进程
+    if AGENT_DISPATCH_CMD:
+        cmd = AGENT_DISPATCH_CMD.format(
+            issue_number=issue_number,
+            issue_title=issue_title.replace('"', "'"),
+            issue_url=issue_url,
+            action_hint=action_hint,
+        )
+        try:
+            subprocess.Popen(
+                shlex.split(cmd) if os.name != "nt" else cmd,
+                env=utf8_env(),
+                stdin=subprocess.DEVNULL,
+                shell=os.name == "nt",
+            )
+            print(f"  已额外启动 CLI: {cmd[:80]}...", flush=True)
+        except Exception as exc:
+            print(f"  ⚠️  CLI 启动失败（不影响通知）：{exc}", flush=True)
 
 
 def handle_new_task(issue_number: int, issue_title: str, issue_url: str):

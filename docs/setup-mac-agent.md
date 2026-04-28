@@ -130,10 +130,15 @@ curl https://abcd-1234.trycloudflare.com/health
 
 ### Webhook / 事件驱动规则（零轮询）
 
-- **完全由 GitHub 事件触发**：`main.py` 收到 webhook 后用 `AGENT_DISPATCH_CMD` 激活本机 AI 编程助手开干，**不再轮询 GitHub 状态**。
-- **触发动作：**
-  - 收到 `ready-for-dev` + 本 agent 标签 → 标 in-progress → 启动助手认领开发
-  - 收到 PR `changes_requested` review → 标 needs-revision → 启动助手按 review 修复
+- **完全由 GitHub 事件触发**：`main.py` 收到 webhook 后做三件事：
+  1. 更新 Issue / PR 标签（in-progress / needs-revision）
+  2. 写完整任务到 `~/finance-system-tasks/issue-N.md`（或 `TASKS_DIR` 指定的目录）
+  3. 终端醒目打印 + macOS 桌面通知
+- **开发者用 ChatGPT 的工作流：** 收到通知后打开 ChatGPT 网页/桌面版，把 `issue-N.md` 文件内容粘贴给 ChatGPT 让它按"工作流"部分干活。
+- **开发者用 Claude Code 的工作流：** 在 `.env` 设置 `AGENT_DISPATCH_CMD=claude -p "请完成任务 #{issue_number}..."`，agent 收到事件后会自动 Popen 启动 Claude CLI。
+- **触发动作映射：**
+  - 收到 `ready-for-dev` + 本 agent 标签 → 标 in-progress + 通知开发者
+  - 收到 PR `changes_requested` review → 标 needs-revision + 把 review 意见写进任务文件，让 ChatGPT 按 review 修
 - **AI 助手的工作约束：**
   - 收到任务先在 Issue/PR 评论反馈「已收到任务 #N，开始开发」，然后直接开工，不要请求二次同意
   - 发现需求里关键字段乱码、缺失、业务名称不清、验收标准不明、指令冲突时，**立即在 Issue 评论 @CEO/@PM** 列出无法确认的字段，等待确认；不要凭直觉补全
