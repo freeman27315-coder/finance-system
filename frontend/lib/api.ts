@@ -1,6 +1,8 @@
 import {
   mockAssetTransactions,
   mockDashboardData,
+  mockTaobaoAccounts,
+  mockTaobaoTransactions,
   mockVendorBills,
   mockVendors,
   mockXboxAccounts,
@@ -13,6 +15,9 @@ import type {
   BillDirection,
   Currency,
   DashboardData,
+  TaobaoAccount,
+  TaobaoTransaction,
+  TaobaoWalletScope,
   Vendor,
   VendorBill,
   VendorSummary,
@@ -486,6 +491,136 @@ export async function getXboxSummary(): Promise<XboxSummary> {
     };
   } catch {
     return mockXboxSummary;
+  }
+}
+
+type TaobaoAccountResponse = {
+  id: string | number;
+  name: string;
+  unsettled_wallet_id?: string | number;
+  unsettledWalletId?: string | number;
+  settled_wallet_id?: string | number;
+  settledWalletId?: string | number;
+  unsettled_balance?: string | number;
+  unsettledBalance?: string | number;
+  settled_balance?: string | number;
+  settledBalance?: string | number;
+  remark?: string | null;
+  created_at?: string;
+  createdAt?: string;
+};
+
+type TaobaoTransactionResponse = {
+  id: string | number;
+  wallet_id?: string | number;
+  walletId?: string | number;
+  wallet_scope?: string;
+  walletScope?: string;
+  amount: string | number;
+  direction: "in" | "out";
+  remark?: string | null;
+  created_at?: string;
+  createdAt?: string;
+};
+
+function normalizeTaobaoAccount(account: TaobaoAccountResponse): TaobaoAccount {
+  return {
+    id: String(account.id),
+    name: account.name,
+    unsettledWalletId: String(account.unsettled_wallet_id ?? account.unsettledWalletId ?? ""),
+    settledWalletId: String(account.settled_wallet_id ?? account.settledWalletId ?? ""),
+    unsettledBalanceMinor: decimalToMinor(account.unsettled_balance ?? account.unsettledBalance ?? 0, "CNY"),
+    settledBalanceMinor: decimalToMinor(account.settled_balance ?? account.settledBalance ?? 0, "CNY"),
+    remark: account.remark ?? null,
+    createdAt: account.created_at ?? account.createdAt ?? ""
+  };
+}
+
+function normalizeTaobaoTransaction(transaction: TaobaoTransactionResponse): TaobaoTransaction {
+  const scopeRaw = transaction.wallet_scope ?? transaction.walletScope ?? "unsettled";
+  const walletScope: TaobaoWalletScope = scopeRaw === "settled" ? "settled" : "unsettled";
+  return {
+    id: String(transaction.id),
+    walletId: String(transaction.wallet_id ?? transaction.walletId ?? ""),
+    walletScope,
+    amountMinor: decimalToMinor(transaction.amount, "CNY"),
+    direction: transaction.direction,
+    remark: transaction.remark ?? null,
+    createdAt: transaction.created_at ?? transaction.createdAt ?? ""
+  };
+}
+
+export async function getTaobaoAccounts(): Promise<TaobaoAccount[]> {
+  try {
+    const data = await fetchJson<TaobaoAccountResponse[]>("/api/taobao/accounts");
+    return data.map(normalizeTaobaoAccount);
+  } catch {
+    return mockTaobaoAccounts;
+  }
+}
+
+export async function createTaobaoAccount(payload: { name: string; remark?: string }): Promise<TaobaoAccount> {
+  const body: Record<string, unknown> = { name: payload.name };
+  if (payload.remark) {
+    body.remark = payload.remark;
+  }
+  const data = (await postJson("/api/taobao/accounts", body)) as TaobaoAccountResponse;
+  return normalizeTaobaoAccount(data);
+}
+
+export async function creditTaobaoUnsettled(
+  accountId: string,
+  payload: { amount: string; remark?: string }
+): Promise<TaobaoTransaction> {
+  const body: Record<string, unknown> = { amount: payload.amount };
+  if (payload.remark) {
+    body.remark = payload.remark;
+  }
+  const data = (await postJson(
+    `/api/taobao/accounts/${accountId}/unsettled/credit`,
+    body
+  )) as TaobaoTransactionResponse;
+  return normalizeTaobaoTransaction(data);
+}
+
+export async function creditTaobaoSettled(
+  accountId: string,
+  payload: { amount: string; remark?: string }
+): Promise<TaobaoTransaction> {
+  const body: Record<string, unknown> = { amount: payload.amount };
+  if (payload.remark) {
+    body.remark = payload.remark;
+  }
+  const data = (await postJson(
+    `/api/taobao/accounts/${accountId}/settled/credit`,
+    body
+  )) as TaobaoTransactionResponse;
+  return normalizeTaobaoTransaction(data);
+}
+
+export async function debitTaobaoSettled(
+  accountId: string,
+  payload: { amount: string; remark?: string }
+): Promise<TaobaoTransaction> {
+  const body: Record<string, unknown> = { amount: payload.amount };
+  if (payload.remark) {
+    body.remark = payload.remark;
+  }
+  const data = (await postJson(
+    `/api/taobao/accounts/${accountId}/settled/debit`,
+    body
+  )) as TaobaoTransactionResponse;
+  return normalizeTaobaoTransaction(data);
+}
+
+export async function getTaobaoTransactions(accountId: string): Promise<TaobaoTransaction[]> {
+  try {
+    const data = await fetchJson<TaobaoTransactionResponse[]>(
+      `/api/taobao/accounts/${accountId}/transactions`
+    );
+    return data.map(normalizeTaobaoTransaction);
+  } catch {
+    return mockTaobaoTransactions[accountId] ?? [];
   }
 }
 
