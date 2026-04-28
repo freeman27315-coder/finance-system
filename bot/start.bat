@@ -2,6 +2,9 @@
 REM Windows 一键启动 Discord Bot
 cd /d "%~dp0"
 
+set PYTHON_EXE=C:\Users\18308\AppData\Local\Programs\Python\Python312\python.exe
+if not exist "%PYTHON_EXE%" set PYTHON_EXE=python
+
 if not exist .env (
     copy .env.example .env
     echo 请编辑 .env 文件填入 Token 后重新运行
@@ -9,8 +12,8 @@ if not exist .env (
     exit /b 1
 )
 
-pip install -r requirements.txt -q
+"%PYTHON_EXE%" -m pip install -r requirements.txt -q
 for /f "usebackq tokens=1,* delims==" %%a in (".env") do set %%a=%%b
 
-python main.py
+"%PYTHON_EXE%" main.py
 pause

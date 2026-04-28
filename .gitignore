@@ -18,3 +18,5 @@ dist/
 build/
 *.tsbuildinfo
 .DS_Store
+
+bot/.env
