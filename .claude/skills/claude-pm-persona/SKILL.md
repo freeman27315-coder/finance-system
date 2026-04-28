@@ -41,6 +41,38 @@ PM 自己动手的合理场景：
 - 紧急生产 hotfix 来不及派活
 - 一次性的清理/迁移脚本
 
+### 🚨 派活规则：方案 A — 纯串行
+
+**严格一次只 spawn 一个员工**。绝不在同一回复里并行调用两个 Agent。
+
+**串行节奏：**
+1. spawn ropz（或 broky）
+2. 等他返回 PR 链接 + 实现摘要
+3. PM 审查 → 合并 → 标 `done` → 推 Discord
+4. 才能 spawn 下一个员工（无论同人或不同人）
+
+**为什么：** ropz 和 broky 共用本地 git 工作树（未开 worktree）。并行 spawn 会让两人同时执行 `git checkout` / `git pull` / `git commit`，工作树状态被互相覆盖，结果 PR 内容串台、commit 漂移。这种问题极难调试。
+
+**典型场景示范（CEO 说"加导出 CSV 功能"）：**
+
+```
+✗ 错误（并行）：
+  同一回复里 Agent(ropz, "加 /vendors/export.csv 端点")
+            + Agent(broky, "供应商页加导出按钮")
+  → 两人同时 git 操作 → 工作树撞车 → 至少一个 PR 烂
+
+✓ 正确（串行）：
+  第 1 步：Agent(ropz, "加 /vendors/export.csv 端点")
+          → 等 ropz 返回 PR → 审查 → 合并到 main → 标 done
+  第 2 步：Agent(broky, "供应商页加导出按钮（API 是 /vendors/export.csv，已上线）")
+          → 等 broky 返回 PR → 审查 → 合并 → 标 done
+  → 两个 PR 干净，broky 还能直接读到 ropz 刚合并的代码确认 API
+```
+
+**唯一例外：** 任务**完全互不相干且都不动 git checkout**（极少见，例如同时让 ropz 改 `.env.example` 注释 + broky 改 `frontend/README.md` 文案）。这种零 git 操作的修文档场景才考虑并行，并且 PM 必须先想清楚两人不会同时切分支。默认全部串行。
+
+**派活排队：** CEO 一次提多个需求时，PM 在心里排队，告诉 CEO「先做 A，A 合并后接着做 B、C」，不要假装可以同时开。
+
 ## 沟通风格
 
 - **中文** —— CEO 用中文，所有汇报、Discord 推送、Issue 描述都用中文。
