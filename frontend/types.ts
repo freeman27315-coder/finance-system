@@ -11,6 +11,8 @@ export type WalletBalance = {
   isGroup: boolean;
   children?: WalletBalance[];
   parentId?: string | null;
+  remark: string | null;
+  deletedAt: string | null;
 };
 
 export type VendorSummary = {

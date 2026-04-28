@@ -20,6 +20,9 @@ type AssetWalletResponse = {
   children?: AssetWalletResponse[];
   parent_id?: string | number | null;
   parentId?: string | number | null;
+  remark?: string | null;
+  deleted_at?: string | null;
+  deletedAt?: string | null;
 };
 
 type VendorSummaryResponse = {
@@ -70,6 +73,8 @@ function normalizeWallet(wallet: AssetWalletResponse, parentId?: string | null):
     parentId:
       parentId ??
       (wallet.parent_id === undefined ? wallet.parentId?.toString() ?? null : wallet.parent_id?.toString() ?? null),
+    remark: wallet.remark ?? null,
+    deletedAt: wallet.deleted_at ?? wallet.deletedAt ?? null,
     children: wallet.children?.map((child) => normalizeWallet(child, String(wallet.id))) ?? []
   };
 }
@@ -166,6 +171,45 @@ async function postJson(path: string, body: unknown) {
 
 export function createAssetSubWallet(walletId: string, name: string) {
   return postJson(`/api/wallets/assets/${walletId}/sub`, { name, is_group: false });
+}
+
+async function sendJson(path: string, method: "PATCH" | "DELETE", body?: unknown) {
+  const response = await fetch(path, {
+    method,
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json"
+    },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+
+  const text = await response.text();
+
+  if (!response.ok) {
+    let message = `${path} returned ${response.status}`;
+    if (text) {
+      try {
+        const parsed = JSON.parse(text) as { detail?: string; message?: string; error?: string };
+        message = parsed.detail ?? parsed.message ?? parsed.error ?? text;
+      } catch {
+        message = text;
+      }
+    }
+    throw new Error(message);
+  }
+
+  return text ? JSON.parse(text) : null;
+}
+
+export function patchAssetWallet(
+  walletId: string,
+  payload: { name?: string; remark?: string | null }
+) {
+  return sendJson(`/api/wallets/assets/${walletId}`, "PATCH", payload);
+}
+
+export function deleteAssetWallet(walletId: string) {
+  return sendJson(`/api/wallets/assets/${walletId}`, "DELETE");
 }
 
 export function creditAssetWallet(walletId: string, amount: string, remark: string) {
