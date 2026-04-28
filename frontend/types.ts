@@ -38,6 +38,29 @@ export type AssetTransaction = {
   currency: Currency;
 };
 
+export type BillDirection = "payable" | "receivable";
+
+export type BillStatus = "pending" | "settled";
+
+export type Vendor = {
+  id: string;
+  name: string;
+  remark: string | null;
+  createdAt: string;
+};
+
+export type VendorBill = {
+  id: string;
+  vendorId: string;
+  direction: BillDirection;
+  amountMinor: number;
+  currency: Currency;
+  status: BillStatus;
+  dueDate: string | null;
+  remark: string | null;
+  createdAt: string;
+};
+
 export type ModuleSection = {
   id: string;
   title: string;
