@@ -24,6 +24,7 @@ import os
 import shlex
 import subprocess
 import sys
+from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 
@@ -84,7 +85,7 @@ def utf8_env() -> dict:
     }
 
 
-def edit_issue_label(issue_number: int, remove: str | None, add: str):
+def edit_issue_label(issue_number: int, remove: Optional[str], add: str):
     args = [GH, "issue", "edit", str(issue_number), "--repo", REPO, "--add-label", add]
     if remove:
         args += ["--remove-label", remove]
