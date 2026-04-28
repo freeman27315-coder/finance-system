@@ -128,15 +128,17 @@ curl https://abcd-1234.trycloudflare.com/health
 
 ## 日常开发流程
 
-### Webhook / Issue 自动处理规则
+### Webhook / 事件驱动规则（零轮询）
 
-- Codex / GPT 不是后台常驻 worker 时，不能只依赖 Webhook 秒级唤醒；主动工作期间默认每 90 秒轮询一次 GitHub 状态。
-- 轮询范围必须覆盖 `ready-for-dev`、`in-progress`、`needs-revision`、open PR review decision、PR / Issue 新评论和 CI / check 状态，不能只看新任务。
-- 发现 `ready-for-dev` 或新的开发任务后，先反馈 CEO：“已收到任务 #n，开始开发。”然后直接开工，不再请求二次同意。
-- 发现 `needs-revision`、PR 被打回或有新的 review comment 时，先反馈 CEO 具体原因；修改意见明确且不冲突时，直接修复、测试、推送并回复 PR / Issue。
-- 阻塞不是停止工作：遇到关键字段乱码、字段缺失、专有名词不清、业务名称不确定、指令冲突、验收标准不明时，必须立即列出无法确认的字段并询问 CEO / PM，等待确认期间继续轮询其他可执行任务，不能空转。
-- 等确认期间如果有其他明确任务，先处理明确任务；如果没有可执行任务，汇报当前阻塞点和下一轮检查时间。
-- 会进入数据库 / API 合同的字段必须逐字按需求实现；钱包名、账号类型、币种、状态枚举、接口路径、金额方向、角色名、数据库字段名看不清就先问，不凭业务直觉补全。
+- **完全由 GitHub 事件触发**：`main.py` 收到 webhook 后用 `AGENT_DISPATCH_CMD` 激活本机 AI 编程助手开干，**不再轮询 GitHub 状态**。
+- **触发动作：**
+  - 收到 `ready-for-dev` + 本 agent 标签 → 标 in-progress → 启动助手认领开发
+  - 收到 PR `changes_requested` review → 标 needs-revision → 启动助手按 review 修复
+- **AI 助手的工作约束：**
+  - 收到任务先在 Issue/PR 评论反馈「已收到任务 #N，开始开发」，然后直接开工，不要请求二次同意
+  - 发现需求里关键字段乱码、缺失、业务名称不清、验收标准不明、指令冲突时，**立即在 Issue 评论 @CEO/@PM** 列出无法确认的字段，等待确认；不要凭直觉补全
+  - 会进入数据库 / API 合同的字段（钱包名、币种、状态枚举、接口路径、金额方向、角色名、数据库字段名）必须逐字按需求实现
+- **不能凭轮询补救漏接的事件**：如果怀疑事件漏掉了（例如 cloudflared 隧道临时挂掉），让 PM 重派 Issue 即可，不要主动每隔 N 秒去 GitHub 拉
 
 **收到任务通知后：**
 ```bash

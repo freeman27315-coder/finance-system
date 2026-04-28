@@ -25,12 +25,15 @@ Claude PM (代码审查 → 汇报结果)
 | `done` | 已完成并合并 |
 | `blocked` | 有阻塞需要人工介入 |
 
-## Agent 协作规则
+## Agent 协作规则（事件驱动，零轮询）
 
-- 主动工作期间默认每 90 秒轮询 GitHub 状态，范围包括 `ready-for-dev`、`in-progress`、`needs-revision`、PR review/comment、Issue 评论和 CI / check 状态。
-- 收到新的可执行任务后，Agent 先向 CEO 反馈“已收到任务 #n，开始开发”，然后直接开工。
-- 阻塞不是停止工作：关键字段乱码、字段缺失、业务名称不清、验收标准不明或指令冲突时，Agent 必须列出无法确认的字段并询问 CEO / PM，同时继续轮询其他可执行任务，不能空转。
-- 会进入数据库 / API 合同的字段必须逐字确认，不能凭业务直觉补全。
+- **完全由 GitHub Webhook 事件触发**，agent 不再轮询 GitHub。`agent/main.py` 收到事件后会通过 `AGENT_DISPATCH_CMD`（默认 `claude -p`）激活本机 AI 编程助手立即开工。
+- **触发动作映射：**
+  - `ready-for-dev` 标签 + 本 agent label → 标 in-progress + 启动助手认领开发
+  - PR `changes_requested` review → 标 needs-revision + 启动助手按 review 修复
+- 收到任务后助手先向 CEO 反馈「已收到任务 #N，开始开发」，然后直接开工。
+- 阻塞不是停止工作：关键字段乱码、字段缺失、业务名称不清、验收标准不明、指令冲突时，助手必须立即列出无法确认的字段在 Issue 评论里 @CEO/PM，等确认期间不要凭直觉补全。
+- 会进入数据库 / API 合同的字段必须逐字按需求实现。
 
 ## 目录结构
 

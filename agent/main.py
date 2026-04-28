@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
-"""Dev Agent Webhook 服务器
+"""Dev Agent Webhook 服务器（事件驱动）
 
-职责：监听 GitHub Webhook，收到 ready-for-dev 事件后：
-1. 检查 Issue 是否包含本 Agent 负责的标签（AGENT_LABEL）
-2. 将 Issue 标记为 in-progress
-3. 在终端打印任务详情，提示开发者认领
+职责：监听 GitHub Webhook，收到任务事件后立即激活本机 AI 编程助手开干。
+不再依赖任何轮询，所有动作由 GitHub 事件驱动。
+
+事件 → 动作映射：
+- issues.labeled (ready-for-dev + 本 agent label) → 标 in-progress + 启动助手开发
+- pull_request_review.submitted (changes_requested) → 标 needs-revision + 启动助手修改
+- issue_comment.created (PR 上的评论) → 转发给助手参考
 
 环境变量：
-  GITHUB_TOKEN   - 必填
-  WEBHOOK_SECRET - 必填
-  AGENT_LABEL    - 必填，此 Agent 负责的任务类型，如 backend 或 frontend
-  GH_PATH        - 可选，gh 可执行文件完整路径，默认 "gh"
+  GITHUB_TOKEN       - 必填
+  WEBHOOK_SECRET     - 必填
+  AGENT_LABEL        - 必填，backend 或 frontend
+  GH_PATH            - 可选，gh 可执行文件路径
+  AGENT_DISPATCH_CMD - 可选，激活 AI 助手的命令模板。默认调 claude -p。
+                       可用占位符：{issue_number} {issue_title} {issue_url} {action_hint}
 """
 import hmac
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 
@@ -23,8 +29,7 @@ from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 
 app = FastAPI(title="Dev Agent")
 
-# GitHub payloads and gh output contain UTF-8 Chinese. Make the agent robust
-# even when launched from a shell that did not inherit a UTF-8 locale.
+# UTF-8 locale 兜底
 os.environ.setdefault("LANG", "en_US.UTF-8")
 os.environ.setdefault("LC_ALL", "en_US.UTF-8")
 os.environ.setdefault("PYTHONUTF8", "1")
@@ -40,12 +45,21 @@ AGENT_LABEL = os.environ.get("AGENT_LABEL", "")
 GH = os.environ.get("GH_PATH", "gh")
 REPO = "freeman27315-coder/finance-system"
 
+# 默认用 claude CLI 激活助手；用户可改成 codex/cursor 等其他 CLI
+DEFAULT_DISPATCH_CMD = (
+    'claude -p "请认领并完成任务 #{issue_number}：{issue_title}。'
+    '详情：{issue_url}。{action_hint}'
+    '工作流：1) python github_helper.py start {issue_number}  '
+    '2) 阅读 Issue 写代码  3) python github_helper.py submit {issue_number}"'
+)
+AGENT_DISPATCH_CMD = os.environ.get("AGENT_DISPATCH_CMD", DEFAULT_DISPATCH_CMD)
+
 if not GITHUB_TOKEN:
-    raise RuntimeError("GITHUB_TOKEN 未设置，请检查 .env 文件")
+    raise RuntimeError("GITHUB_TOKEN 未设置")
 if not WEBHOOK_SECRET:
-    raise RuntimeError("WEBHOOK_SECRET 未设置，请检查 .env 文件")
+    raise RuntimeError("WEBHOOK_SECRET 未设置")
 if not AGENT_LABEL:
-    raise RuntimeError("AGENT_LABEL 未设置，请在 .env 中设置 backend 或 frontend")
+    raise RuntimeError("AGENT_LABEL 未设置（backend 或 frontend）")
 
 
 def verify_signature(payload: bytes, sig_header: str) -> bool:
@@ -59,34 +73,58 @@ def get_issue_labels(issue: dict) -> list[str]:
     return [lbl["name"] for lbl in issue.get("labels", [])]
 
 
-def utf8_subprocess_env() -> dict[str, str]:
+def utf8_env() -> dict:
     return {
         **os.environ,
         "GH_TOKEN": GITHUB_TOKEN,
-        "LANG": os.environ.get("LANG", "en_US.UTF-8"),
-        "LC_ALL": os.environ.get("LC_ALL", "en_US.UTF-8"),
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8",
         "PYTHONUTF8": "1",
         "PYTHONIOENCODING": "utf-8",
     }
 
 
-def mark_in_progress(issue_number: int, issue_title: str, issue_url: str):
-    """将 Issue 标记为 in-progress，并在终端输出任务提示"""
-    subprocess.run(
-        [
-            GH, "issue", "edit", str(issue_number),
-            "--repo", REPO,
-            "--remove-label", "ready-for-dev",
-            "--add-label", "in-progress",
-        ],
-        env=utf8_subprocess_env(),
+def edit_issue_label(issue_number: int, remove: str | None, add: str):
+    args = [GH, "issue", "edit", str(issue_number), "--repo", REPO, "--add-label", add]
+    if remove:
+        args += ["--remove-label", remove]
+    subprocess.run(args, env=utf8_env())
+
+
+def dispatch_to_assistant(issue_number: int, issue_title: str, issue_url: str, action_hint: str = ""):
+    """Fire-and-forget 启动 AI 助手子进程"""
+    cmd = AGENT_DISPATCH_CMD.format(
+        issue_number=issue_number,
+        issue_title=issue_title.replace('"', "'"),
+        issue_url=issue_url,
+        action_hint=action_hint,
     )
     print("\n" + "=" * 60)
-    print(f"  [{AGENT_LABEL.upper()}] 新任务 #{issue_number}: {issue_title}")
-    print(f"  查看详情: {issue_url}")
-    print(f"  分支命名: feature/issue-{issue_number}")
-    print("  完成后运行: python github_helper.py submit " + str(issue_number))
+    print(f"  [{AGENT_LABEL.upper()}] 事件触发任务 #{issue_number}: {issue_title}")
+    print(f"  详情: {issue_url}")
+    print(f"  激活命令: {cmd[:120]}...")
     print("=" * 60 + "\n")
+    # 后台启动，不等待结果（助手会自己提交 PR）
+    try:
+        subprocess.Popen(
+            shlex.split(cmd) if os.name != "nt" else cmd,
+            env=utf8_env(),
+            stdin=subprocess.DEVNULL,
+            shell=os.name == "nt",
+        )
+    except Exception as exc:
+        print(f"⚠️  启动助手失败（可手动认领 #{issue_number}）：{exc}", flush=True)
+
+
+def handle_new_task(issue_number: int, issue_title: str, issue_url: str):
+    edit_issue_label(issue_number, "ready-for-dev", "in-progress")
+    dispatch_to_assistant(issue_number, issue_title, issue_url, "")
+
+
+def handle_revision(issue_number: int, issue_title: str, issue_url: str, review_body: str):
+    edit_issue_label(issue_number, "in-review", "needs-revision")
+    hint = f"PR 被打回修改，原因：{review_body[:300]}。请阅读 review 后修复并重新提交。"
+    dispatch_to_assistant(issue_number, issue_title, issue_url, hint)
 
 
 @app.post("/webhook")
@@ -97,25 +135,45 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     if not verify_signature(payload, sig):
         raise HTTPException(status_code=403, detail="Invalid signature")
 
-    event = request.headers.get("X-GitHub-Event")
+    event = request.headers.get("X-GitHub-Event", "")
     data = json.loads(payload.decode("utf-8"))
 
+    # 1. 新任务：ready-for-dev + 本 agent label
     if event == "issues" and data.get("action") == "labeled":
         if data["label"]["name"] == "ready-for-dev":
             issue = data["issue"]
             labels = get_issue_labels(issue)
-            # 只处理带有本 Agent 负责标签的 Issue
             if AGENT_LABEL in labels:
                 background_tasks.add_task(
-                    mark_in_progress,
+                    handle_new_task,
                     issue["number"],
                     issue["title"],
                     issue["html_url"],
                 )
-                return {"status": "acknowledged", "issue": issue["number"], "agent": AGENT_LABEL}
+                return {"status": "dispatched", "issue": issue["number"], "agent": AGENT_LABEL}
             return {"status": "ignored", "reason": f"not labeled '{AGENT_LABEL}'"}
 
-    return {"status": "ignored"}
+    # 2. PR 被打回修改
+    if event == "pull_request_review" and data.get("action") == "submitted":
+        review = data.get("review", {})
+        if review.get("state") == "changes_requested":
+            pr = data["pull_request"]
+            labels = [l["name"] for l in pr.get("labels", [])]
+            if AGENT_LABEL in labels:
+                # PR 关联的 Issue 编号 = 分支名末段或 body 里的 Closes #N
+                import re
+                m = re.search(r"Closes\s+#(\d+)", pr.get("body") or "", re.IGNORECASE)
+                issue_num = int(m.group(1)) if m else pr["number"]
+                background_tasks.add_task(
+                    handle_revision,
+                    issue_num,
+                    pr["title"],
+                    pr["html_url"],
+                    review.get("body") or "",
+                )
+                return {"status": "revision-dispatched", "pr": pr["number"]}
+
+    return {"status": "ignored", "event": event}
 
 
 @app.get("/health")
