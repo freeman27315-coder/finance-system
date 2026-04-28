@@ -1,6 +1,8 @@
 import type {
   AssetTransaction,
   DashboardData,
+  TaobaoAccount,
+  TaobaoTransaction,
   Vendor,
   VendorBill,
   WalletBalance,
@@ -419,6 +421,81 @@ export const mockXboxSummary: XboxSummary = {
     accountCount: 1,
     currency: "GBP"
   }
+};
+
+export const mockTaobaoAccounts: TaobaoAccount[] = [
+  {
+    id: "taobao-acc-1",
+    name: "丙火淘宝主号",
+    unsettledWalletId: "taobao-w-1u",
+    settledWalletId: "taobao-w-1s",
+    unsettledBalanceMinor: 58_400_00,
+    settledBalanceMinor: 32_100_00,
+    remark: "主营店铺",
+    createdAt: "2026-03-18T08:00:00.000Z"
+  },
+  {
+    id: "taobao-acc-2",
+    name: "TOM淘宝小号",
+    unsettledWalletId: "taobao-w-2u",
+    settledWalletId: "taobao-w-2s",
+    unsettledBalanceMinor: 35_000_00,
+    settledBalanceMinor: 9_150_00,
+    remark: null,
+    createdAt: "2026-04-05T05:00:00.000Z"
+  }
+];
+
+export const mockTaobaoTransactions: Record<string, TaobaoTransaction[]> = {
+  "taobao-acc-1": [
+    {
+      id: "taobao-tx-1-1",
+      walletId: "taobao-w-1u",
+      walletScope: "unsettled",
+      amountMinor: 58_400_00,
+      direction: "in",
+      remark: "本周订单未结",
+      createdAt: "2026-04-22T03:00:00.000Z"
+    },
+    {
+      id: "taobao-tx-1-2",
+      walletId: "taobao-w-1s",
+      walletScope: "settled",
+      amountMinor: 40_000_00,
+      direction: "in",
+      remark: "上周结算到账",
+      createdAt: "2026-04-23T09:00:00.000Z"
+    },
+    {
+      id: "taobao-tx-1-3",
+      walletId: "taobao-w-1s",
+      walletScope: "settled",
+      amountMinor: 7_900_00,
+      direction: "out",
+      remark: "提现到支付宝",
+      createdAt: "2026-04-25T11:30:00.000Z"
+    }
+  ],
+  "taobao-acc-2": [
+    {
+      id: "taobao-tx-2-1",
+      walletId: "taobao-w-2u",
+      walletScope: "unsettled",
+      amountMinor: 35_000_00,
+      direction: "in",
+      remark: "新增订单",
+      createdAt: "2026-04-20T08:00:00.000Z"
+    },
+    {
+      id: "taobao-tx-2-2",
+      walletId: "taobao-w-2s",
+      walletScope: "settled",
+      amountMinor: 9_150_00,
+      direction: "in",
+      remark: null,
+      createdAt: "2026-04-21T08:00:00.000Z"
+    }
+  ]
 };
 
 export const mockAssetTransactions: Record<string, AssetTransaction[]> = {

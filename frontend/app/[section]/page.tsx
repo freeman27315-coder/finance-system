@@ -1,6 +1,7 @@
 import { AppShell } from "@/components/app-shell";
 import { AssetsPage } from "@/components/assets-page";
 import { ModuleOverview } from "@/components/module-overview";
+import { TaobaoPage } from "@/components/taobao-page";
 import { VendorsPage } from "@/components/vendors-page";
 import { XboxPage } from "@/components/xbox-page";
 import { sectionById, sectionIds } from "@/lib/navigation";
@@ -22,6 +23,8 @@ export default function SectionPage({ params }: SectionPageProps) {
         <VendorsPage />
       ) : section.id === "xbox" ? (
         <XboxPage />
+      ) : section.id === "taobao" ? (
+        <TaobaoPage />
       ) : (
         <ModuleOverview section={section} />
       )}
