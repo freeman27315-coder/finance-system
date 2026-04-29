@@ -160,7 +160,8 @@ def debit(
     """Decrease a wallet balance and create an outbound transaction record."""
     value = _to_decimal(amount)
     wallet = get_wallet(session, wallet_id)
-    if Decimal(wallet.balance) < value:
+    wallet_type = wallet.type.value if isinstance(wallet.type, WalletType) else wallet.type
+    if wallet_type != WalletType.VENDOR.value and Decimal(wallet.balance) < value:
         raise ValueError("insufficient wallet balance")
 
     wallet.balance = Decimal(wallet.balance) - value
