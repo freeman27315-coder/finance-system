@@ -15,16 +15,8 @@ export type WalletBalance = {
   deletedAt: string | null;
 };
 
-export type VendorSummary = {
-  payableMinor: number;
-  receivableMinor: number;
-  netMinor: number;
-  currency: Currency;
-};
-
 export type DashboardData = {
   wallets: WalletBalance[];
-  vendorSummary: VendorSummary;
 };
 
 export type AssetTransaction = {
@@ -38,25 +30,20 @@ export type AssetTransaction = {
   currency: Currency;
 };
 
-export type BillDirection = "payable" | "receivable";
-
-export type BillStatus = "pending" | "settled";
-
 export type Vendor = {
   id: string;
   name: string;
   remark: string | null;
+  walletId: string;
+  balanceMinor: number;
   createdAt: string;
 };
 
-export type VendorBill = {
+export type VendorTransaction = {
   id: string;
-  vendorId: string;
-  direction: BillDirection;
+  walletId: string;
   amountMinor: number;
-  currency: Currency;
-  status: BillStatus;
-  dueDate: string | null;
+  direction: "in" | "out";
   remark: string | null;
   createdAt: string;
 };

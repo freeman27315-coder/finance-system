@@ -2,102 +2,53 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowDownLeft,
-  ArrowUpRight,
+  ArrowLeftRight,
   Building2,
-  CheckCircle2,
   Plus,
-  RefreshCcw
+  RefreshCcw,
+  Wallet
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
+  adjustVendor,
   createVendor,
-  createVendorBill,
-  getVendorBills,
-  getVendorSummary,
+  getAssetWallets,
+  getVendorTransactions,
   getVendors,
-  settleVendorBill
+  payVendor
 } from "@/lib/api";
 import { formatMoney } from "@/lib/money";
 import { cn } from "@/lib/utils";
-import type { BillDirection, Vendor, VendorBill } from "@/types";
+import type { Vendor, VendorTransaction, WalletBalance } from "@/types";
 
-function formatDueDate(value: string | null) {
-  if (!value) return "-";
-  return value.length >= 10 ? value.slice(0, 10) : value;
+function flattenLeafAssetWallets(wallets: WalletBalance[]): WalletBalance[] {
+  const result: WalletBalance[] = [];
+  const walk = (list: WalletBalance[]) => {
+    for (const wallet of list) {
+      if (wallet.children && wallet.children.length > 0) {
+        walk(wallet.children);
+      }
+      const isAsset = wallet.type === "ASSET_RMB" || wallet.type === "ASSET_USDT";
+      if (isAsset && !wallet.isGroup && wallet.deletedAt == null) {
+        result.push(wallet);
+      }
+    }
+  };
+  walk(wallets);
+  return result;
 }
 
-function VendorSummaryCards() {
-  const { data, isFetching, refetch } = useQuery({
-    queryKey: ["vendor-summary"],
-    queryFn: getVendorSummary
-  });
-
-  const payable = data?.payableMinor ?? 0;
-  const receivable = data?.receivableMinor ?? 0;
-  const net = data?.netMinor ?? 0;
-  const currency = data?.currency ?? "CNY";
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-end">
-        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
-          <RefreshCcw className="h-4 w-4" aria-hidden="true" />
-          刷新汇总
-        </Button>
-      </div>
-      <div className="grid gap-3 md:grid-cols-3">
-        <Card>
-          <CardContent className="flex items-center justify-between gap-4 p-5">
-            <div>
-              <div className="text-sm text-muted-foreground">应付总额</div>
-              <div className="mt-1 tabular-nums text-2xl font-semibold text-red-600">
-                {formatMoney(payable, currency)}
-              </div>
-            </div>
-            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-red-50 text-red-600">
-              <ArrowUpRight className="h-5 w-5" aria-hidden="true" />
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="flex items-center justify-between gap-4 p-5">
-            <div>
-              <div className="text-sm text-muted-foreground">应收总额</div>
-              <div className="mt-1 tabular-nums text-2xl font-semibold text-green-600">
-                {formatMoney(receivable, currency)}
-              </div>
-            </div>
-            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-emerald-50 text-emerald-600">
-              <ArrowDownLeft className="h-5 w-5" aria-hidden="true" />
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="flex items-center justify-between gap-4 p-5">
-            <div>
-              <div className="text-sm text-muted-foreground">净额</div>
-              <div
-                className={cn(
-                  "mt-1 tabular-nums text-2xl font-semibold",
-                  net >= 0 ? "text-green-600" : "text-red-600"
-                )}
-              >
-                {formatMoney(net, currency)}
-              </div>
-            </div>
-            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-muted">
-              <Building2 className="h-5 w-5" aria-hidden="true" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
-  );
+function balanceLabel(balanceMinor: number): { text: string; tone: "danger" | "success" | "neutral" } {
+  if (balanceMinor > 0) {
+    return { text: `我们欠 ${formatMoney(balanceMinor, "CNY")}`, tone: "danger" };
+  }
+  if (balanceMinor < 0) {
+    return { text: `已预付 ${formatMoney(balanceMinor, "CNY", { accounting: true })}`, tone: "success" };
+  }
+  return { text: "已结清", tone: "neutral" };
 }
 
 function CreateVendorModal({ onClose }: { onClose: () => void }) {
@@ -118,7 +69,6 @@ function CreateVendorModal({ onClose }: { onClose: () => void }) {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["vendors"] });
-      await queryClient.invalidateQueries({ queryKey: ["vendor-summary"] });
       onClose();
     },
     onError: (err) => {
@@ -171,33 +121,43 @@ function CreateVendorModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-function CreateBillModal({ vendor, onClose }: { vendor: Vendor; onClose: () => void }) {
+// 解析带符号字符串："+1000" / "-500" / "1000" / "+1.5"
+// 返回 { signed: string, valid: boolean } —— signed 是后端要的格式（保留符号），无效返回 valid=false
+function parseSignedAmount(input: string): { signed: string; valid: boolean } {
+  const trimmed = input.trim();
+  if (!trimmed) return { signed: "", valid: false };
+  const match = trimmed.match(/^([+-])?(\d+(?:\.\d+)?)$/);
+  if (!match) return { signed: "", valid: false };
+  const sign = match[1] ?? "+";
+  const num = match[2];
+  if (Number.parseFloat(num) === 0) return { signed: "", valid: false };
+  return { signed: `${sign === "-" ? "-" : ""}${num}`, valid: true };
+}
+
+function AdjustVendorModal({ vendor, onClose }: { vendor: Vendor; onClose: () => void }) {
   const queryClient = useQueryClient();
-  const [direction, setDirection] = useState<BillDirection>("payable");
   const [amount, setAmount] = useState("");
-  const [dueDate, setDueDate] = useState("");
   const [remark, setRemark] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const mutation = useMutation({
     mutationFn: async () => {
-      if (!amount || Number(amount) <= 0) {
-        throw new Error("金额必须大于 0");
+      const parsed = parseSignedAmount(amount);
+      if (!parsed.valid) {
+        throw new Error("请输入带正负号的金额，例如 +1000 或 -500");
       }
-      return createVendorBill(vendor.id, {
-        direction,
-        amount,
-        dueDate: dueDate || undefined,
+      return adjustVendor(vendor.id, {
+        amount: parsed.signed,
         remark: remark.trim() === "" ? undefined : remark.trim()
       });
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["vendor-bills", vendor.id] });
-      await queryClient.invalidateQueries({ queryKey: ["vendor-summary"] });
+      await queryClient.invalidateQueries({ queryKey: ["vendors"] });
+      await queryClient.invalidateQueries({ queryKey: ["vendor-transactions", vendor.id] });
       onClose();
     },
     onError: (err) => {
-      setError(err instanceof Error ? err.message : "创建失败");
+      setError(err instanceof Error ? err.message : "操作失败");
     }
   });
 
@@ -205,51 +165,21 @@ function CreateBillModal({ vendor, onClose }: { vendor: Vendor; onClose: () => v
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>新增账单 · {vendor.name}</CardTitle>
+          <CardTitle>群指令录入 · {vendor.name}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">方向</div>
-            <div className="grid grid-cols-2 rounded-md border border-border p-1">
-              {(["payable", "receivable"] as BillDirection[]).map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  className={cn(
-                    "flex h-8 items-center justify-center gap-2 rounded text-sm font-medium text-muted-foreground",
-                    direction === item && "bg-muted text-foreground"
-                  )}
-                  onClick={() => setDirection(item)}
-                >
-                  {item === "payable" ? (
-                    <ArrowUpRight className="h-4 w-4 text-red-600" aria-hidden="true" />
-                  ) : (
-                    <ArrowDownLeft className="h-4 w-4 text-green-600" aria-hidden="true" />
-                  )}
-                  {item === "payable" ? "应付" : "应收"}
-                </button>
-              ))}
-            </div>
+          <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
+            <div>+ 表示我们欠供应商更多（credit）</div>
+            <div>- 表示供应商欠我们更多 / 我们已预付（debit）</div>
           </div>
           <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">金额</div>
+            <div className="text-sm text-muted-foreground">金额（带符号）</div>
             <input
               className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
               value={amount}
               onChange={(event) => setAmount(event.target.value)}
-              placeholder="金额"
-              type="number"
-              min="0"
-              step="0.01"
-            />
-          </div>
-          <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">到期日（选填）</div>
-            <input
-              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={dueDate}
-              onChange={(event) => setDueDate(event.target.value)}
-              type="date"
+              placeholder="例如 +1000 或 -500"
+              autoFocus
             />
           </div>
           <div className="space-y-1">
@@ -271,7 +201,159 @@ function CreateBillModal({ vendor, onClose }: { vendor: Vendor; onClose: () => v
               取消
             </Button>
             <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
-              {mutation.isPending ? "创建中..." : "创建"}
+              {mutation.isPending ? "提交中..." : "提交"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function PayVendorModal({ vendor, onClose }: { vendor: Vendor; onClose: () => void }) {
+  const queryClient = useQueryClient();
+
+  const { data: assetWallets = [], isLoading: walletsLoading } = useQuery({
+    queryKey: ["asset-wallets"],
+    queryFn: getAssetWallets
+  });
+
+  const leafAssetWallets = useMemo(
+    () => flattenLeafAssetWallets(assetWallets),
+    [assetWallets]
+  );
+
+  const [fromWalletId, setFromWalletId] = useState<string>("");
+  const [amount, setAmount] = useState("");
+  const [exchangeRate, setExchangeRate] = useState("");
+  const [remark, setRemark] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!fromWalletId && leafAssetWallets.length > 0) {
+      setFromWalletId(leafAssetWallets[0].id);
+    }
+  }, [leafAssetWallets, fromWalletId]);
+
+  const fromWallet = leafAssetWallets.find((w) => w.id === fromWalletId);
+  const isCrossCurrency = fromWallet ? fromWallet.currency !== "CNY" : false;
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!fromWalletId) {
+        throw new Error("请选择付款钱包");
+      }
+      const numAmount = Number.parseFloat(amount);
+      if (!amount || Number.isNaN(numAmount) || numAmount <= 0) {
+        throw new Error("金额必须大于 0");
+      }
+      if (isCrossCurrency) {
+        const rate = Number.parseFloat(exchangeRate);
+        if (!exchangeRate || Number.isNaN(rate) || rate <= 0) {
+          throw new Error("跨币种付款必须填写汇率");
+        }
+      }
+      return payVendor(vendor.id, {
+        fromWalletId,
+        amount,
+        exchangeRate: isCrossCurrency ? exchangeRate : undefined,
+        remark: remark.trim() === "" ? undefined : remark.trim()
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["vendors"] });
+      await queryClient.invalidateQueries({ queryKey: ["vendor-transactions", vendor.id] });
+      await queryClient.invalidateQueries({ queryKey: ["asset-wallets"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      onClose();
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : "付款失败");
+    }
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Card className="w-full max-w-md">
+        <CardHeader>
+          <CardTitle>用资产钱包付款 · {vendor.name}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">付款钱包</div>
+            {walletsLoading ? (
+              <div className="text-sm text-muted-foreground">加载中...</div>
+            ) : leafAssetWallets.length === 0 ? (
+              <div className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
+                暂无可用资产钱包
+              </div>
+            ) : (
+              <select
+                className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+                value={fromWalletId}
+                onChange={(event) => setFromWalletId(event.target.value)}
+              >
+                {leafAssetWallets.map((wallet) => (
+                  <option key={wallet.id} value={wallet.id}>
+                    {wallet.name} ({wallet.currency} · 余额 {formatMoney(wallet.balanceMinor, wallet.currency)})
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">
+              金额（{fromWallet?.currency ?? "CNY"}）
+            </div>
+            <input
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={amount}
+              onChange={(event) => setAmount(event.target.value)}
+              placeholder="付款金额"
+              type="number"
+              min="0"
+              step="0.01"
+            />
+          </div>
+          {isCrossCurrency ? (
+            <div className="space-y-1">
+              <div className="text-sm text-muted-foreground">
+                汇率（1 {fromWallet?.currency} = ? CNY）
+              </div>
+              <input
+                className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+                value={exchangeRate}
+                onChange={(event) => setExchangeRate(event.target.value)}
+                placeholder="例如 7.2"
+                type="number"
+                min="0"
+                step="0.0001"
+              />
+            </div>
+          ) : null}
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">备注（选填）</div>
+            <textarea
+              className="min-h-[80px] w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={remark}
+              onChange={(event) => setRemark(event.target.value)}
+              placeholder="备注"
+            />
+          </div>
+          {error ? (
+            <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
+              {error}
+            </div>
+          ) : null}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>
+              取消
+            </Button>
+            <Button
+              onClick={() => mutation.mutate()}
+              disabled={mutation.isPending || leafAssetWallets.length === 0}
+            >
+              {mutation.isPending ? "付款中..." : "确认付款"}
             </Button>
           </div>
         </CardContent>
@@ -308,141 +390,148 @@ function VendorList({
             暂无供应商，点击右上角「新增供应商」开始
           </div>
         ) : (
-          vendors.map((vendor) => (
-            <button
-              key={vendor.id}
-              type="button"
-              className={cn(
-                "w-full rounded-lg border border-border bg-card px-3 py-3 text-left transition-colors hover:bg-muted/60",
-                selectedVendorId === vendor.id && "bg-muted"
-              )}
-              onClick={() => onSelect(vendor.id)}
-            >
-              <div className="flex items-center gap-2">
-                <Building2 className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-                <span className="font-medium">{vendor.name}</span>
-              </div>
-              {vendor.remark ? (
-                <div className="mt-1 text-xs text-muted-foreground">{vendor.remark}</div>
-              ) : null}
-            </button>
-          ))
+          vendors.map((vendor) => {
+            const label = balanceLabel(vendor.balanceMinor);
+            return (
+              <button
+                key={vendor.id}
+                type="button"
+                className={cn(
+                  "w-full rounded-lg border border-border bg-card px-3 py-3 text-left transition-colors hover:bg-muted/60",
+                  selectedVendorId === vendor.id && "bg-muted"
+                )}
+                onClick={() => onSelect(vendor.id)}
+              >
+                <div className="flex items-center gap-2">
+                  <Building2 className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                  <span className="font-medium">{vendor.name}</span>
+                </div>
+                {vendor.remark ? (
+                  <div className="mt-1 text-xs text-muted-foreground">{vendor.remark}</div>
+                ) : null}
+                <div className="mt-2">
+                  <Badge tone={label.tone}>{label.text}</Badge>
+                </div>
+              </button>
+            );
+          })
         )}
       </CardContent>
     </Card>
   );
 }
 
-function BillTable({
+function VendorDetail({
   vendor,
-  bills,
-  onCreate
+  transactions,
+  onAdjust,
+  onPay
 }: {
   vendor: Vendor | null;
-  bills: VendorBill[];
-  onCreate: () => void;
+  transactions: VendorTransaction[];
+  onAdjust: () => void;
+  onPay: () => void;
 }) {
-  const queryClient = useQueryClient();
-  const [errorBillId, setErrorBillId] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  if (!vendor) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>供应商详情</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-md border border-dashed border-border px-3 py-10 text-center text-sm text-muted-foreground">
+            请先在左侧选中或新增供应商
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
-  const settleMutation = useMutation({
-    mutationFn: settleVendorBill,
-    onSuccess: async () => {
-      setErrorBillId(null);
-      setErrorMessage(null);
-      if (vendor) {
-        await queryClient.invalidateQueries({ queryKey: ["vendor-bills", vendor.id] });
-      }
-      await queryClient.invalidateQueries({ queryKey: ["vendor-summary"] });
-    },
-    onError: (err, billId) => {
-      setErrorBillId(billId);
-      setErrorMessage(err instanceof Error ? err.message : "操作失败");
-    }
-  });
+  const balanceColor =
+    vendor.balanceMinor > 0
+      ? "text-red-600"
+      : vendor.balanceMinor < 0
+        ? "text-green-600"
+        : "text-muted-foreground";
+  const label = balanceLabel(vendor.balanceMinor);
 
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle>{vendor ? `${vendor.name} 的账单` : "账单"}</CardTitle>
-          <Button size="sm" onClick={onCreate} disabled={!vendor}>
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            新增账单
-          </Button>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle>{vendor.name}</CardTitle>
+            {vendor.remark ? (
+              <div className="mt-1 text-sm text-muted-foreground">{vendor.remark}</div>
+            ) : null}
+          </div>
         </div>
       </CardHeader>
-      <CardContent className="space-y-3">
-        {errorMessage ? (
-          <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
-            {errorMessage}
-          </div>
-        ) : null}
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>方向</TableHead>
-              <TableHead className="text-right">金额</TableHead>
-              <TableHead>到期日</TableHead>
-              <TableHead>状态</TableHead>
-              <TableHead>备注</TableHead>
-              <TableHead className="text-right">操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {bills.map((bill) => {
-              const isPayable = bill.direction === "payable";
-              const isPending = bill.status === "pending";
-              return (
-                <TableRow key={bill.id}>
-                  <TableCell>
-                    <Badge tone={isPayable ? "danger" : "success"}>
-                      {isPayable ? "应付" : "应收"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell
-                    className={cn(
-                      "text-right tabular-nums font-semibold",
-                      isPayable ? "text-red-600" : "text-green-600"
-                    )}
-                  >
-                    {formatMoney(bill.amountMinor, bill.currency)}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{formatDueDate(bill.dueDate)}</TableCell>
-                  <TableCell>
-                    <Badge tone={isPending ? "neutral" : "success"}>
-                      {isPending ? "待结清" : "已结清"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{bill.remark ?? "-"}</TableCell>
-                  <TableCell className="text-right">
-                    {isPending ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => settleMutation.mutate(bill.id)}
-                        disabled={settleMutation.isPending && errorBillId !== bill.id}
-                      >
-                        <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-                        标记结清
-                      </Button>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">已结清</span>
-                    )}
-                  </TableCell>
-                </TableRow>
-              );
+      <CardContent className="space-y-4">
+        <div className="rounded-lg border border-border bg-card p-5">
+          <div className="text-sm text-muted-foreground">当前余额</div>
+          <div className={cn("mt-2 tabular-nums text-3xl font-semibold", balanceColor)}>
+            {formatMoney(vendor.balanceMinor, "CNY", {
+              accounting: vendor.balanceMinor < 0,
+              signed: vendor.balanceMinor > 0
             })}
-            {bills.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                  {vendor ? "该供应商暂无账单" : "请先在左侧选中或新增供应商"}
-                </TableCell>
-              </TableRow>
-            ) : null}
-          </TableBody>
-        </Table>
+          </div>
+          <div className="mt-2">
+            <Badge tone={label.tone}>{label.text}</Badge>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={onAdjust}>
+            <ArrowLeftRight className="h-4 w-4" aria-hidden="true" />
+            群指令录入 +/-
+          </Button>
+          <Button variant="outline" onClick={onPay}>
+            <Wallet className="h-4 w-4" aria-hidden="true" />
+            用资产钱包付款
+          </Button>
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-sm font-medium text-muted-foreground">流水（倒序）</div>
+          {transactions.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
+              暂无流水
+            </div>
+          ) : (
+            <div className="divide-y divide-border rounded-md border border-border">
+              {transactions.map((tx) => {
+                const isIn = tx.direction === "in";
+                return (
+                  <div key={tx.id} className="flex items-start justify-between gap-3 px-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <Badge tone={isIn ? "danger" : "success"}>
+                          {isIn ? "+" : "-"} {isIn ? "欠款增加" : "欠款减少"}
+                        </Badge>
+                        <span
+                          className={cn(
+                            "tabular-nums font-semibold",
+                            isIn ? "text-red-600" : "text-green-600"
+                          )}
+                        >
+                          {isIn ? "+" : "-"}
+                          {formatMoney(tx.amountMinor, "CNY")}
+                        </span>
+                      </div>
+                      {tx.remark ? (
+                        <div className="mt-1 truncate text-xs text-muted-foreground">{tx.remark}</div>
+                      ) : null}
+                    </div>
+                    <div className="shrink-0 text-xs text-muted-foreground">
+                      {tx.createdAt ? tx.createdAt.replace("T", " ").slice(0, 16) : "-"}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </CardContent>
     </Card>
   );
@@ -451,7 +540,8 @@ function BillTable({
 export function VendorsPage() {
   const [selectedVendorId, setSelectedVendorId] = useState("");
   const [showCreateVendor, setShowCreateVendor] = useState(false);
-  const [showCreateBill, setShowCreateBill] = useState(false);
+  const [showAdjust, setShowAdjust] = useState(false);
+  const [showPay, setShowPay] = useState(false);
 
   const { data: vendors = [], isFetching, refetch } = useQuery({
     queryKey: ["vendors"],
@@ -472,9 +562,10 @@ export function VendorsPage() {
 
   const selectedVendor = vendors.find((vendor) => vendor.id === selectedVendorId) ?? null;
 
-  const { data: bills = [] } = useQuery({
-    queryKey: ["vendor-bills", selectedVendor?.id ?? ""],
-    queryFn: () => (selectedVendor ? getVendorBills(selectedVendor.id) : Promise.resolve([])),
+  const { data: transactions = [] } = useQuery({
+    queryKey: ["vendor-transactions", selectedVendor?.id ?? ""],
+    queryFn: () =>
+      selectedVendor ? getVendorTransactions(selectedVendor.id) : Promise.resolve([]),
     enabled: Boolean(selectedVendor)
   });
 
@@ -482,18 +573,16 @@ export function VendorsPage() {
     <div className="space-y-5">
       <div className="flex flex-col justify-between gap-3 md:flex-row md:items-end">
         <div>
-          <h2 className="text-2xl font-semibold tracking-normal">供应商账单</h2>
+          <h2 className="text-2xl font-semibold tracking-normal">供应商</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            管理供应商应付/应收账单，标记结清后自动刷新汇总。
+            每个供应商对应一个 RMB 钱包：余额 &gt; 0 表示我们欠对方，余额 &lt; 0 表示已预付。
           </p>
         </div>
         <Button variant="outline" onClick={() => refetch()} disabled={isFetching}>
           <RefreshCcw className="h-4 w-4" aria-hidden="true" />
-          刷新供应商
+          刷新
         </Button>
       </div>
-
-      <VendorSummaryCards />
 
       <div className="grid gap-3 lg:grid-cols-[0.9fr_1.6fr]">
         <VendorList
@@ -502,18 +591,22 @@ export function VendorsPage() {
           onSelect={setSelectedVendorId}
           onCreate={() => setShowCreateVendor(true)}
         />
-        <BillTable
+        <VendorDetail
           vendor={selectedVendor}
-          bills={bills}
-          onCreate={() => setShowCreateBill(true)}
+          transactions={transactions}
+          onAdjust={() => setShowAdjust(true)}
+          onPay={() => setShowPay(true)}
         />
       </div>
 
       {showCreateVendor ? (
         <CreateVendorModal onClose={() => setShowCreateVendor(false)} />
       ) : null}
-      {showCreateBill && selectedVendor ? (
-        <CreateBillModal vendor={selectedVendor} onClose={() => setShowCreateBill(false)} />
+      {showAdjust && selectedVendor ? (
+        <AdjustVendorModal vendor={selectedVendor} onClose={() => setShowAdjust(false)} />
+      ) : null}
+      {showPay && selectedVendor ? (
+        <PayVendorModal vendor={selectedVendor} onClose={() => setShowPay(false)} />
       ) : null}
     </div>
   );
