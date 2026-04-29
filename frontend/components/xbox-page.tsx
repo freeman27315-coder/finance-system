@@ -5,11 +5,12 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   Gamepad2,
+  Gift,
   ListOrdered,
   Plus,
   RefreshCcw
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,9 +18,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import {
   consumeXbox,
   createXboxAccount,
+  getVendors,
   getXboxAccounts,
   getXboxSummary,
   getXboxTransactions,
+  loadGiftcard,
   rechargeXbox
 } from "@/lib/api";
 import { formatMoney } from "@/lib/money";
@@ -371,6 +374,146 @@ function ConsumeModal({ account, onClose }: { account: XboxAccount; onClose: () 
   );
 }
 
+function GiftcardLoadModal({ account, onClose }: { account: XboxAccount; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [vendorId, setVendorId] = useState<string>("");
+  const [cardFaceAmount, setCardFaceAmount] = useState("");
+  const [rmbCost, setRmbCost] = useState("");
+  const [remark, setRemark] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const { data: vendors = [], isFetching: vendorsLoading } = useQuery({
+    queryKey: ["vendors"],
+    queryFn: getVendors
+  });
+
+  useEffect(() => {
+    if (!vendorId && vendors.length > 0) {
+      setVendorId(vendors[0].id);
+    }
+  }, [vendors, vendorId]);
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!vendorId) {
+        throw new Error("请选择供应商");
+      }
+      if (!cardFaceAmount || Number(cardFaceAmount) <= 0) {
+        throw new Error("卡面额必须大于 0");
+      }
+      if (!rmbCost || Number(rmbCost) <= 0) {
+        throw new Error("RMB 成本必须大于 0");
+      }
+      return loadGiftcard(vendorId, {
+        xboxAccountId: account.id,
+        cardFaceAmount,
+        rmbCost,
+        remark: remark.trim() === "" ? undefined : remark.trim()
+      });
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["xbox-accounts", account.country] }),
+        queryClient.invalidateQueries({ queryKey: ["xbox-transactions", account.id] }),
+        queryClient.invalidateQueries({ queryKey: ["vendors"] }),
+        queryClient.invalidateQueries({ queryKey: ["vendor-transactions", vendorId] }),
+        queryClient.invalidateQueries({ queryKey: ["xbox-summary"] })
+      ]);
+      onClose();
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : "礼品卡加载失败");
+    }
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Card className="w-full max-w-md border-purple-500/40">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Gift className="h-5 w-5 text-purple-600" aria-hidden="true" />
+            礼品卡加载 · {account.name}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">供应商</div>
+            {vendorsLoading ? (
+              <div className="text-sm text-muted-foreground">加载中...</div>
+            ) : vendors.length === 0 ? (
+              <div className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
+                暂无供应商，请先到 /vendors 创建
+              </div>
+            ) : (
+              <select
+                className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+                value={vendorId}
+                onChange={(event) => setVendorId(event.target.value)}
+              >
+                {vendors.map((vendor) => (
+                  <option key={vendor.id} value={vendor.id}>
+                    {vendor.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">卡面额（{account.currency}）</div>
+            <input
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={cardFaceAmount}
+              onChange={(event) => setCardFaceAmount(event.target.value)}
+              placeholder={`卡面额 ${account.currency}`}
+              type="number"
+              min="0"
+              step="0.01"
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">RMB 收购成本</div>
+            <input
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={rmbCost}
+              onChange={(event) => setRmbCost(event.target.value)}
+              placeholder="商定 RMB"
+              type="number"
+              min="0"
+              step="0.01"
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">备注（选填）</div>
+            <textarea
+              className="min-h-[80px] w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={remark}
+              onChange={(event) => setRemark(event.target.value)}
+              placeholder="备注"
+            />
+          </div>
+          {error ? (
+            <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
+              {error}
+            </div>
+          ) : null}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>
+              取消
+            </Button>
+            <Button
+              onClick={() => mutation.mutate()}
+              disabled={mutation.isPending || vendors.length === 0}
+              className="bg-purple-600 text-white hover:bg-purple-700"
+            >
+              {mutation.isPending ? "提交中..." : "确认加载"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function TransactionsModal({ account, onClose }: { account: XboxAccount; onClose: () => void }) {
   const { data: transactions = [], isFetching } = useQuery({
     queryKey: ["xbox-transactions", account.id],
@@ -447,12 +590,14 @@ function AccountsTable({
   country,
   onRecharge,
   onConsume,
+  onGiftcard,
   onTransactions
 }: {
   accounts: XboxAccount[];
   country: XboxCountry;
   onRecharge: (account: XboxAccount) => void;
   onConsume: (account: XboxAccount) => void;
+  onGiftcard: (account: XboxAccount) => void;
   onTransactions: (account: XboxAccount) => void;
 }) {
   const meta = COUNTRY_META[country];
@@ -488,6 +633,15 @@ function AccountsTable({
                   <ArrowUpRight className="h-4 w-4 text-red-600" aria-hidden="true" />
                   消费
                 </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onGiftcard(account)}
+                  className="border-purple-500/40 bg-purple-500/10 text-purple-700 hover:bg-purple-500/20"
+                >
+                  <Gift className="h-4 w-4" aria-hidden="true" />
+                  礼品卡加载
+                </Button>
                 <Button size="sm" variant="ghost" onClick={() => onTransactions(account)}>
                   <ListOrdered className="h-4 w-4" aria-hidden="true" />
                   流水
@@ -513,6 +667,7 @@ export function XboxPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [rechargeTarget, setRechargeTarget] = useState<XboxAccount | null>(null);
   const [consumeTarget, setConsumeTarget] = useState<XboxAccount | null>(null);
+  const [giftcardTarget, setGiftcardTarget] = useState<XboxAccount | null>(null);
   const [transactionsTarget, setTransactionsTarget] = useState<XboxAccount | null>(null);
 
   const { data: accounts = [], isFetching, refetch } = useQuery({
@@ -571,6 +726,7 @@ export function XboxPage() {
             country={country}
             onRecharge={setRechargeTarget}
             onConsume={setConsumeTarget}
+            onGiftcard={setGiftcardTarget}
             onTransactions={setTransactionsTarget}
           />
         </CardContent>
@@ -584,6 +740,9 @@ export function XboxPage() {
       ) : null}
       {consumeTarget ? (
         <ConsumeModal account={consumeTarget} onClose={() => setConsumeTarget(null)} />
+      ) : null}
+      {giftcardTarget ? (
+        <GiftcardLoadModal account={giftcardTarget} onClose={() => setGiftcardTarget(null)} />
       ) : null}
       {transactionsTarget ? (
         <TransactionsModal account={transactionsTarget} onClose={() => setTransactionsTarget(null)} />

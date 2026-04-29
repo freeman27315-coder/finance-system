@@ -17,6 +17,7 @@ import type {
   AssetTransaction,
   Currency,
   DashboardData,
+  GiftcardLoadResult,
   TaiwanSummary,
   TaiwanTransaction,
   TaiwanWallet,
@@ -312,6 +313,42 @@ export async function payVendor(
     body.remark = payload.remark;
   }
   return postJson(`/api/vendors/${vendorId}/payment`, body);
+}
+
+type GiftcardLoadResponse = {
+  xbox_account?: XboxAccountResponse;
+  xboxAccount?: XboxAccountResponse;
+  vendor_balance?: string | number;
+  vendorBalance?: string | number;
+  xbox_transaction_id?: string | number;
+  xboxTransactionId?: string | number;
+  vendor_transaction_id?: string | number;
+  vendorTransactionId?: string | number;
+};
+
+export async function loadGiftcard(
+  vendorId: string,
+  payload: { xboxAccountId: string; cardFaceAmount: string; rmbCost: string; remark?: string }
+): Promise<GiftcardLoadResult> {
+  const body: Record<string, unknown> = {
+    xbox_account_id: Number(payload.xboxAccountId),
+    card_face_amount: payload.cardFaceAmount,
+    rmb_cost: payload.rmbCost
+  };
+  if (payload.remark) {
+    body.remark = payload.remark;
+  }
+  const data = (await postJson(`/api/vendors/${vendorId}/giftcard-load`, body)) as GiftcardLoadResponse;
+  const account = data.xbox_account ?? data.xboxAccount;
+  if (!account) {
+    throw new Error("后端返回缺少 xbox_account");
+  }
+  return {
+    xboxAccount: normalizeXboxAccount(account),
+    vendorBalanceMinor: decimalToMinor(data.vendor_balance ?? data.vendorBalance ?? 0, "CNY"),
+    xboxTransactionId: String(data.xbox_transaction_id ?? data.xboxTransactionId ?? ""),
+    vendorTransactionId: String(data.vendor_transaction_id ?? data.vendorTransactionId ?? "")
+  };
 }
 
 type XboxAccountResponse = {
