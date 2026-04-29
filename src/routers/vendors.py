@@ -18,14 +18,7 @@ from src.models.wallet import (
     Wallet,
     WalletTransaction,
     WalletType,
-    credit,
     debit,
-)
-from src.models.xbox import XboxAccount, XboxCurrency
-from src.routers.xbox import (
-    XboxAccountOut,
-    apply_recharge_to_account,
-    serialize_account as serialize_xbox_account,
 )
 from src.services.vendors import create_vendor_wallet
 
@@ -81,11 +74,6 @@ def list_vendors(db: Session = Depends(get_db)) -> list[VendorOut]:
     return [serialize_vendor(vendor, wallet) for vendor, wallet in rows]
 
 
-class VendorAdjustRequest(BaseModel):
-    amount: Decimal
-    remark: Optional[str] = None
-
-
 class VendorTransactionOut(BaseModel):
     id: int
     walletId: int
@@ -100,30 +88,6 @@ def _get_vendor_or_404(db: Session, vendor_id: int) -> Vendor:
     if vendor is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="供应商不存在")
     return vendor
-
-
-@router.post("/{vendor_id}/adjust", response_model=VendorOut)
-def adjust_vendor(
-    vendor_id: int,
-    request: VendorAdjustRequest,
-    db: Session = Depends(get_db),
-) -> VendorOut:
-    if request.amount == 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="调整金额不能为 0",
-        )
-    vendor = _get_vendor_or_404(db, vendor_id)
-
-    if request.amount > 0:
-        credit(db, vendor.wallet_id, request.amount, request.remark)
-    else:
-        debit(db, vendor.wallet_id, abs(request.amount), request.remark)
-
-    db.commit()
-    db.refresh(vendor)
-    wallet = db.get(Wallet, vendor.wallet_id)
-    return serialize_vendor(vendor, wallet)
 
 
 class PaymentRequest(BaseModel):
@@ -267,97 +231,6 @@ def pay_vendor(
         exchange_rate=rate,
         from_wallet_balance=Decimal(from_wallet.balance),
         vendor_wallet_balance=Decimal(vendor_wallet.balance),
-    )
-
-
-class GiftcardLoadRequest(BaseModel):
-    xbox_account_id: int
-    card_face_amount: Decimal
-    rmb_cost: Decimal
-    remark: Optional[str] = Field(None, max_length=500)
-
-
-class GiftcardLoadOut(BaseModel):
-    xbox_account: XboxAccountOut
-    vendor_balance: Decimal
-    xbox_transaction_id: int
-    vendor_transaction_id: int
-
-
-@router.post("/{vendor_id}/giftcard-load", response_model=GiftcardLoadOut)
-def giftcard_load(
-    vendor_id: int,
-    request: GiftcardLoadRequest,
-    db: Session = Depends(get_db),
-) -> GiftcardLoadOut:
-    # 1. vendor 不存在 → 404
-    vendor = _get_vendor_or_404(db, vendor_id)
-
-    # 2. xbox 账号不存在 → 404
-    xbox_account = db.get(XboxAccount, request.xbox_account_id)
-    if xbox_account is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="XBOX 账号不存在")
-
-    # 3. card_face_amount <= 0
-    card_face = Decimal(str(request.card_face_amount))
-    if card_face <= 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="卡面额必须大于 0")
-
-    # 4. rmb_cost <= 0
-    rmb_cost = Decimal(str(request.rmb_cost))
-    if rmb_cost <= 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="RMB 成本必须大于 0")
-
-    # 5. vendor wallet 兜底
-    vendor_wallet = db.get(Wallet, vendor.wallet_id)
-    if vendor_wallet is None or vendor_wallet.deleted_at is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="供应商钱包不可用",
-        )
-
-    xbox_currency = (
-        xbox_account.currency.value
-        if isinstance(xbox_account.currency, XboxCurrency)
-        else xbox_account.currency
-    )
-    xbox_remark = f"礼品卡加载←{vendor.name}"
-    if request.remark:
-        xbox_remark = f"{request.remark} {xbox_remark}"
-    vendor_remark = (
-        f"礼品卡→XBOX {xbox_account.name} {card_face} {xbox_currency}"
-    )
-    if request.remark:
-        vendor_remark = f"{request.remark} {vendor_remark}"
-
-    # 原子事务：XBOX 账号双字段累加 + XboxTransaction + vendor wallet credit
-    try:
-        xbox_tx = apply_recharge_to_account(
-            db,
-            xbox_account,
-            rmb_amount=rmb_cost,
-            local_amount=card_face,
-            remark=xbox_remark,
-        )
-        vendor_tx = credit(db, vendor_wallet.id, rmb_cost, vendor_remark)
-        db.commit()
-    except ValueError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except Exception:
-        db.rollback()
-        raise
-
-    db.refresh(xbox_account)
-    db.refresh(vendor_wallet)
-    db.refresh(xbox_tx)
-    db.refresh(vendor_tx)
-
-    return GiftcardLoadOut(
-        xbox_account=serialize_xbox_account(xbox_account),
-        vendor_balance=Decimal(vendor_wallet.balance),
-        xbox_transaction_id=xbox_tx.id,
-        vendor_transaction_id=vendor_tx.id,
     )
 
 

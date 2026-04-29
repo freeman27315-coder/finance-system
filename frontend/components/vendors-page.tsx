@@ -2,7 +2,6 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeftRight,
   Building2,
   Plus,
   RefreshCcw,
@@ -13,7 +12,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  adjustVendor,
   createVendor,
   getAssetWallets,
   getVendorTransactions,
@@ -113,95 +111,6 @@ function CreateVendorModal({ onClose }: { onClose: () => void }) {
             </Button>
             <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
               {mutation.isPending ? "创建中..." : "创建"}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-// 解析带符号字符串："+1000" / "-500" / "1000" / "+1.5"
-// 返回 { signed: string, valid: boolean } —— signed 是后端要的格式（保留符号），无效返回 valid=false
-function parseSignedAmount(input: string): { signed: string; valid: boolean } {
-  const trimmed = input.trim();
-  if (!trimmed) return { signed: "", valid: false };
-  const match = trimmed.match(/^([+-])?(\d+(?:\.\d+)?)$/);
-  if (!match) return { signed: "", valid: false };
-  const sign = match[1] ?? "+";
-  const num = match[2];
-  if (Number.parseFloat(num) === 0) return { signed: "", valid: false };
-  return { signed: `${sign === "-" ? "-" : ""}${num}`, valid: true };
-}
-
-function AdjustVendorModal({ vendor, onClose }: { vendor: Vendor; onClose: () => void }) {
-  const queryClient = useQueryClient();
-  const [amount, setAmount] = useState("");
-  const [remark, setRemark] = useState("");
-  const [error, setError] = useState<string | null>(null);
-
-  const mutation = useMutation({
-    mutationFn: async () => {
-      const parsed = parseSignedAmount(amount);
-      if (!parsed.valid) {
-        throw new Error("请输入带正负号的金额，例如 +1000 或 -500");
-      }
-      return adjustVendor(vendor.id, {
-        amount: parsed.signed,
-        remark: remark.trim() === "" ? undefined : remark.trim()
-      });
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["vendors"] });
-      await queryClient.invalidateQueries({ queryKey: ["vendor-transactions", vendor.id] });
-      onClose();
-    },
-    onError: (err) => {
-      setError(err instanceof Error ? err.message : "操作失败");
-    }
-  });
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>群指令录入 · {vendor.name}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
-            <div>+ 表示我们欠供应商更多（credit）</div>
-            <div>- 表示供应商欠我们更多 / 我们已预付（debit）</div>
-          </div>
-          <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">金额（带符号）</div>
-            <input
-              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={amount}
-              onChange={(event) => setAmount(event.target.value)}
-              placeholder="例如 +1000 或 -500"
-              autoFocus
-            />
-          </div>
-          <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">备注（选填）</div>
-            <textarea
-              className="min-h-[80px] w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={remark}
-              onChange={(event) => setRemark(event.target.value)}
-              placeholder="备注"
-            />
-          </div>
-          {error ? (
-            <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
-              {error}
-            </div>
-          ) : null}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>
-              取消
-            </Button>
-            <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
-              {mutation.isPending ? "提交中..." : "提交"}
             </Button>
           </div>
         </CardContent>
@@ -424,12 +333,10 @@ function VendorList({
 function VendorDetail({
   vendor,
   transactions,
-  onAdjust,
   onPay
 }: {
   vendor: Vendor | null;
   transactions: VendorTransaction[];
-  onAdjust: () => void;
   onPay: () => void;
 }) {
   if (!vendor) {
@@ -482,10 +389,6 @@ function VendorDetail({
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={onAdjust}>
-            <ArrowLeftRight className="h-4 w-4" aria-hidden="true" />
-            群指令录入 +/-
-          </Button>
           <Button variant="outline" onClick={onPay}>
             <Wallet className="h-4 w-4" aria-hidden="true" />
             用资产钱包付款
@@ -540,7 +443,6 @@ function VendorDetail({
 export function VendorsPage() {
   const [selectedVendorId, setSelectedVendorId] = useState("");
   const [showCreateVendor, setShowCreateVendor] = useState(false);
-  const [showAdjust, setShowAdjust] = useState(false);
   const [showPay, setShowPay] = useState(false);
 
   const { data: vendors = [], isFetching, refetch } = useQuery({
@@ -594,16 +496,12 @@ export function VendorsPage() {
         <VendorDetail
           vendor={selectedVendor}
           transactions={transactions}
-          onAdjust={() => setShowAdjust(true)}
           onPay={() => setShowPay(true)}
         />
       </div>
 
       {showCreateVendor ? (
         <CreateVendorModal onClose={() => setShowCreateVendor(false)} />
-      ) : null}
-      {showAdjust && selectedVendor ? (
-        <AdjustVendorModal vendor={selectedVendor} onClose={() => setShowAdjust(false)} />
       ) : null}
       {showPay && selectedVendor ? (
         <PayVendorModal vendor={selectedVendor} onClose={() => setShowPay(false)} />
