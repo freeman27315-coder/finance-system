@@ -6,7 +6,8 @@ from fastapi.testclient import TestClient
 
 from src import database
 from src.main import app
-from src.models.wallet import Wallet
+from src.models.vendor import Vendor
+from src.models.wallet import Wallet, credit, debit
 from src.services.assets import ensure_default_asset_wallets
 
 
@@ -48,10 +49,19 @@ def _create_vendor(client, name="供应商A"):
     return resp.json()
 
 
-def _adjust_vendor(client, vendor_id, amount):
-    resp = client.post(f"/vendors/{vendor_id}/adjust", json={"amount": str(amount)})
-    assert resp.status_code == 200, resp.text
-    return resp.json()
+def _seed_vendor_balance(vendor_id, amount):
+    """直接通过 wallet credit/debit 调整 vendor 钱包余额（绕过 router，仅用于测试 setup）"""
+    db = database.SessionLocal()
+    try:
+        vendor = db.get(Vendor, vendor_id)
+        amt = Decimal(str(amount))
+        if amt > 0:
+            credit(db, vendor.wallet_id, amt, "test seed")
+        elif amt < 0:
+            debit(db, vendor.wallet_id, abs(amt), "test seed")
+        db.commit()
+    finally:
+        db.close()
 
 
 def test_payment_same_currency_partial_settle(client):
@@ -59,7 +69,7 @@ def test_payment_same_currency_partial_settle(client):
     src_id = _get_leaf_id(client, "丙火网络支付宝")
     _credit(client, src_id, "5000")
     vendor = _create_vendor(client, name="供A")
-    _adjust_vendor(client, vendor["id"], "1000")
+    _seed_vendor_balance(vendor["id"], "1000")
 
     resp = client.post(
         f"/vendors/{vendor['id']}/payment",
@@ -79,7 +89,7 @@ def test_payment_same_currency_full_settle(client):
     src_id = _get_leaf_id(client, "丙火网络支付宝")
     _credit(client, src_id, "5000")
     vendor = _create_vendor(client, name="供B")
-    _adjust_vendor(client, vendor["id"], "1000")
+    _seed_vendor_balance(vendor["id"], "1000")
 
     resp = client.post(
         f"/vendors/{vendor['id']}/payment",
@@ -94,7 +104,7 @@ def test_payment_same_currency_overpay_becomes_prepaid(client):
     src_id = _get_leaf_id(client, "丙火网络支付宝")
     _credit(client, src_id, "5000")
     vendor = _create_vendor(client, name="供C")
-    _adjust_vendor(client, vendor["id"], "1000")
+    _seed_vendor_balance(vendor["id"], "1000")
 
     resp = client.post(
         f"/vendors/{vendor['id']}/payment",
@@ -124,7 +134,7 @@ def test_payment_cross_currency_usdt_to_cny(client):
     src_id = _get_leaf_id(client, "FREEMAN币安")  # USDT
     _credit(client, src_id, "1000")
     vendor = _create_vendor(client, name="供E")
-    _adjust_vendor(client, vendor["id"], "1000")  # vendor +1000 CNY
+    _seed_vendor_balance(vendor["id"], "1000")  # vendor +1000 CNY
 
     resp = client.post(
         f"/vendors/{vendor['id']}/payment",
@@ -143,7 +153,7 @@ def test_payment_insufficient_asset_balance_atomic(client):
     src_id = _get_leaf_id(client, "丙火网络支付宝")
     _credit(client, src_id, "50")
     vendor = _create_vendor(client, name="供F")
-    _adjust_vendor(client, vendor["id"], "1000")
+    _seed_vendor_balance(vendor["id"], "1000")
 
     resp = client.post(
         f"/vendors/{vendor['id']}/payment",
