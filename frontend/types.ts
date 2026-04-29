@@ -74,6 +74,13 @@ export type XboxTransaction = {
   currency: Currency;
 };
 
+export type GiftcardLoadResult = {
+  xboxAccount: XboxAccount;
+  vendorBalanceMinor: number;
+  xboxTransactionId: string;
+  vendorTransactionId: string;
+};
+
 export type XboxCountrySummary = {
   rmbCostMinor: number;
   localBalanceMinor: number;
