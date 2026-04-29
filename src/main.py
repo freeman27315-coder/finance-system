@@ -11,6 +11,7 @@ from src.routers.vendors import router as vendors_router
 from src.routers.xbox import router as xbox_router
 from src.routers.taobao import router as taobao_router
 from src.routers.taiwan import router as taiwan_router
+from src.routers.transfers import router as transfers_router
 from src.services.assets import ensure_default_asset_wallets
 from src.services.taiwan import ensure_default_taiwan_wallets
 from src.services.vendors import ensure_vendor_wallets
@@ -36,6 +37,7 @@ app.include_router(vendors_router)
 app.include_router(xbox_router)
 app.include_router(taobao_router)
 app.include_router(taiwan_router)
+app.include_router(transfers_router)
 
 
 @app.get("/health")
