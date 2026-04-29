@@ -84,6 +84,81 @@ def test_each_vendor_gets_its_own_vendor_wallet(client):
         db.close()
 
 
+def test_adjust_positive_increases_balance(client):
+    vendor = create_vendor(client)
+
+    response = client.post(
+        f"/vendors/{vendor['id']}/adjust",
+        json={"amount": "1000", "remark": "+1000 群指令"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert Decimal(payload["balance"]) == Decimal("1000")
+
+
+def test_adjust_negative_decreases_balance_can_go_negative(client):
+    vendor = create_vendor(client)
+
+    response = client.post(
+        f"/vendors/{vendor['id']}/adjust",
+        json={"amount": "-500", "remark": "-500 已预付"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert Decimal(payload["balance"]) == Decimal("-500")
+
+
+def test_adjust_zero_returns_400(client):
+    vendor = create_vendor(client)
+
+    response = client.post(
+        f"/vendors/{vendor['id']}/adjust",
+        json={"amount": "0"},
+    )
+
+    assert response.status_code == 400
+    assert "0" in response.json()["detail"]
+
+
+def test_adjust_unknown_vendor_returns_404(client):
+    response = client.post(
+        "/vendors/9999/adjust",
+        json={"amount": "100"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_transactions_returned_in_reverse_chronological_order(client):
+    vendor = create_vendor(client)
+
+    client.post(f"/vendors/{vendor['id']}/adjust", json={"amount": "100", "remark": "first"})
+    client.post(f"/vendors/{vendor['id']}/adjust", json={"amount": "-30", "remark": "second"})
+    client.post(f"/vendors/{vendor['id']}/adjust", json={"amount": "50", "remark": "third"})
+
+    response = client.get(f"/vendors/{vendor['id']}/transactions")
+
+    assert response.status_code == 200, response.text
+    txs = response.json()
+    assert len(txs) == 3
+    # 倒序：third 在最前
+    assert txs[0]["remark"] == "third"
+    assert txs[0]["direction"] == "in"
+    assert Decimal(txs[0]["amount"]) == Decimal("50")
+    assert txs[1]["remark"] == "second"
+    assert txs[1]["direction"] == "out"
+    assert Decimal(txs[1]["amount"]) == Decimal("30")
+    assert txs[2]["remark"] == "first"
+    assert txs[2]["direction"] == "in"
+
+
+def test_transactions_unknown_vendor_returns_404(client):
+    response = client.get("/vendors/9999/transactions")
+    assert response.status_code == 404
+
+
 def test_ensure_vendor_wallets_is_idempotent(client):
     create_vendor(client, name="Vendor A")
     create_vendor(client, name="Vendor B")
