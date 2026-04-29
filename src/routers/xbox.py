@@ -115,6 +115,31 @@ def get_account_or_404(session: Session, account_id: int) -> XboxAccount:
     return account
 
 
+def apply_recharge_to_account(
+    session: Session,
+    account: XboxAccount,
+    rmb_amount: Decimal,
+    local_amount: Decimal,
+    remark: Optional[str] = None,
+) -> XboxTransaction:
+    """累加 XBOX 账号 rmb_cost / local_balance 并写入一条 recharge 流水。
+
+    仅 add + flush，不 commit；调用方负责事务边界，便于嵌入更大的原子操作。
+    """
+    account.rmb_cost = Decimal(account.rmb_cost) + Decimal(rmb_amount)
+    account.local_balance = Decimal(account.local_balance) + Decimal(local_amount)
+    transaction = XboxTransaction(
+        account_id=account.id,
+        rmb_amount=Decimal(rmb_amount),
+        local_amount=Decimal(local_amount),
+        type=XboxTransactionType.RECHARGE.value,
+        remark=remark,
+    )
+    session.add(transaction)
+    session.flush()
+    return transaction
+
+
 @router.post("/accounts", response_model=XboxAccountOut, status_code=status.HTTP_201_CREATED)
 def create_account(request: XboxAccountCreate, db: Session = Depends(get_db)) -> XboxAccountOut:
     account = XboxAccount(
@@ -152,16 +177,13 @@ def recharge_account(
     db: Session = Depends(get_db),
 ) -> XboxTransactionOut:
     account = get_account_or_404(db, account_id)
-    account.rmb_cost = Decimal(account.rmb_cost) + request.rmb_amount
-    account.local_balance = Decimal(account.local_balance) + request.local_amount
-    transaction = XboxTransaction(
-        account_id=account.id,
+    transaction = apply_recharge_to_account(
+        db,
+        account,
         rmb_amount=request.rmb_amount,
         local_amount=request.local_amount,
-        type=XboxTransactionType.RECHARGE.value,
         remark=request.remark,
     )
-    db.add(transaction)
     db.commit()
     db.refresh(transaction)
     return serialize_transaction(transaction)
