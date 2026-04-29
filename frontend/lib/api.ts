@@ -6,8 +6,8 @@ import {
   mockTaiwanWallets,
   mockTaobaoAccounts,
   mockTaobaoTransactions,
-  mockVendorBills,
   mockVendors,
+  mockVendorTransactions,
   mockXboxAccounts,
   mockXboxSummary,
   mockXboxTransactions
@@ -15,7 +15,6 @@ import {
 import { decimalToMinor } from "@/lib/money";
 import type {
   AssetTransaction,
-  BillDirection,
   Currency,
   DashboardData,
   TaiwanSummary,
@@ -25,8 +24,7 @@ import type {
   TaobaoTransaction,
   TaobaoWalletScope,
   Vendor,
-  VendorBill,
-  VendorSummary,
+  VendorTransaction,
   WalletBalance,
   WalletType,
   XboxAccount,
@@ -50,15 +48,6 @@ type AssetWalletResponse = {
   remark?: string | null;
   deleted_at?: string | null;
   deletedAt?: string | null;
-};
-
-type VendorSummaryResponse = {
-  payable?: string | number;
-  receivable?: string | number;
-  net?: string | number;
-  payable_cny?: string | number;
-  receivable_cny?: string | number;
-  net_cny?: string | number;
 };
 
 type AssetTransactionResponse = {
@@ -106,29 +95,11 @@ function normalizeWallet(wallet: AssetWalletResponse, parentId?: string | null):
   };
 }
 
-function normalizeVendorSummary(summary: VendorSummaryResponse): VendorSummary {
-  const payable = summary.payable ?? summary.payable_cny ?? 0;
-  const receivable = summary.receivable ?? summary.receivable_cny ?? 0;
-  const net = summary.net ?? summary.net_cny ?? 0;
-
-  return {
-    payableMinor: decimalToMinor(payable, "CNY"),
-    receivableMinor: decimalToMinor(receivable, "CNY"),
-    netMinor: decimalToMinor(net, "CNY"),
-    currency: "CNY"
-  };
-}
-
 export async function getDashboardData(): Promise<DashboardData> {
   try {
-    const [wallets, vendorSummary] = await Promise.all([
-      fetchJson<AssetWalletResponse[]>("/api/wallets/assets"),
-      fetchJson<VendorSummaryResponse>("/api/vendors/summary")
-    ]);
-
+    const wallets = await fetchJson<AssetWalletResponse[]>("/api/wallets/assets");
     return {
-      wallets: wallets.map((wallet) => normalizeWallet(wallet)),
-      vendorSummary: normalizeVendorSummary(vendorSummary)
+      wallets: wallets.map((wallet) => normalizeWallet(wallet))
     };
   } catch {
     return mockDashboardData;
@@ -251,23 +222,22 @@ type VendorResponse = {
   id: string | number;
   name: string;
   remark?: string | null;
+  walletId?: string | number;
+  wallet_id?: string | number;
+  balance?: string | number;
   created_at?: string;
   createdAt?: string;
 };
 
-type VendorBillResponse = {
+type VendorTransactionResponse = {
   id: string | number;
-  vendor_id?: string | number;
-  vendorId?: string | number;
-  direction: BillDirection;
+  walletId?: string | number;
+  wallet_id?: string | number;
   amount: string | number;
-  currency?: Currency;
-  status: "pending" | "settled";
-  due_date?: string | null;
-  dueDate?: string | null;
+  direction: "in" | "out";
   remark?: string | null;
-  created_at?: string;
   createdAt?: string;
+  created_at?: string;
 };
 
 function normalizeVendor(vendor: VendorResponse): Vendor {
@@ -275,22 +245,20 @@ function normalizeVendor(vendor: VendorResponse): Vendor {
     id: String(vendor.id),
     name: vendor.name,
     remark: vendor.remark ?? null,
+    walletId: String(vendor.walletId ?? vendor.wallet_id ?? ""),
+    balanceMinor: decimalToMinor(vendor.balance ?? 0, "CNY"),
     createdAt: vendor.created_at ?? vendor.createdAt ?? ""
   };
 }
 
-function normalizeVendorBill(bill: VendorBillResponse): VendorBill {
-  const currency: Currency = bill.currency ?? "CNY";
+function normalizeVendorTransaction(tx: VendorTransactionResponse): VendorTransaction {
   return {
-    id: String(bill.id),
-    vendorId: String(bill.vendor_id ?? bill.vendorId ?? ""),
-    direction: bill.direction,
-    amountMinor: decimalToMinor(bill.amount, currency),
-    currency,
-    status: bill.status,
-    dueDate: bill.due_date ?? bill.dueDate ?? null,
-    remark: bill.remark ?? null,
-    createdAt: bill.created_at ?? bill.createdAt ?? ""
+    id: String(tx.id),
+    walletId: String(tx.walletId ?? tx.wallet_id ?? ""),
+    amountMinor: decimalToMinor(tx.amount, "CNY"),
+    direction: tx.direction,
+    remark: tx.remark ?? null,
+    createdAt: tx.createdAt ?? tx.created_at ?? ""
   };
 }
 
@@ -304,44 +272,46 @@ export async function getVendors(): Promise<Vendor[]> {
 }
 
 export async function createVendor(payload: { name: string; remark?: string }): Promise<Vendor> {
-  try {
-    const data = (await postJson("/api/vendors", payload)) as VendorResponse;
-    return normalizeVendor(data);
-  } catch (error) {
-    throw error instanceof Error ? error : new Error("创建供应商失败");
-  }
+  const data = (await postJson("/api/vendors", payload)) as VendorResponse;
+  return normalizeVendor(data);
 }
 
-export async function getVendorBills(vendorId: string): Promise<VendorBill[]> {
+export async function getVendorTransactions(vendorId: string): Promise<VendorTransaction[]> {
   try {
-    const data = await fetchJson<VendorBillResponse[]>(`/api/vendors/${vendorId}/bills`);
-    return data.map((bill) => normalizeVendorBill({ ...bill, vendor_id: bill.vendor_id ?? vendorId }));
+    const data = await fetchJson<VendorTransactionResponse[]>(`/api/vendors/${vendorId}/transactions`);
+    return data.map(normalizeVendorTransaction);
   } catch {
-    return (mockVendorBills[vendorId] ?? []).map((bill) => ({ ...bill }));
+    return (mockVendorTransactions[vendorId] ?? []).map((tx) => ({ ...tx }));
   }
 }
 
-export async function createVendorBill(
+export async function adjustVendor(
   vendorId: string,
-  payload: { direction: BillDirection; amount: string; dueDate?: string; remark?: string }
-): Promise<VendorBill> {
+  payload: { amount: string; remark?: string }
+): Promise<Vendor> {
+  const body: Record<string, unknown> = { amount: payload.amount };
+  if (payload.remark) {
+    body.remark = payload.remark;
+  }
+  const data = (await postJson(`/api/vendors/${vendorId}/adjust`, body)) as VendorResponse;
+  return normalizeVendor(data);
+}
+
+export async function payVendor(
+  vendorId: string,
+  payload: { fromWalletId: string; amount: string; exchangeRate?: string; remark?: string }
+): Promise<unknown> {
   const body: Record<string, unknown> = {
-    direction: payload.direction,
+    from_wallet_id: Number(payload.fromWalletId),
     amount: payload.amount
   };
-  if (payload.dueDate) {
-    body.due_date = payload.dueDate;
+  if (payload.exchangeRate) {
+    body.exchange_rate = payload.exchangeRate;
   }
   if (payload.remark) {
     body.remark = payload.remark;
   }
-  const data = (await postJson(`/api/vendors/${vendorId}/bills`, body)) as VendorBillResponse;
-  return normalizeVendorBill({ ...data, vendor_id: data.vendor_id ?? vendorId });
-}
-
-export async function settleVendorBill(billId: string): Promise<VendorBill> {
-  const data = (await sendJson(`/api/vendors/bills/${billId}/settle`, "PATCH")) as VendorBillResponse;
-  return normalizeVendorBill(data);
+  return postJson(`/api/vendors/${vendorId}/payment`, body);
 }
 
 type XboxAccountResponse = {
@@ -627,15 +597,6 @@ export async function getTaobaoTransactions(accountId: string): Promise<TaobaoTr
     return data.map(normalizeTaobaoTransaction);
   } catch {
     return mockTaobaoTransactions[accountId] ?? [];
-  }
-}
-
-export async function getVendorSummary(): Promise<VendorSummary> {
-  try {
-    const data = await fetchJson<VendorSummaryResponse>("/api/vendors/summary");
-    return normalizeVendorSummary(data);
-  } catch {
-    return mockDashboardData.vendorSummary;
   }
 }
 

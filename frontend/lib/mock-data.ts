@@ -7,7 +7,7 @@ import type {
   TaobaoAccount,
   TaobaoTransaction,
   Vendor,
-  VendorBill,
+  VendorTransaction,
   WalletBalance,
   XboxAccount,
   XboxSummary,
@@ -214,13 +214,7 @@ export const mockWallets: WalletBalance[] = [
 ];
 
 export const mockDashboardData: DashboardData = {
-  wallets: mockWallets,
-  vendorSummary: {
-    payableMinor: 218_700_00,
-    receivableMinor: 295_020_00,
-    netMinor: 76_320_00,
-    currency: "CNY"
-  }
+  wallets: mockWallets
 };
 
 export const mockVendors: Vendor[] = [
@@ -228,93 +222,73 @@ export const mockVendors: Vendor[] = [
     id: "vendor-aurora",
     name: "极光物流",
     remark: "USDT 通道，月结",
+    walletId: "vendor-wallet-aurora",
+    balanceMinor: 128_500_00,
     createdAt: "2026-03-15T08:00:00.000Z"
   },
   {
     id: "vendor-blue-river",
     name: "蓝河供应链",
     remark: null,
+    walletId: "vendor-wallet-blue-river",
+    balanceMinor: 0,
     createdAt: "2026-03-22T09:30:00.000Z"
   },
   {
     id: "vendor-cosmo",
     name: "Cosmo 渠道商",
     remark: "境外结算",
+    walletId: "vendor-wallet-cosmo",
+    balanceMinor: -50_000_00,
     createdAt: "2026-04-02T03:10:00.000Z"
   }
 ];
 
-export const mockVendorBills: Record<string, VendorBill[]> = {
+export const mockVendorTransactions: Record<string, VendorTransaction[]> = {
   "vendor-aurora": [
     {
-      id: "bill-aurora-1",
-      vendorId: "vendor-aurora",
-      direction: "payable",
+      id: "vendor-aurora-tx-1",
+      walletId: "vendor-wallet-aurora",
       amountMinor: 128_500_00,
-      currency: "CNY",
-      status: "pending",
-      dueDate: "2026-05-10",
-      remark: "4 月物流费",
+      direction: "in",
+      remark: "群指令 +1285 4月物流费",
       createdAt: "2026-04-20T02:30:00.000Z"
     },
     {
-      id: "bill-aurora-2",
-      vendorId: "vendor-aurora",
-      direction: "payable",
+      id: "vendor-aurora-tx-2",
+      walletId: "vendor-wallet-aurora",
       amountMinor: 64_300_00,
-      currency: "CNY",
-      status: "settled",
-      dueDate: "2026-04-05",
-      remark: "3 月尾款",
-      createdAt: "2026-03-28T05:00:00.000Z"
+      direction: "out",
+      remark: "←丙火支付宝 付款 643 CNY",
+      createdAt: "2026-04-15T05:10:00.000Z"
     }
   ],
   "vendor-blue-river": [
     {
-      id: "bill-blue-1",
-      vendorId: "vendor-blue-river",
-      direction: "receivable",
-      amountMinor: 188_000_00,
-      currency: "CNY",
-      status: "pending",
-      dueDate: "2026-05-15",
-      remark: "渠道返点",
-      createdAt: "2026-04-18T07:00:00.000Z"
+      id: "vendor-blue-river-tx-1",
+      walletId: "vendor-wallet-blue-river",
+      amountMinor: 25_900_00,
+      direction: "in",
+      remark: "群指令 +259",
+      createdAt: "2026-04-25T03:20:00.000Z"
     },
     {
-      id: "bill-blue-2",
-      vendorId: "vendor-blue-river",
-      direction: "payable",
+      id: "vendor-blue-river-tx-2",
+      walletId: "vendor-wallet-blue-river",
       amountMinor: 25_900_00,
-      currency: "CNY",
-      status: "pending",
-      dueDate: null,
-      remark: null,
-      createdAt: "2026-04-25T03:20:00.000Z"
+      direction: "out",
+      remark: "←TOM支付宝 付款 259 CNY",
+      createdAt: "2026-04-26T07:00:00.000Z"
     }
   ],
   "vendor-cosmo": [
     {
-      id: "bill-cosmo-1",
-      vendorId: "vendor-cosmo",
-      direction: "receivable",
-      amountMinor: 107_020_00,
-      currency: "CNY",
-      status: "pending",
-      dueDate: "2026-05-20",
-      remark: "Cosmo 季度返佣",
+      id: "vendor-cosmo-tx-1",
+      walletId: "vendor-wallet-cosmo",
+      amountMinor: 50_000_00,
+      direction: "out",
+      remark: "←FREEMAN币安 付款 70 USDT (跨币种)",
       createdAt: "2026-04-15T10:00:00.000Z"
-    },
-    {
-      id: "bill-cosmo-2",
-      vendorId: "vendor-cosmo",
-      direction: "receivable",
-      amountMinor: 32_000_00,
-      currency: "CNY",
-      status: "settled",
-      dueDate: "2026-04-10",
-      remark: null,
-      createdAt: "2026-03-30T06:30:00.000Z"
     }
   ]
 };

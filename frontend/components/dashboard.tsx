@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, RefreshCcw } from "lucide-react";
+import { RefreshCcw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { getDashboardData } from "@/lib/api";
 import { formatMoney, sumMinor } from "@/lib/money";
 import { sections } from "@/lib/navigation";
-import type { Currency, DashboardData, ModuleSection, WalletBalance, WalletType } from "@/types";
+import type { Currency, ModuleSection, WalletBalance, WalletType } from "@/types";
 
 const typeLabels: Record<WalletType, string> = {
   ASSET_RMB: "RMB 资产",
@@ -80,57 +80,6 @@ function ModuleCard({ section, wallets }: { section: ModuleSection; wallets: Wal
         </div>
       </CardContent>
     </Card>
-  );
-}
-
-function VendorSummary({ data }: { data: DashboardData }) {
-  const summary = data.vendorSummary;
-  const items = [
-    {
-      label: "应收",
-      value: summary.receivableMinor,
-      icon: ArrowDownLeft,
-      tone: "success" as const
-    },
-    {
-      label: "应付",
-      value: -summary.payableMinor,
-      icon: ArrowUpRight,
-      tone: "danger" as const
-    },
-    {
-      label: "净额",
-      value: summary.netMinor,
-      icon: ArrowLeftRight,
-      tone: "transfer" as const
-    }
-  ];
-
-  return (
-    <div className="grid gap-3 md:grid-cols-3">
-      {items.map((item) => {
-        const Icon = item.icon;
-
-        return (
-          <Card key={item.label}>
-            <CardContent className="flex items-center justify-between gap-4 p-5">
-              <div>
-                <div className="text-sm text-muted-foreground">{item.label}</div>
-                <div className="mt-1 tabular-nums text-2xl font-semibold">
-                  {formatMoney(item.value, summary.currency, {
-                    accounting: item.value < 0,
-                    signed: item.value > 0
-                  })}
-                </div>
-              </div>
-              <div className="flex h-10 w-10 items-center justify-center rounded-md bg-muted">
-                <Icon className="h-5 w-5" aria-hidden="true" />
-              </div>
-            </CardContent>
-          </Card>
-        );
-      })}
-    </div>
   );
 }
 
@@ -218,8 +167,6 @@ export function Dashboard() {
           </CardContent>
         </Card>
       </div>
-
-      {dashboardData ? <VendorSummary data={dashboardData} /> : null}
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {sections
