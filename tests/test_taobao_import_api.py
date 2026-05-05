@@ -177,6 +177,70 @@ def test_import_400_when_columns_too_few(client):
     assert response.status_code == 400
 
 
+def test_import_400_when_row_shop_name_mismatched(client):
+    """行内店铺名 != 上传 shop.name → 400 + 错误信息含两个店铺名 + 整体回滚。"""
+    shop = _shop_by_name("丙火电玩")
+    rows = [
+        [
+            "ROW_OK",
+            "PAY_OK",
+            _alipay_detail("PAY_OK", "10.00"),
+            "10.00",
+            "交易成功",
+            "2026-04-29 23:00:00",
+            "丙火电玩",
+            "2026-04-30 00:00:00",
+            "10.00",
+        ],
+        [
+            "ROW_BAD",
+            "PAY_BAD",
+            _alipay_detail("PAY_BAD", "20.00"),
+            "20.00",
+            "交易成功",
+            "2026-04-29 23:00:00",
+            "兔仔电玩",  # 不匹配上传的丙火电玩
+            "2026-04-30 00:00:00",
+            "20.00",
+        ],
+    ]
+    response = _post_import(client, shop.id, _build_xlsx(rows))
+    assert response.status_code == 400, response.text
+    detail = response.json()["detail"]
+    assert "兔仔电玩" in detail
+    assert "丙火电玩" in detail
+
+    # 整体回滚：第一行也不应入账
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("0.000000")
+
+    db = database.SessionLocal()
+    try:
+        orders = db.scalars(select(TaobaoOrder)).all()
+        assert orders == []
+    finally:
+        db.close()
+
+
+def test_import_400_when_row_shop_name_empty(client):
+    """行内店铺名为空 → 视为不匹配 → 400。"""
+    shop = _shop_by_name("丙火电玩")
+    rows = [
+        [
+            "ROW_EMPTY_SHOP",
+            "PAY_X",
+            _alipay_detail("PAY_X", "10.00"),
+            "10.00",
+            "交易成功",
+            "2026-04-29 23:00:00",
+            "",  # 空店铺名
+            "2026-04-30 00:00:00",
+            "10.00",
+        ],
+    ]
+    response = _post_import(client, shop.id, _build_xlsx(rows))
+    assert response.status_code == 400
+
+
 def test_import_400_when_file_empty(client):
     shop = _shop_by_name("丙火电玩")
     response = client.post(
@@ -197,8 +261,8 @@ def test_import_400_when_file_empty(client):
 # ---------------------------------------------------------------------------
 
 
-def test_new_alipay_received_a_shop_to_payment_wallet(client):
-    """A 类店铺（丙火电玩）alipay/received → payment_wallet。"""
+def test_new_alipay_received_a_shop_to_store_alipay_wallet(client):
+    """A 类店铺（丙火电玩）alipay/received → store_alipay_wallet（资产支付宝子钱包）。"""
     shop = _shop_by_name("丙火电玩")
     rows = [[
         "ORDER_A1",
@@ -207,7 +271,7 @@ def test_new_alipay_received_a_shop_to_payment_wallet(client):
         "100.00",
         "交易成功",
         "2026-04-29 23:57:43",
-        "丙火网络",
+        "丙火电玩",
         "2026-04-30 00:03:21",
         "100.00",
     ]]
@@ -216,14 +280,13 @@ def test_new_alipay_received_a_shop_to_payment_wallet(client):
     payload = response.json()
     assert payload["createdOrders"] == 1
 
-    assert _wallet_balance(shop.payment_wallet_id) == Decimal("100.000000")
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("100.000000")
     assert _wallet_balance(shop.unconfirmed_alipay_wallet_id) == Decimal("0.000000")
 
 
-def test_new_alipay_received_b_shop_to_bank_card(client):
-    """B 类店铺（兔仔电玩）alipay/received → bank_card（不进 payment_wallet,因为没有）。"""
+def test_new_alipay_received_b_shop_to_store_alipay_wallet(client):
+    """B 类店铺（兔仔电玩）alipay/received → store_alipay_wallet（兔仔电玩支付宝,type=TAOBAO）,不再进 bank_card。"""
     shop = _shop_by_name("兔仔电玩")
-    assert shop.payment_wallet_id is None
     rows = [[
         "ORDER_B1",
         "PAY_B1",
@@ -237,7 +300,8 @@ def test_new_alipay_received_b_shop_to_bank_card(client):
     ]]
     response = _post_import(client, shop.id, _build_xlsx(rows))
     assert response.status_code == 200, response.text
-    assert _wallet_balance(shop.bank_card_wallet_id) == Decimal("50.000000")
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("50.000000")
+    assert _wallet_balance(shop.bank_card_wallet_id) == Decimal("0.000000")
 
 
 def test_new_wechat_received_to_aggregator_frozen_with_mature_at(client):
@@ -251,7 +315,7 @@ def test_new_wechat_received_to_aggregator_frozen_with_mature_at(client):
         "200.00",
         "交易成功",
         "2026-04-29 23:57:43",
-        "丙火网络",
+        "丙火电玩",
         received_at_str,
         "200.00",
     ]]
@@ -296,14 +360,14 @@ def test_new_alipay_shipped_unconfirmed_to_unconfirmed_alipay(client):
         "27.50",
         "卖家已发货，等待买家确认",
         "2026-04-29 23:46:25",
-        "丙火网络",
+        "丙火电玩",
         "2026-04-30 00:10:45",
         "0.00",
     ]]
     response = _post_import(client, shop.id, _build_xlsx(rows))
     assert response.status_code == 200, response.text
     assert _wallet_balance(shop.unconfirmed_alipay_wallet_id) == Decimal("27.500000")
-    assert _wallet_balance(shop.payment_wallet_id) == Decimal("0.000000")
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("0.000000")
 
 
 def test_new_wechat_shipped_unconfirmed_to_unconfirmed_wechat(client):
@@ -316,7 +380,7 @@ def test_new_wechat_shipped_unconfirmed_to_unconfirmed_wechat(client):
         "33.00",
         "卖家已发货，等待买家确认",
         "2026-04-29 23:46:25",
-        "丙火网络",
+        "丙火电玩",
         "2026-04-30 00:10:45",
         "0.00",
     ]]
@@ -341,7 +405,7 @@ def test_skip_pending_pay_and_paid_unshipped(client):
             "0.00",
             "等待买家付款",
             "",
-            "丙火网络",
+            "丙火电玩",
             "",
             "0.00",
         ],
@@ -352,7 +416,7 @@ def test_skip_pending_pay_and_paid_unshipped(client):
             "10.00",
             "买家已付款,等待卖家发货",
             "2026-04-29 23:00:00",
-            "丙火网络",
+            "丙火电玩",
             "",
             "0.00",
         ],
@@ -363,7 +427,7 @@ def test_skip_pending_pay_and_paid_unshipped(client):
     assert payload["skippedUnpaidOrUnshipped"] == 2
     assert payload["createdOrders"] == 0
     assert _wallet_balance(shop.unconfirmed_alipay_wallet_id) == Decimal("0.000000")
-    assert _wallet_balance(shop.payment_wallet_id) == Decimal("0.000000")
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("0.000000")
 
     db = database.SessionLocal()
     try:
@@ -383,7 +447,7 @@ def test_skip_unknown_payment_method(client):
         "50.00",
         "交易成功",
         "2026-04-29 23:00:00",
-        "丙火网络",
+        "丙火电玩",
         "2026-04-30 00:00:00",
         "50.00",
     ]]
@@ -404,7 +468,7 @@ def test_new_closed_order_no_credit(client):
         "0.00",
         "交易关闭",
         "",
-        "丙火网络",
+        "丙火电玩",
         "",
         "0.00",
     ]]
@@ -412,7 +476,7 @@ def test_new_closed_order_no_credit(client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["createdOrders"] == 1
-    assert _wallet_balance(shop.payment_wallet_id) == Decimal("0.000000")
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("0.000000")
     assert _wallet_balance(shop.unconfirmed_alipay_wallet_id) == Decimal("0.000000")
 
     db = database.SessionLocal()
@@ -432,7 +496,7 @@ def test_new_closed_order_no_credit(client):
 
 
 def test_reconcile_shipped_unconfirmed_to_received(client):
-    """状态从 shipped_unconfirmed → received：撤老钱包(unconfirmed_alipay) + 入新钱包(payment_wallet)。"""
+    """状态从 shipped_unconfirmed → received：撤老钱包(unconfirmed_alipay) + 入新钱包(store_alipay_wallet)。"""
     shop = _shop_by_name("丙火电玩")
     # 第一次导入：shipped_unconfirmed
     rows1 = [[
@@ -442,14 +506,14 @@ def test_reconcile_shipped_unconfirmed_to_received(client):
         "100.00",
         "卖家已发货，等待买家确认",
         "2026-04-29 23:00:00",
-        "丙火网络",
+        "丙火电玩",
         "2026-04-30 00:00:00",
         "0.00",
     ]]
     response = _post_import(client, shop.id, _build_xlsx(rows1))
     assert response.status_code == 200
     assert _wallet_balance(shop.unconfirmed_alipay_wallet_id) == Decimal("100.000000")
-    assert _wallet_balance(shop.payment_wallet_id) == Decimal("0.000000")
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("0.000000")
 
     # 第二次导入：同一订单变成 received
     rows2 = [[
@@ -459,7 +523,7 @@ def test_reconcile_shipped_unconfirmed_to_received(client):
         "100.00",
         "交易成功",
         "2026-04-29 23:00:00",
-        "丙火网络",
+        "丙火电玩",
         "2026-04-30 00:00:00",
         "100.00",
     ]]
@@ -471,8 +535,8 @@ def test_reconcile_shipped_unconfirmed_to_received(client):
 
     # 老钱包（unconfirmed_alipay）应该被 debit 100,余额回 0
     assert _wallet_balance(shop.unconfirmed_alipay_wallet_id) == Decimal("0.000000")
-    # 新钱包（payment_wallet）应该 +100
-    assert _wallet_balance(shop.payment_wallet_id) == Decimal("100.000000")
+    # 新钱包（store_alipay_wallet）应该 +100
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("100.000000")
 
     # 老钱包应该有 1 in + 1 out = 2 笔流水
     assert _wallet_tx_count(shop.unconfirmed_alipay_wallet_id) == 2
@@ -491,7 +555,7 @@ def test_reconcile_shipped_unconfirmed_to_received(client):
         )
         status_value = order.status.value if hasattr(order.status, "value") else order.status
         assert status_value == TaobaoOrderStatus.RECEIVED.value
-        assert order.bookkeeping_wallet_id == shop.payment_wallet_id
+        assert order.bookkeeping_wallet_id == shop.store_alipay_wallet_id
     finally:
         db.close()
 
@@ -506,7 +570,7 @@ def test_reconcile_to_closed_no_new_credit(client):
         "80.00",
         "卖家已发货，等待买家确认",
         "2026-04-29 23:00:00",
-        "丙火网络",
+        "丙火电玩",
         "2026-04-30 00:00:00",
         "0.00",
     ]]
@@ -520,7 +584,7 @@ def test_reconcile_to_closed_no_new_credit(client):
         "80.00",
         "交易关闭",
         "2026-04-29 23:00:00",
-        "丙火网络",
+        "丙火电玩",
         "2026-04-30 00:00:00",
         "0.00",
     ]]
@@ -530,7 +594,7 @@ def test_reconcile_to_closed_no_new_credit(client):
     assert payload["closedReverted"] == 1
 
     assert _wallet_balance(shop.unconfirmed_alipay_wallet_id) == Decimal("0.000000")
-    assert _wallet_balance(shop.payment_wallet_id) == Decimal("0.000000")
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("0.000000")
 
     db = database.SessionLocal()
     try:
@@ -554,7 +618,7 @@ def test_reconcile_no_change_skipped(client):
         "55.00",
         "卖家已发货，等待买家确认",
         "2026-04-29 23:00:00",
-        "丙火网络",
+        "丙火电玩",
         "2026-04-30 00:00:00",
         "0.00",
     ]]
@@ -581,7 +645,7 @@ def test_reconcile_skip_jump_unconfirmed_to_received(client):
         "120.00",
         "卖家已发货，等待买家确认",
         "2026-04-29 23:00:00",
-        "丙火网络",
+        "丙火电玩",
         "2026-04-30 00:00:00",
         "0.00",
     ]]
@@ -596,7 +660,7 @@ def test_reconcile_skip_jump_unconfirmed_to_received(client):
         "120.00",
         "交易成功",
         "2026-04-29 23:00:00",
-        "丙火网络",
+        "丙火电玩",
         "2026-04-30 00:00:00",
         "120.00",
     ]]
@@ -628,7 +692,7 @@ def test_full_report_counts(client):
             "10.00",
             "交易成功",
             "2026-04-29 23:00:00",
-            "丙火网络",
+            "丙火电玩",
             "2026-04-30 00:00:00",
             "10.00",
         ],
@@ -640,7 +704,7 @@ def test_full_report_counts(client):
             "20.00",
             "卖家已发货，等待买家确认",
             "2026-04-29 23:00:00",
-            "丙火网络",
+            "丙火电玩",
             "2026-04-30 00:00:00",
             "0.00",
         ],
@@ -652,7 +716,7 @@ def test_full_report_counts(client):
             "0.00",
             "等待买家付款",
             "",
-            "丙火网络",
+            "丙火电玩",
             "",
             "0.00",
         ],
@@ -664,7 +728,7 @@ def test_full_report_counts(client):
             "30.00",
             "交易成功",
             "2026-04-29 23:00:00",
-            "丙火网络",
+            "丙火电玩",
             "2026-04-30 00:00:00",
             "30.00",
         ],
@@ -676,7 +740,7 @@ def test_full_report_counts(client):
             "0.00",
             "交易关闭",
             "",
-            "丙火网络",
+            "丙火电玩",
             "",
             "0.00",
         ],
@@ -707,7 +771,7 @@ def test_atomic_transaction_no_partial_on_db_error(client, monkeypatch):
             "10.00",
             "交易成功",
             "2026-04-29 23:00:00",
-            "丙火网络",
+            "丙火电玩",
             "2026-04-30 00:00:00",
             "10.00",
         ],
@@ -718,7 +782,7 @@ def test_atomic_transaction_no_partial_on_db_error(client, monkeypatch):
             "20.00",
             "交易成功",
             "2026-04-29 23:00:00",
-            "丙火网络",
+            "丙火电玩",
             "2026-04-30 00:00:00",
             "20.00",
         ],
@@ -753,7 +817,7 @@ def test_atomic_transaction_no_partial_on_db_error(client, monkeypatch):
     assert response.status_code == 500
 
     # 第一笔应该被 rollback,余额仍为 0
-    assert _wallet_balance(shop.payment_wallet_id) == Decimal("0.000000")
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("0.000000")
 
     db = database.SessionLocal()
     try:
@@ -805,7 +869,7 @@ def test_large_sample_distribution(client):
             str(amount),
             status,
             pay_time,
-            "丙火网络",
+            "丙火电玩",
             ship_time,
             confirm_amount,
         ])

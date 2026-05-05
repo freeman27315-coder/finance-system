@@ -29,8 +29,8 @@ class TaobaoShop(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
-    payment_wallet_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("wallets.id"), nullable=True
+    store_alipay_wallet_id: Mapped[int] = mapped_column(
+        ForeignKey("wallets.id"), nullable=False
     )
     unconfirmed_alipay_wallet_id: Mapped[int] = mapped_column(
         ForeignKey("wallets.id"), nullable=False
@@ -54,8 +54,8 @@ class TaobaoShop(Base):
         server_default=func.now(),
     )
 
-    payment_wallet: Mapped[Optional[Wallet]] = relationship(
-        foreign_keys=[payment_wallet_id]
+    store_alipay_wallet: Mapped[Wallet] = relationship(
+        foreign_keys=[store_alipay_wallet_id]
     )
     unconfirmed_alipay_wallet: Mapped[Wallet] = relationship(
         foreign_keys=[unconfirmed_alipay_wallet_id]

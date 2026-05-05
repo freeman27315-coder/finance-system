@@ -45,6 +45,7 @@ class TaobaoShopWalletOut(BaseModel):
     id: int
     name: str
     balance: Decimal
+    type: str
 
 
 class TaobaoShopOut(BaseModel):
@@ -52,7 +53,7 @@ class TaobaoShopOut(BaseModel):
 
     id: int
     name: str
-    payment_wallet: Optional[TaobaoShopWalletOut] = Field(default=None)
+    store_alipay_wallet: TaobaoShopWalletOut
     unconfirmed_alipay: TaobaoShopWalletOut
     unconfirmed_wechat: TaobaoShopWalletOut
     aggregator_frozen: TaobaoShopWalletOut
@@ -151,10 +152,12 @@ class WalletTransactionOut(BaseModel):
 
 
 def _serialize_wallet(wallet: Wallet) -> TaobaoShopWalletOut:
+    wallet_type = wallet.type.value if hasattr(wallet.type, "value") else str(wallet.type)
     return TaobaoShopWalletOut(
         id=wallet.id,
         name=wallet.name,
         balance=wallet.balance,
+        type=wallet_type,
     )
 
 
@@ -162,11 +165,7 @@ def serialize_shop(shop: TaobaoShop) -> TaobaoShopOut:
     return TaobaoShopOut(
         id=shop.id,
         name=shop.name,
-        payment_wallet=(
-            _serialize_wallet(shop.payment_wallet)
-            if shop.payment_wallet is not None
-            else None
-        ),
+        store_alipay_wallet=_serialize_wallet(shop.store_alipay_wallet),
         unconfirmed_alipay=_serialize_wallet(shop.unconfirmed_alipay_wallet),
         unconfirmed_wechat=_serialize_wallet(shop.unconfirmed_wechat_wallet),
         aggregator_frozen=_serialize_wallet(shop.aggregator_frozen_wallet),
@@ -238,17 +237,15 @@ def _get_shop_or_404(db: Session, shop_id: int) -> TaobaoShop:
 
 
 def _shop_wallet_ids(shop: TaobaoShop) -> set[int]:
-    """该 shop 关联的所有钱包 id（5 内部 + 可空的 payment_wallet）。"""
-    ids = {
+    """该 shop 关联的所有钱包 id（5 内部 + store_alipay_wallet,共 6 个）。"""
+    return {
         shop.unconfirmed_alipay_wallet_id,
         shop.unconfirmed_wechat_wallet_id,
         shop.aggregator_frozen_wallet_id,
         shop.aggregator_available_wallet_id,
         shop.bank_card_wallet_id,
+        shop.store_alipay_wallet_id,
     }
-    if shop.payment_wallet_id is not None:
-        ids.add(shop.payment_wallet_id)
-    return ids
 
 
 # ---------------------------------------------------------------------------
@@ -428,31 +425,26 @@ def withdraw_to_bank_card(
 
 
 @router.post(
-    "/shops/{shop_id}/transfer-to-asset",
+    "/shops/{shop_id}/transfer-to-store-alipay",
     response_model=FlowReportOut,
     response_model_by_alias=True,
 )
-def transfer_bank_card_to_asset(
+def transfer_bank_card_to_store_alipay(
     shop_id: int,
     request: TransferToAssetRequest,
     db: Session = Depends(get_db),
 ) -> FlowReportOut:
-    """银行卡 → 资产支付宝（仅丙火/小小，兔仔禁用）。
+    """银行卡 → 店铺支付宝（A/B 类店铺均可调）。
 
+    - 丙火/小小：bank_card debit + 资产支付宝子钱包 credit（实际金流）
+    - 兔仔：bank_card debit + 兔仔电玩支付宝（type=TAOBAO）credit（账面记账）
     - amount 不传时默认 = 银行卡当前余额
-    - 兔仔（payment_wallet_id 为空）→ 400
     - 银行卡余额不足或为 0 → 400
     """
     shop = _get_shop_or_404(db, shop_id)
-    if shop.payment_wallet_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="该店铺无关联资产支付宝",
-        )
 
     bank_card = shop.bank_card_wallet
-    payment_wallet = shop.payment_wallet
-    assert payment_wallet is not None  # payment_wallet_id 非空时一定有
+    store_alipay = shop.store_alipay_wallet
 
     if request.amount is not None:
         amount = Decimal(str(request.amount))
@@ -469,7 +461,7 @@ def transfer_bank_card_to_asset(
 
     try:
         debit(db, bank_card.id, amount, remark=remark)
-        credit(db, payment_wallet.id, amount, remark=remark)
+        credit(db, store_alipay.id, amount, remark=remark)
         db.commit()
     except ValueError as exc:
         db.rollback()
@@ -482,13 +474,13 @@ def transfer_bank_card_to_asset(
         raise
 
     db.refresh(bank_card)
-    db.refresh(payment_wallet)
+    db.refresh(store_alipay)
     return FlowReportOut(
         amount=amount,
         from_wallet_id=bank_card.id,
         from_wallet_balance=Decimal(bank_card.balance),
-        to_wallet_id=payment_wallet.id,
-        to_wallet_balance=Decimal(payment_wallet.balance),
+        to_wallet_id=store_alipay.id,
+        to_wallet_balance=Decimal(store_alipay.balance),
         remark=remark,
     )
 
