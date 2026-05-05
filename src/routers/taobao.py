@@ -19,9 +19,11 @@ from src.models.taobao import (
     TaobaoShop,
 )
 from src.models.wallet import (
+    Currency,
     TransactionDirection,
     Wallet,
     WalletTransaction,
+    WalletType,
     credit,
     debit,
 )
@@ -101,6 +103,7 @@ class WithdrawRequest(BaseModel):
 
 
 class TransferToAssetRequest(BaseModel):
+    target_wallet_id: Optional[int] = Field(None, description="可选目标钱包 id；不传则用 shop.store_alipay_wallet 作为默认目标")
     amount: Optional[Decimal] = Field(None, gt=0)
     remark: Optional[str] = Field(None, max_length=500)
 
@@ -434,18 +437,90 @@ def transfer_bank_card_to_store_alipay(
     request: TransferToAssetRequest,
     db: Session = Depends(get_db),
 ) -> FlowReportOut:
-    """银行卡 → 店铺支付宝（A/B 类店铺均可调）。
+    """银行卡 → 目标支付宝（实际金流：银行卡 ↔ 支付宝绑定，钱不经店铺支付宝中转）。
 
-    - 丙火/小小：bank_card debit + 资产支付宝子钱包 credit（实际金流）
-    - 兔仔：bank_card debit + 兔仔电玩支付宝（type=TAOBAO）credit（账面记账）
-    - amount 不传时默认 = 银行卡当前余额
-    - 银行卡余额不足或为 0 → 400
+    body 行为：
+    - target_wallet_id 不传 → 默认目标 = shop.store_alipay_wallet（向后兼容）
+    - target_wallet_id 传 → 校验合法性后用指定目标
+
+    校验：
+    - shop / wallet 存在性
+    - amount > 0；银行卡余额足；
+    - 兔仔（store_alipay_wallet.type==TAOBAO）：传非自身 store_alipay_wallet 的 target → 400
+    - 丙火/小小（store_alipay_wallet.type==ASSET_RMB）：target 必须是 type=ASSET_RMB+currency=CNY+父钱包 name="支付宝钱包" 子钱包
+    - target 不存在 → 404；已软删 → 400；==银行卡本身 → 400；is_group → 400
     """
     shop = _get_shop_or_404(db, shop_id)
 
     bank_card = shop.bank_card_wallet
     store_alipay = shop.store_alipay_wallet
 
+    # 1. 解析目标钱包：传了 → 校验后取，没传 → 用 shop.store_alipay_wallet
+    if request.target_wallet_id is not None:
+        target_wallet = db.get(Wallet, request.target_wallet_id)
+        if target_wallet is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="目标钱包不存在",
+            )
+        if target_wallet.deleted_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="目标钱包已删除",
+            )
+        if target_wallet.id == bank_card.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="不能转给自己",
+            )
+        if target_wallet.is_group:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="分组钱包不可作为目标",
+            )
+
+        # 兔仔约束：store_alipay_wallet.type==TAOBAO 时只能转回自身 store_alipay_wallet
+        store_type = (
+            store_alipay.type.value
+            if isinstance(store_alipay.type, WalletType)
+            else store_alipay.type
+        )
+        if store_type == WalletType.TAOBAO.value:
+            if target_wallet.id != store_alipay.id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="兔仔店铺只能转回自身店铺支付宝",
+                )
+        elif store_type == WalletType.ASSET_RMB.value:
+            # 丙火/小小约束：target 必须是 type=ASSET_RMB+currency=CNY+父钱包 name="支付宝钱包"
+            target_type = (
+                target_wallet.type.value
+                if isinstance(target_wallet.type, WalletType)
+                else target_wallet.type
+            )
+            target_currency = (
+                target_wallet.currency.value
+                if isinstance(target_wallet.currency, Currency)
+                else target_wallet.currency
+            )
+            parent_ok = False
+            if target_wallet.parent_id is not None:
+                parent = db.get(Wallet, target_wallet.parent_id)
+                if parent is not None and parent.name == "支付宝钱包":
+                    parent_ok = True
+            if (
+                target_type != WalletType.ASSET_RMB.value
+                or target_currency != Currency.CNY.value
+                or not parent_ok
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="目标必须是资产支付宝下的子钱包",
+                )
+    else:
+        target_wallet = store_alipay
+
+    # 2. 金额
     if request.amount is not None:
         amount = Decimal(str(request.amount))
     else:
@@ -457,11 +532,12 @@ def transfer_bank_card_to_store_alipay(
             detail="可转金额必须大于 0",
         )
 
-    remark = request.remark or "提现"
+    # 3. 备注：默认带目标名以便审计；CEO 可覆盖
+    remark = request.remark or f"提现 → {target_wallet.name}"
 
     try:
         debit(db, bank_card.id, amount, remark=remark)
-        credit(db, store_alipay.id, amount, remark=remark)
+        credit(db, target_wallet.id, amount, remark=remark)
         db.commit()
     except ValueError as exc:
         db.rollback()
@@ -474,13 +550,13 @@ def transfer_bank_card_to_store_alipay(
         raise
 
     db.refresh(bank_card)
-    db.refresh(store_alipay)
+    db.refresh(target_wallet)
     return FlowReportOut(
         amount=amount,
         from_wallet_id=bank_card.id,
         from_wallet_balance=Decimal(bank_card.balance),
-        to_wallet_id=store_alipay.id,
-        to_wallet_balance=Decimal(store_alipay.balance),
+        to_wallet_id=target_wallet.id,
+        to_wallet_balance=Decimal(target_wallet.balance),
         remark=remark,
     )
 
