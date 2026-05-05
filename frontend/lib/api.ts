@@ -4,8 +4,9 @@ import {
   mockTaiwanSummary,
   mockTaiwanTransactions,
   mockTaiwanWallets,
-  mockTaobaoAccounts,
-  mockTaobaoTransactions,
+  mockTaobaoOrders,
+  mockTaobaoShops,
+  mockTaobaoWalletTransactions,
   mockVendors,
   mockVendorTransactions,
   mockXboxAccounts,
@@ -20,9 +21,15 @@ import type {
   TaiwanSummary,
   TaiwanTransaction,
   TaiwanWallet,
-  TaobaoAccount,
-  TaobaoTransaction,
-  TaobaoWalletScope,
+  TaobaoFlowReport,
+  TaobaoImportReport,
+  TaobaoOrder,
+  TaobaoOrderPaymentMethod,
+  TaobaoOrderStatus,
+  TaobaoReleaseReport,
+  TaobaoShop,
+  TaobaoShopWallet,
+  TaobaoWalletTransaction,
   Vendor,
   VendorTransaction,
   WalletBalance,
@@ -458,133 +465,333 @@ export async function getXboxSummary(): Promise<XboxSummary> {
   }
 }
 
-type TaobaoAccountResponse = {
+// ---------------------------------------------------------------------------
+// Taobao（PR #65/#67/#69）—— 3 店铺 × 5 钱包 + paymentWallet 可空 + Excel 导入
+// ---------------------------------------------------------------------------
+
+type TaobaoShopWalletResponse = {
   id: string | number;
   name: string;
-  unsettled_wallet_id?: string | number;
-  unsettledWalletId?: string | number;
-  settled_wallet_id?: string | number;
-  settledWalletId?: string | number;
-  unsettled_balance?: string | number;
-  unsettledBalance?: string | number;
-  settled_balance?: string | number;
-  settledBalance?: string | number;
-  remark?: string | null;
-  created_at?: string;
-  createdAt?: string;
+  balance: string | number;
 };
 
-type TaobaoTransactionResponse = {
+type TaobaoShopResponse = {
   id: string | number;
-  wallet_id?: string | number;
+  name: string;
+  paymentWallet?: TaobaoShopWalletResponse | null;
+  payment_wallet?: TaobaoShopWalletResponse | null;
+  unconfirmedAlipay?: TaobaoShopWalletResponse;
+  unconfirmed_alipay?: TaobaoShopWalletResponse;
+  unconfirmedWechat?: TaobaoShopWalletResponse;
+  unconfirmed_wechat?: TaobaoShopWalletResponse;
+  aggregatorFrozen?: TaobaoShopWalletResponse;
+  aggregator_frozen?: TaobaoShopWalletResponse;
+  aggregatorAvailable?: TaobaoShopWalletResponse;
+  aggregator_available?: TaobaoShopWalletResponse;
+  bankCard?: TaobaoShopWalletResponse;
+  bank_card?: TaobaoShopWalletResponse;
+  remark?: string | null;
+  createdAt?: string;
+  created_at?: string;
+};
+
+type TaobaoOrderResponse = {
+  id: string | number;
+  orderNumber?: string;
+  order_number?: string;
+  paymentMethod?: string;
+  payment_method?: string;
+  amount: string | number;
+  status: string;
+  bookkeepingWalletId?: string | number | null;
+  bookkeeping_wallet_id?: string | number | null;
+  bookkeepingTxId?: string | number | null;
+  bookkeeping_tx_id?: string | number | null;
+  shippedAt?: string | null;
+  shipped_at?: string | null;
+  receivedAt?: string | null;
+  received_at?: string | null;
+  lastSyncedAt?: string;
+  last_synced_at?: string;
+  recordedAt?: string;
+  recorded_at?: string;
+};
+
+type TaobaoWalletTransactionResponse = {
+  id: string | number;
   walletId?: string | number;
-  wallet_scope?: string;
-  walletScope?: string;
+  wallet_id?: string | number;
   amount: string | number;
   direction: "in" | "out";
   remark?: string | null;
-  created_at?: string;
   createdAt?: string;
+  created_at?: string;
+  matureAt?: string | null;
+  mature_at?: string | null;
 };
 
-function normalizeTaobaoAccount(account: TaobaoAccountResponse): TaobaoAccount {
+type TaobaoImportReportResponse = {
+  shopName?: string;
+  shop_name?: string;
+  totalRowsParsed?: number;
+  total_rows_parsed?: number;
+  createdOrders?: number;
+  created_orders?: number;
+  statusChangedOrders?: number;
+  status_changed_orders?: number;
+  closedReverted?: number;
+  closed_reverted?: number;
+  skippedNoChange?: number;
+  skipped_no_change?: number;
+  skippedUnpaidOrUnshipped?: number;
+  skipped_unpaid_or_unshipped?: number;
+  skippedUnknownPayment?: number;
+  skipped_unknown_payment?: number;
+  errors?: string[];
+};
+
+type TaobaoReleaseReportResponse = {
+  maturedCount?: number;
+  matured_count?: number;
+  maturedAmount?: string | number;
+  matured_amount?: string | number;
+  frozenBalanceAfter?: string | number;
+  frozen_balance_after?: string | number;
+  availableBalanceAfter?: string | number;
+  available_balance_after?: string | number;
+};
+
+type TaobaoFlowReportResponse = {
+  amount: string | number;
+  fromWalletId?: string | number;
+  from_wallet_id?: string | number;
+  fromWalletBalance?: string | number;
+  from_wallet_balance?: string | number;
+  toWalletId?: string | number;
+  to_wallet_id?: string | number;
+  toWalletBalance?: string | number;
+  to_wallet_balance?: string | number;
+  remark: string;
+};
+
+function normalizeTaobaoShopWallet(wallet: TaobaoShopWalletResponse): TaobaoShopWallet {
   return {
-    id: String(account.id),
-    name: account.name,
-    unsettledWalletId: String(account.unsettled_wallet_id ?? account.unsettledWalletId ?? ""),
-    settledWalletId: String(account.settled_wallet_id ?? account.settledWalletId ?? ""),
-    unsettledBalanceMinor: decimalToMinor(account.unsettled_balance ?? account.unsettledBalance ?? 0, "CNY"),
-    settledBalanceMinor: decimalToMinor(account.settled_balance ?? account.settledBalance ?? 0, "CNY"),
-    remark: account.remark ?? null,
-    createdAt: account.created_at ?? account.createdAt ?? ""
+    id: String(wallet.id),
+    name: wallet.name,
+    balanceMinor: decimalToMinor(wallet.balance, "CNY")
   };
 }
 
-function normalizeTaobaoTransaction(transaction: TaobaoTransactionResponse): TaobaoTransaction {
-  const scopeRaw = transaction.wallet_scope ?? transaction.walletScope ?? "unsettled";
-  const walletScope: TaobaoWalletScope = scopeRaw === "settled" ? "settled" : "unsettled";
+function normalizeTaobaoShop(shop: TaobaoShopResponse): TaobaoShop {
+  const paymentWallet = shop.paymentWallet ?? shop.payment_wallet ?? null;
+  const unconfirmedAlipay = shop.unconfirmedAlipay ?? shop.unconfirmed_alipay;
+  const unconfirmedWechat = shop.unconfirmedWechat ?? shop.unconfirmed_wechat;
+  const aggregatorFrozen = shop.aggregatorFrozen ?? shop.aggregator_frozen;
+  const aggregatorAvailable = shop.aggregatorAvailable ?? shop.aggregator_available;
+  const bankCard = shop.bankCard ?? shop.bank_card;
+
+  if (!unconfirmedAlipay || !unconfirmedWechat || !aggregatorFrozen || !aggregatorAvailable || !bankCard) {
+    throw new Error("淘宝店铺响应字段不完整");
+  }
+
   return {
-    id: String(transaction.id),
-    walletId: String(transaction.wallet_id ?? transaction.walletId ?? ""),
-    walletScope,
-    amountMinor: decimalToMinor(transaction.amount, "CNY"),
-    direction: transaction.direction,
-    remark: transaction.remark ?? null,
-    createdAt: transaction.created_at ?? transaction.createdAt ?? ""
+    id: String(shop.id),
+    name: shop.name,
+    paymentWallet: paymentWallet ? normalizeTaobaoShopWallet(paymentWallet) : null,
+    unconfirmedAlipay: normalizeTaobaoShopWallet(unconfirmedAlipay),
+    unconfirmedWechat: normalizeTaobaoShopWallet(unconfirmedWechat),
+    aggregatorFrozen: normalizeTaobaoShopWallet(aggregatorFrozen),
+    aggregatorAvailable: normalizeTaobaoShopWallet(aggregatorAvailable),
+    bankCard: normalizeTaobaoShopWallet(bankCard),
+    remark: shop.remark ?? null,
+    createdAt: shop.createdAt ?? shop.created_at ?? ""
   };
 }
 
-export async function getTaobaoAccounts(): Promise<TaobaoAccount[]> {
+function normalizeTaobaoOrder(order: TaobaoOrderResponse): TaobaoOrder {
+  const paymentMethod = (order.paymentMethod ?? order.payment_method ?? "alipay") as TaobaoOrderPaymentMethod;
+  const status = order.status as TaobaoOrderStatus;
+  const walletId = order.bookkeepingWalletId ?? order.bookkeeping_wallet_id;
+  const txId = order.bookkeepingTxId ?? order.bookkeeping_tx_id;
+  return {
+    id: String(order.id),
+    orderNumber: order.orderNumber ?? order.order_number ?? "",
+    paymentMethod,
+    amountMinor: decimalToMinor(order.amount, "CNY"),
+    status,
+    bookkeepingWalletId: walletId == null ? null : String(walletId),
+    bookkeepingTxId: txId == null ? null : String(txId),
+    shippedAt: order.shippedAt ?? order.shipped_at ?? null,
+    receivedAt: order.receivedAt ?? order.received_at ?? null,
+    lastSyncedAt: order.lastSyncedAt ?? order.last_synced_at ?? "",
+    recordedAt: order.recordedAt ?? order.recorded_at ?? ""
+  };
+}
+
+function normalizeTaobaoWalletTransaction(tx: TaobaoWalletTransactionResponse): TaobaoWalletTransaction {
+  return {
+    id: String(tx.id),
+    walletId: String(tx.walletId ?? tx.wallet_id ?? ""),
+    amountMinor: decimalToMinor(tx.amount, "CNY"),
+    direction: tx.direction,
+    remark: tx.remark ?? null,
+    createdAt: tx.createdAt ?? tx.created_at ?? "",
+    matureAt: tx.matureAt ?? tx.mature_at ?? null
+  };
+}
+
+function normalizeImportReport(data: TaobaoImportReportResponse): TaobaoImportReport {
+  return {
+    shopName: data.shopName ?? data.shop_name ?? "",
+    totalRowsParsed: Number(data.totalRowsParsed ?? data.total_rows_parsed ?? 0),
+    createdOrders: Number(data.createdOrders ?? data.created_orders ?? 0),
+    statusChangedOrders: Number(data.statusChangedOrders ?? data.status_changed_orders ?? 0),
+    closedReverted: Number(data.closedReverted ?? data.closed_reverted ?? 0),
+    skippedNoChange: Number(data.skippedNoChange ?? data.skipped_no_change ?? 0),
+    skippedUnpaidOrUnshipped: Number(data.skippedUnpaidOrUnshipped ?? data.skipped_unpaid_or_unshipped ?? 0),
+    skippedUnknownPayment: Number(data.skippedUnknownPayment ?? data.skipped_unknown_payment ?? 0),
+    errors: data.errors ?? []
+  };
+}
+
+function normalizeReleaseReport(data: TaobaoReleaseReportResponse): TaobaoReleaseReport {
+  return {
+    maturedCount: Number(data.maturedCount ?? data.matured_count ?? 0),
+    maturedAmountMinor: decimalToMinor(data.maturedAmount ?? data.matured_amount ?? 0, "CNY"),
+    frozenBalanceAfterMinor: decimalToMinor(data.frozenBalanceAfter ?? data.frozen_balance_after ?? 0, "CNY"),
+    availableBalanceAfterMinor: decimalToMinor(data.availableBalanceAfter ?? data.available_balance_after ?? 0, "CNY")
+  };
+}
+
+function normalizeFlowReport(data: TaobaoFlowReportResponse): TaobaoFlowReport {
+  return {
+    amountMinor: decimalToMinor(data.amount, "CNY"),
+    fromWalletId: String(data.fromWalletId ?? data.from_wallet_id ?? ""),
+    fromWalletBalanceMinor: decimalToMinor(data.fromWalletBalance ?? data.from_wallet_balance ?? 0, "CNY"),
+    toWalletId: String(data.toWalletId ?? data.to_wallet_id ?? ""),
+    toWalletBalanceMinor: decimalToMinor(data.toWalletBalance ?? data.to_wallet_balance ?? 0, "CNY"),
+    remark: data.remark
+  };
+}
+
+export async function getTaobaoShops(): Promise<TaobaoShop[]> {
   try {
-    const data = await fetchJson<TaobaoAccountResponse[]>("/api/taobao/accounts");
-    return data.map(normalizeTaobaoAccount);
+    const data = await fetchJson<TaobaoShopResponse[]>("/api/taobao/shops");
+    return data.map(normalizeTaobaoShop);
   } catch {
-    return mockTaobaoAccounts;
+    return mockTaobaoShops;
   }
 }
 
-export async function createTaobaoAccount(payload: { name: string; remark?: string }): Promise<TaobaoAccount> {
-  const body: Record<string, unknown> = { name: payload.name };
-  if (payload.remark) {
-    body.remark = payload.remark;
+export async function importTaobaoExcel(shopId: string, file: File): Promise<TaobaoImportReport> {
+  const form = new FormData();
+  form.append("file", file);
+
+  const response = await fetch(`/api/taobao/shops/${shopId}/import`, {
+    method: "POST",
+    headers: {
+      accept: "application/json"
+    },
+    body: form
+  });
+
+  const text = await response.text();
+
+  if (!response.ok) {
+    let message = `/api/taobao/shops/${shopId}/import returned ${response.status}`;
+    if (text) {
+      try {
+        const parsed = JSON.parse(text) as { detail?: string; message?: string; error?: string };
+        message = parsed.detail ?? parsed.message ?? parsed.error ?? text;
+      } catch {
+        message = text;
+      }
+    }
+    throw new Error(message);
   }
-  const data = (await postJson("/api/taobao/accounts", body)) as TaobaoAccountResponse;
-  return normalizeTaobaoAccount(data);
+
+  const data = (text ? JSON.parse(text) : {}) as TaobaoImportReportResponse;
+  return normalizeImportReport(data);
 }
 
-export async function creditTaobaoUnsettled(
-  accountId: string,
+export async function releaseAggregator(shopId: string): Promise<TaobaoReleaseReport> {
+  const data = (await postJson(
+    `/api/taobao/shops/${shopId}/aggregator/release`,
+    {}
+  )) as TaobaoReleaseReportResponse;
+  return normalizeReleaseReport(data);
+}
+
+export async function withdrawTaobao(
+  shopId: string,
   payload: { amount: string; remark?: string }
-): Promise<TaobaoTransaction> {
+): Promise<TaobaoFlowReport> {
   const body: Record<string, unknown> = { amount: payload.amount };
   if (payload.remark) {
     body.remark = payload.remark;
   }
   const data = (await postJson(
-    `/api/taobao/accounts/${accountId}/unsettled/credit`,
+    `/api/taobao/shops/${shopId}/withdraw`,
     body
-  )) as TaobaoTransactionResponse;
-  return normalizeTaobaoTransaction(data);
+  )) as TaobaoFlowReportResponse;
+  return normalizeFlowReport(data);
 }
 
-export async function creditTaobaoSettled(
-  accountId: string,
-  payload: { amount: string; remark?: string }
-): Promise<TaobaoTransaction> {
-  const body: Record<string, unknown> = { amount: payload.amount };
+export async function transferTaobaoToAsset(
+  shopId: string,
+  payload: { amount?: string; remark?: string }
+): Promise<TaobaoFlowReport> {
+  const body: Record<string, unknown> = {};
+  if (payload.amount) {
+    body.amount = payload.amount;
+  }
   if (payload.remark) {
     body.remark = payload.remark;
   }
   const data = (await postJson(
-    `/api/taobao/accounts/${accountId}/settled/credit`,
+    `/api/taobao/shops/${shopId}/transfer-to-asset`,
     body
-  )) as TaobaoTransactionResponse;
-  return normalizeTaobaoTransaction(data);
+  )) as TaobaoFlowReportResponse;
+  return normalizeFlowReport(data);
 }
 
-export async function debitTaobaoSettled(
-  accountId: string,
-  payload: { amount: string; remark?: string }
-): Promise<TaobaoTransaction> {
-  const body: Record<string, unknown> = { amount: payload.amount };
-  if (payload.remark) {
-    body.remark = payload.remark;
+export async function getTaobaoOrders(
+  shopId: string,
+  filters?: {
+    status?: TaobaoOrderStatus;
+    paymentMethod?: TaobaoOrderPaymentMethod;
+    limit?: number;
+    offset?: number;
   }
-  const data = (await postJson(
-    `/api/taobao/accounts/${accountId}/settled/debit`,
-    body
-  )) as TaobaoTransactionResponse;
-  return normalizeTaobaoTransaction(data);
-}
-
-export async function getTaobaoTransactions(accountId: string): Promise<TaobaoTransaction[]> {
+): Promise<TaobaoOrder[]> {
   try {
-    const data = await fetchJson<TaobaoTransactionResponse[]>(
-      `/api/taobao/accounts/${accountId}/transactions`
+    const params = new URLSearchParams();
+    if (filters?.status) params.set("status", filters.status);
+    if (filters?.paymentMethod) params.set("payment_method", filters.paymentMethod);
+    if (filters?.limit !== undefined) params.set("limit", String(filters.limit));
+    if (filters?.offset !== undefined) params.set("offset", String(filters.offset));
+    const query = params.toString();
+    const path = query
+      ? `/api/taobao/shops/${shopId}/orders?${query}`
+      : `/api/taobao/shops/${shopId}/orders`;
+    const data = await fetchJson<TaobaoOrderResponse[]>(path);
+    return data.map(normalizeTaobaoOrder);
+  } catch {
+    return mockTaobaoOrders[shopId] ?? [];
+  }
+}
+
+export async function getTaobaoWalletTransactions(
+  shopId: string,
+  walletId: string
+): Promise<TaobaoWalletTransaction[]> {
+  try {
+    const data = await fetchJson<TaobaoWalletTransactionResponse[]>(
+      `/api/taobao/shops/${shopId}/wallets/${walletId}/transactions`
     );
-    return data.map(normalizeTaobaoTransaction);
+    return data.map(normalizeTaobaoWalletTransaction);
   } catch {
-    return mockTaobaoTransactions[accountId] ?? [];
+    return mockTaobaoWalletTransactions[walletId] ?? [];
   }
 }
 

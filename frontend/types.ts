@@ -107,27 +107,86 @@ export type TaiwanSummary = {
   walletCount: number;
 };
 
-export type TaobaoWalletScope = "unsettled" | "settled";
+// ---------------------------------------------------------------------------
+// Taobao（PR #65/#67/#69 后的新结构：3 店铺 × 5 钱包 + paymentWallet 可空）
+// ---------------------------------------------------------------------------
 
-export type TaobaoAccount = {
+export type TaobaoShopWallet = {
   id: string;
   name: string;
-  unsettledWalletId: string;
-  settledWalletId: string;
-  unsettledBalanceMinor: number;
-  settledBalanceMinor: number;
+  balanceMinor: number;
+};
+
+export type TaobaoShop = {
+  id: string;
+  name: string;
+  paymentWallet: TaobaoShopWallet | null;
+  unconfirmedAlipay: TaobaoShopWallet;
+  unconfirmedWechat: TaobaoShopWallet;
+  aggregatorFrozen: TaobaoShopWallet;
+  aggregatorAvailable: TaobaoShopWallet;
+  bankCard: TaobaoShopWallet;
   remark: string | null;
   createdAt: string;
 };
 
-export type TaobaoTransaction = {
+export type TaobaoOrderPaymentMethod = "alipay" | "wechat";
+
+export type TaobaoOrderStatus =
+  | "shipped_unconfirmed"
+  | "received"
+  | "closed";
+
+export type TaobaoOrder = {
+  id: string;
+  orderNumber: string;
+  paymentMethod: TaobaoOrderPaymentMethod;
+  amountMinor: number;
+  status: TaobaoOrderStatus;
+  bookkeepingWalletId: string | null;
+  bookkeepingTxId: string | null;
+  shippedAt: string | null;
+  receivedAt: string | null;
+  lastSyncedAt: string;
+  recordedAt: string;
+};
+
+export type TaobaoWalletTransaction = {
   id: string;
   walletId: string;
-  walletScope: TaobaoWalletScope;
   amountMinor: number;
   direction: "in" | "out";
   remark: string | null;
   createdAt: string;
+  matureAt: string | null;
+};
+
+export type TaobaoImportReport = {
+  shopName: string;
+  totalRowsParsed: number;
+  createdOrders: number;
+  statusChangedOrders: number;
+  closedReverted: number;
+  skippedNoChange: number;
+  skippedUnpaidOrUnshipped: number;
+  skippedUnknownPayment: number;
+  errors: string[];
+};
+
+export type TaobaoReleaseReport = {
+  maturedCount: number;
+  maturedAmountMinor: number;
+  frozenBalanceAfterMinor: number;
+  availableBalanceAfterMinor: number;
+};
+
+export type TaobaoFlowReport = {
+  amountMinor: number;
+  fromWalletId: string;
+  fromWalletBalanceMinor: number;
+  toWalletId: string;
+  toWalletBalanceMinor: number;
+  remark: string;
 };
 
 export type ModuleSection = {
