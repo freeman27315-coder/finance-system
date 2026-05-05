@@ -138,8 +138,13 @@ def credit(
     wallet_id: int,
     amount: Decimal | int | float | str,
     remark: str | None = None,
+    mature_at: Optional[datetime] = None,
 ) -> WalletTransaction:
-    """Increase a wallet balance and create an inbound transaction record."""
+    """Increase a wallet balance and create an inbound transaction record.
+
+    可选 ``mature_at`` 表示该笔入账的"成熟时间"（例如聚合支付冻结期满
+    可提现的时间点），仅写入 ``WalletTransaction.mature_at``，不影响余额逻辑。
+    """
     value = _to_decimal(amount)
     wallet = get_wallet(session, wallet_id)
     wallet.balance = Decimal(wallet.balance) + value
@@ -149,6 +154,7 @@ def credit(
         amount=value,
         direction=TransactionDirection.IN,
         remark=remark,
+        mature_at=mature_at,
     )
     session.add(transaction)
     session.flush()
