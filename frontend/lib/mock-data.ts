@@ -4,8 +4,9 @@ import type {
   TaiwanSummary,
   TaiwanTransaction,
   TaiwanWallet,
-  TaobaoAccount,
-  TaobaoTransaction,
+  TaobaoOrder,
+  TaobaoShop,
+  TaobaoWalletTransaction,
   Vendor,
   VendorTransaction,
   WalletBalance,
@@ -400,77 +401,101 @@ export const mockXboxSummary: XboxSummary = {
   }
 };
 
-export const mockTaobaoAccounts: TaobaoAccount[] = [
+// ---------------------------------------------------------------------------
+// Taobao mock（API 失败时回退）—— 3 店铺 × 5 钱包 + 兔仔无 paymentWallet
+// ---------------------------------------------------------------------------
+
+export const mockTaobaoShops: TaobaoShop[] = [
   {
-    id: "taobao-acc-1",
-    name: "丙火淘宝主号",
-    unsettledWalletId: "taobao-w-1u",
-    settledWalletId: "taobao-w-1s",
-    unsettledBalanceMinor: 58_400_00,
-    settledBalanceMinor: 32_100_00,
-    remark: "主营店铺",
-    createdAt: "2026-03-18T08:00:00.000Z"
+    id: "1",
+    name: "丙火电玩",
+    paymentWallet: { id: "3", name: "丙火网络支付宝", balanceMinor: 0 },
+    unconfirmedAlipay: { id: "12", name: "丙火电玩 支付宝在途", balanceMinor: 18_400_00 },
+    unconfirmedWechat: { id: "13", name: "丙火电玩 微信在途", balanceMinor: 6_280_00 },
+    aggregatorFrozen: { id: "14", name: "丙火电玩 聚合支付·冻结中", balanceMinor: 42_500_00 },
+    aggregatorAvailable: { id: "15", name: "丙火电玩 聚合支付·可提现", balanceMinor: 12_350_00 },
+    bankCard: { id: "16", name: "丙火电玩 银行卡", balanceMinor: 80_000_00 },
+    remark: null,
+    createdAt: "2026-05-05T11:17:14"
   },
   {
-    id: "taobao-acc-2",
-    name: "TOM淘宝小号",
-    unsettledWalletId: "taobao-w-2u",
-    settledWalletId: "taobao-w-2s",
-    unsettledBalanceMinor: 35_000_00,
-    settledBalanceMinor: 9_150_00,
+    id: "2",
+    name: "兔仔电玩",
+    paymentWallet: null,
+    unconfirmedAlipay: { id: "17", name: "兔仔电玩 支付宝在途", balanceMinor: 5_200_00 },
+    unconfirmedWechat: { id: "18", name: "兔仔电玩 微信在途", balanceMinor: 1_800_00 },
+    aggregatorFrozen: { id: "19", name: "兔仔电玩 聚合支付·冻结中", balanceMinor: 22_000_00 },
+    aggregatorAvailable: { id: "20", name: "兔仔电玩 聚合支付·可提现", balanceMinor: 4_500_00 },
+    bankCard: { id: "21", name: "兔仔电玩 银行卡", balanceMinor: 30_000_00 },
     remark: null,
-    createdAt: "2026-04-05T05:00:00.000Z"
+    createdAt: "2026-05-05T11:17:14"
+  },
+  {
+    id: "3",
+    name: "小小电玩",
+    paymentWallet: { id: "11", name: "小小电玩支付宝", balanceMinor: 0 },
+    unconfirmedAlipay: { id: "22", name: "小小电玩 支付宝在途", balanceMinor: 9_300_00 },
+    unconfirmedWechat: { id: "23", name: "小小电玩 微信在途", balanceMinor: 3_500_00 },
+    aggregatorFrozen: { id: "24", name: "小小电玩 聚合支付·冻结中", balanceMinor: 28_000_00 },
+    aggregatorAvailable: { id: "25", name: "小小电玩 聚合支付·可提现", balanceMinor: 7_200_00 },
+    bankCard: { id: "26", name: "小小电玩 银行卡", balanceMinor: 50_000_00 },
+    remark: null,
+    createdAt: "2026-05-05T11:17:14"
   }
 ];
 
-export const mockTaobaoTransactions: Record<string, TaobaoTransaction[]> = {
-  "taobao-acc-1": [
+export const mockTaobaoOrders: Record<string, TaobaoOrder[]> = {
+  "1": [
     {
-      id: "taobao-tx-1-1",
-      walletId: "taobao-w-1u",
-      walletScope: "unsettled",
-      amountMinor: 58_400_00,
-      direction: "in",
-      remark: "本周订单未结",
-      createdAt: "2026-04-22T03:00:00.000Z"
+      id: "1001",
+      orderNumber: "TB202605040001",
+      paymentMethod: "alipay",
+      amountMinor: 1_280_00,
+      status: "shipped_unconfirmed",
+      bookkeepingWalletId: "12",
+      bookkeepingTxId: "tx-1001",
+      shippedAt: "2026-05-04T03:20:00.000Z",
+      receivedAt: null,
+      lastSyncedAt: "2026-05-05T08:00:00.000Z",
+      recordedAt: "2026-05-04T05:00:00.000Z"
     },
     {
-      id: "taobao-tx-1-2",
-      walletId: "taobao-w-1s",
-      walletScope: "settled",
-      amountMinor: 40_000_00,
-      direction: "in",
-      remark: "上周结算到账",
-      createdAt: "2026-04-23T09:00:00.000Z"
-    },
+      id: "1002",
+      orderNumber: "TB202605030099",
+      paymentMethod: "wechat",
+      amountMinor: 680_00,
+      status: "received",
+      bookkeepingWalletId: "14",
+      bookkeepingTxId: "tx-1002",
+      shippedAt: "2026-05-03T03:20:00.000Z",
+      receivedAt: "2026-05-04T11:00:00.000Z",
+      lastSyncedAt: "2026-05-05T08:00:00.000Z",
+      recordedAt: "2026-05-03T05:00:00.000Z"
+    }
+  ]
+};
+
+export const mockTaobaoWalletTransactions: Record<string, TaobaoWalletTransaction[]> = {
+  "14": [
     {
-      id: "taobao-tx-1-3",
-      walletId: "taobao-w-1s",
-      walletScope: "settled",
-      amountMinor: 7_900_00,
-      direction: "out",
-      remark: "提现到支付宝",
-      createdAt: "2026-04-25T11:30:00.000Z"
+      id: "tx-1002",
+      walletId: "14",
+      amountMinor: 680_00,
+      direction: "in",
+      remark: "TB202605030099 已签收·冻结",
+      createdAt: "2026-05-04T11:00:00.000Z",
+      matureAt: "2026-05-11T11:00:00.000Z"
     }
   ],
-  "taobao-acc-2": [
+  "12": [
     {
-      id: "taobao-tx-2-1",
-      walletId: "taobao-w-2u",
-      walletScope: "unsettled",
-      amountMinor: 35_000_00,
+      id: "tx-1001",
+      walletId: "12",
+      amountMinor: 1_280_00,
       direction: "in",
-      remark: "新增订单",
-      createdAt: "2026-04-20T08:00:00.000Z"
-    },
-    {
-      id: "taobao-tx-2-2",
-      walletId: "taobao-w-2s",
-      walletScope: "settled",
-      amountMinor: 9_150_00,
-      direction: "in",
-      remark: null,
-      createdAt: "2026-04-21T08:00:00.000Z"
+      remark: "TB202605040001 已发货未确认",
+      createdAt: "2026-05-04T05:00:00.000Z",
+      matureAt: null
     }
   ]
 };
