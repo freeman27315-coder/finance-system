@@ -14,6 +14,7 @@ from src.routers.taiwan import router as taiwan_router
 from src.routers.transfers import router as transfers_router
 from src.services.assets import ensure_default_asset_wallets
 from src.services.taiwan import ensure_default_taiwan_wallets
+from src.services.taobao import ensure_default_taobao_wallets
 from src.services.vendors import ensure_vendor_wallets
 
 
@@ -23,6 +24,7 @@ async def lifespan(_: FastAPI):
     db = database.SessionLocal()
     try:
         ensure_default_asset_wallets(db)
+        ensure_default_taobao_wallets(db)
         ensure_default_taiwan_wallets(db)
         ensure_vendor_wallets(db)
         db.commit()

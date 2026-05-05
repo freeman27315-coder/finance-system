@@ -79,6 +79,10 @@ class WalletTransaction(Base):
         nullable=False,
         server_default=func.now(),
     )
+    mature_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     wallet: Mapped[Wallet] = relationship(back_populates="transactions")
 
