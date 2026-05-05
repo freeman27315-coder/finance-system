@@ -108,8 +108,13 @@ export type TaiwanSummary = {
 };
 
 // ---------------------------------------------------------------------------
-// Taobao（PR #65/#67/#69 后的新结构：3 店铺 × 5 钱包 + paymentWallet 可空）
+// Taobao（PR #65/#67/#69/#73 后的新结构：3 店铺 × 5 钱包 + storeAlipayWallet 必填带 type）
 // ---------------------------------------------------------------------------
+
+// PR #73：storeAlipayWallet.type 表示该"店铺支付宝"挂在哪一类资产树
+// - "ASSET_RMB"：丙火/小小，子钱包挂在资产支付宝下，是真实金流
+// - "TAOBAO"：兔仔，子钱包挂在淘宝模块下，账面记账（钱不在我手）
+export type StoreAlipayType = "ASSET_RMB" | "TAOBAO";
 
 export type TaobaoShopWallet = {
   id: string;
@@ -117,10 +122,14 @@ export type TaobaoShopWallet = {
   balanceMinor: number;
 };
 
+export type TaobaoStoreAlipayWallet = TaobaoShopWallet & {
+  type: StoreAlipayType;
+};
+
 export type TaobaoShop = {
   id: string;
   name: string;
-  paymentWallet: TaobaoShopWallet | null;
+  storeAlipayWallet: TaobaoStoreAlipayWallet;
   unconfirmedAlipay: TaobaoShopWallet;
   unconfirmedWechat: TaobaoShopWallet;
   aggregatorFrozen: TaobaoShopWallet;

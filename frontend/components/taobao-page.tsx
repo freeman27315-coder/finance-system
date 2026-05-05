@@ -6,7 +6,6 @@ import {
   Banknote,
   CheckCircle2,
   FileSpreadsheet,
-  Info,
   ListOrdered,
   Loader2,
   RefreshCcw,
@@ -14,7 +13,7 @@ import {
   Wallet,
   X
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,7 +22,7 @@ import {
   getTaobaoWalletTransactions,
   importTaobaoExcel,
   releaseAggregator,
-  transferTaobaoToAsset,
+  transferTaobaoToStoreAlipay,
   withdrawTaobao
 } from "@/lib/api";
 import { formatMoney } from "@/lib/money";
@@ -63,14 +62,14 @@ function getWalletRows(shop: TaobaoShop): WalletRowDef[] {
   return [
     {
       kind: "unconfirmed-alipay",
-      label: "支付宝在途",
+      label: "支付宝支付在途",
       wallet: shop.unconfirmedAlipay,
       icon: <Wallet className="h-4 w-4 text-muted-foreground" aria-hidden="true" />,
       tone: "neutral"
     },
     {
       kind: "unconfirmed-wechat",
-      label: "微信在途",
+      label: "微信支付在途",
       wallet: shop.unconfirmedWechat,
       icon: <Wallet className="h-4 w-4 text-muted-foreground" aria-hidden="true" />,
       tone: "neutral"
@@ -267,14 +266,23 @@ function WithdrawModal({ shop, onClose }: { shop: TaobaoShop; onClose: () => voi
 }
 
 // ---------------------------------------------------------------------------
-// 转资产支付宝（仅丙火/小小）
+// 转店铺支付宝（3 店铺都可调；兔仔为账面记账，成功后 inline 提示"已记账"）
 // ---------------------------------------------------------------------------
 
-function TransferToAssetModal({ shop, onClose }: { shop: TaobaoShop; onClose: () => void }) {
+function TransferToStoreAlipayModal({
+  shop,
+  onClose,
+  onBookkeepingSuccess
+}: {
+  shop: TaobaoShop;
+  onClose: () => void;
+  onBookkeepingSuccess: (message: string) => void;
+}) {
   const queryClient = useQueryClient();
   const [amount, setAmount] = useState("");
   const [remark, setRemark] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const isBookkeeping = shop.storeAlipayWallet.type === "TAOBAO";
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -286,7 +294,7 @@ function TransferToAssetModal({ shop, onClose }: { shop: TaobaoShop; onClose: ()
         }
         amountValue = amount;
       }
-      return transferTaobaoToAsset(shop.id, {
+      return transferTaobaoToStoreAlipay(shop.id, {
         amount: amountValue,
         remark: remark.trim() === "" ? undefined : remark.trim()
       });
@@ -296,6 +304,9 @@ function TransferToAssetModal({ shop, onClose }: { shop: TaobaoShop; onClose: ()
       await queryClient.invalidateQueries({ queryKey: ["taobao-wallet-transactions", shop.id] });
       await queryClient.invalidateQueries({ queryKey: ["asset-wallets"] });
       await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      if (isBookkeeping) {
+        onBookkeepingSuccess(`${shop.name}：已记账（实际钱不在手中）`);
+      }
       onClose();
     },
     onError: (err) => {
@@ -303,7 +314,7 @@ function TransferToAssetModal({ shop, onClose }: { shop: TaobaoShop; onClose: ()
     }
   });
 
-  const targetName = shop.paymentWallet?.name ?? "资产支付宝";
+  const targetName = shop.storeAlipayWallet.name;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -312,6 +323,12 @@ function TransferToAssetModal({ shop, onClose }: { shop: TaobaoShop; onClose: ()
           <CardTitle>
             转账到 {targetName} · {shop.name}
           </CardTitle>
+          {isBookkeeping ? (
+            <div className="mt-2 flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-700">
+              <Badge tone="warning">账面记账</Badge>
+              <span>本店铺为兔仔，转账仅做账面记录，实际钱不在我手。</span>
+            </div>
+          ) : null}
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">
@@ -516,20 +533,18 @@ function ReportRow({
 // ---------------------------------------------------------------------------
 
 function WalletRow({
-  shop,
   row,
   onShowTransactions,
   onWithdraw,
-  onTransferToAsset,
+  onTransferToStoreAlipay,
   releasing,
   releaseReport,
   onRelease
 }: {
-  shop: TaobaoShop;
   row: WalletRowDef;
   onShowTransactions: (wallet: TaobaoShopWallet, label: string) => void;
   onWithdraw: () => void;
-  onTransferToAsset: () => void;
+  onTransferToStoreAlipay: () => void;
   releasing: boolean;
   releaseReport: TaobaoReleaseReport | null;
   onRelease: () => void;
@@ -537,8 +552,6 @@ function WalletRow({
   const isBankCard = row.kind === "bank-card";
   const isFrozen = row.kind === "aggregator-frozen";
   const isAvailable = row.kind === "aggregator-available";
-  const showTransferToAsset = isBankCard && shop.paymentWallet !== null;
-  const showRabbitNote = isBankCard && shop.paymentWallet === null;
 
   const balanceColor =
     row.tone === "available"
@@ -553,15 +566,7 @@ function WalletRow({
     <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex items-center gap-2">
         {row.icon}
-        <div>
-          <div className="text-sm font-medium">{row.label}</div>
-          {showRabbitNote ? (
-            <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
-              <Info className="h-3 w-3" aria-hidden="true" />
-              账面记账，钱不在我手
-            </div>
-          ) : null}
-        </div>
+        <div className="text-sm font-medium">{row.label}</div>
       </div>
       <div className="flex items-center justify-between gap-3 sm:justify-end">
         <div className={cn("tabular-nums text-base font-semibold", balanceColor)}>
@@ -595,10 +600,10 @@ function WalletRow({
               提现
             </Button>
           ) : null}
-          {showTransferToAsset ? (
-            <Button variant="outline" size="sm" onClick={onTransferToAsset}>
+          {isBankCard ? (
+            <Button variant="outline" size="sm" onClick={onTransferToStoreAlipay}>
               <ArrowRightLeft className="h-3.5 w-3.5" aria-hidden="true" />
-              转资产支付宝
+              转店铺支付宝
             </Button>
           ) : null}
           <Button
@@ -623,13 +628,13 @@ function ShopCard({
   shop,
   onShowTransactions,
   onWithdraw,
-  onTransferToAsset,
+  onTransferToStoreAlipay,
   onImport
 }: {
   shop: TaobaoShop;
   onShowTransactions: (wallet: TaobaoShopWallet, label: string) => void;
   onWithdraw: () => void;
-  onTransferToAsset: () => void;
+  onTransferToStoreAlipay: () => void;
   onImport: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -651,19 +656,17 @@ function ShopCard({
   });
 
   const rows = getWalletRows(shop);
-  const paymentLabel =
-    shop.paymentWallet === null
-      ? "无（钱止于银行卡）"
-      : `${shop.paymentWallet.name}（余额 ${formatMoney(shop.paymentWallet.balanceMinor, "CNY")}）`;
+  const isBookkeeping = shop.storeAlipayWallet.type === "TAOBAO";
 
   return (
     <Card className="border">
       <CardHeader>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-          <div>
+          <div className="min-w-0 flex-1">
             <CardTitle className="text-lg">{shop.name}</CardTitle>
-            <div className="mt-1 text-xs text-muted-foreground">
-              关联资产支付宝：{paymentLabel}
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+              <span>店铺支付宝：{shop.storeAlipayWallet.name}</span>
+              {isBookkeeping ? <Badge tone="warning">账面</Badge> : null}
             </div>
             {shop.remark ? (
               <div className="mt-1 text-xs text-muted-foreground">{shop.remark}</div>
@@ -676,15 +679,62 @@ function ShopCard({
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
+        <div
+          className={cn(
+            "flex flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between",
+            isBookkeeping
+              ? "border-amber-200 bg-amber-50/60"
+              : "border-emerald-200 bg-emerald-50/60"
+          )}
+        >
+          <div className="flex items-center gap-2">
+            <Wallet
+              className={cn(
+                "h-4 w-4",
+                isBookkeeping ? "text-amber-700" : "text-emerald-700"
+              )}
+              aria-hidden="true"
+            />
+            <div>
+              <div className="flex items-center gap-1.5 text-sm font-medium">
+                <span>店铺支付宝</span>
+                {isBookkeeping ? <Badge tone="warning">账面记账</Badge> : null}
+              </div>
+              <div className="mt-0.5 text-xs text-muted-foreground">
+                {shop.storeAlipayWallet.name}
+                {isBookkeeping ? "（钱不在我手）" : ""}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 sm:justify-end">
+            <div
+              className={cn(
+                "tabular-nums text-xl font-bold",
+                isBookkeeping ? "text-amber-700" : "text-emerald-700"
+              )}
+            >
+              {formatMoney(shop.storeAlipayWallet.balanceMinor, "CNY")}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                onShowTransactions(shop.storeAlipayWallet, "店铺支付宝")
+              }
+            >
+              <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />
+              流水
+            </Button>
+          </div>
+        </div>
         <div className="divide-y divide-border rounded-md border border-border">
           {rows.map((row) => (
             <WalletRow
               key={row.kind}
-              shop={shop}
               row={row}
               onShowTransactions={onShowTransactions}
               onWithdraw={onWithdraw}
-              onTransferToAsset={onTransferToAsset}
+              onTransferToStoreAlipay={onTransferToStoreAlipay}
               releasing={releaseMutation.isPending}
               releaseReport={releaseReport}
               onRelease={() => releaseMutation.mutate()}
@@ -749,6 +799,14 @@ export function TaobaoPage() {
     wallet: TaobaoShopWallet;
     label: string;
   } | null>(null);
+  const [bookkeepingToast, setBookkeepingToast] = useState<string | null>(null);
+
+  // 兔仔账面记账成功 toast：4 秒自动消失
+  useEffect(() => {
+    if (bookkeepingToast === null) return;
+    const timer = window.setTimeout(() => setBookkeepingToast(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [bookkeepingToast]);
 
   return (
     <div className="space-y-5">
@@ -756,8 +814,8 @@ export function TaobaoPage() {
         <div>
           <h2 className="text-2xl font-semibold tracking-normal">淘宝店铺</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            3 店铺 × 5 钱包：支付宝在途 / 微信在途 / 聚合冻结 / 聚合可提现 / 银行卡。导入千牛 Excel
-            自动入账，T+7 解冻；银行卡余额可提回资产支付宝（兔仔账面记账除外）。
+            3 店铺 × 5 钱包：支付宝支付在途 / 微信支付在途 / 聚合冻结 / 聚合可提现 / 银行卡。导入千牛
+            Excel 自动入账，T+7 解冻；银行卡余额可转入店铺支付宝（兔仔为账面记账）。
           </p>
         </div>
         <Button variant="outline" onClick={() => refetch()} disabled={isFetching}>
@@ -782,7 +840,7 @@ export function TaobaoPage() {
                 setTransactionsTarget({ shop, wallet, label })
               }
               onWithdraw={() => setWithdrawShop(shop)}
-              onTransferToAsset={() => setTransferShop(shop)}
+              onTransferToStoreAlipay={() => setTransferShop(shop)}
               onImport={() => setImportShop(shop)}
             />
           ))}
@@ -793,7 +851,11 @@ export function TaobaoPage() {
         <WithdrawModal shop={withdrawShop} onClose={() => setWithdrawShop(null)} />
       ) : null}
       {transferShop ? (
-        <TransferToAssetModal shop={transferShop} onClose={() => setTransferShop(null)} />
+        <TransferToStoreAlipayModal
+          shop={transferShop}
+          onClose={() => setTransferShop(null)}
+          onBookkeepingSuccess={(message) => setBookkeepingToast(message)}
+        />
       ) : null}
       {importShop ? (
         <ImportExcelModal shop={importShop} onClose={() => setImportShop(null)} />
@@ -805,6 +867,24 @@ export function TaobaoPage() {
           walletLabel={transactionsTarget.label}
           onClose={() => setTransactionsTarget(null)}
         />
+      ) : null}
+
+      {bookkeepingToast ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-6 right-6 z-50 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 shadow-lg"
+        >
+          <Badge tone="warning">账面</Badge>
+          <div>{bookkeepingToast}</div>
+          <button
+            onClick={() => setBookkeepingToast(null)}
+            className="ml-2 text-amber-700/70 hover:text-amber-900"
+            aria-label="关闭提示"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
       ) : null}
     </div>
   );

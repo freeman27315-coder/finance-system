@@ -18,6 +18,7 @@ import type {
   AssetTransaction,
   Currency,
   DashboardData,
+  StoreAlipayType,
   TaiwanSummary,
   TaiwanTransaction,
   TaiwanWallet,
@@ -29,6 +30,7 @@ import type {
   TaobaoReleaseReport,
   TaobaoShop,
   TaobaoShopWallet,
+  TaobaoStoreAlipayWallet,
   TaobaoWalletTransaction,
   Vendor,
   VendorTransaction,
@@ -466,20 +468,21 @@ export async function getXboxSummary(): Promise<XboxSummary> {
 }
 
 // ---------------------------------------------------------------------------
-// Taobao（PR #65/#67/#69）—— 3 店铺 × 5 钱包 + paymentWallet 可空 + Excel 导入
+// Taobao（PR #65/#67/#69/#73）—— 3 店铺 × 5 钱包 + storeAlipayWallet 必填带 type + Excel 导入
 // ---------------------------------------------------------------------------
 
 type TaobaoShopWalletResponse = {
   id: string | number;
   name: string;
   balance: string | number;
+  type?: string;
 };
 
 type TaobaoShopResponse = {
   id: string | number;
   name: string;
-  paymentWallet?: TaobaoShopWalletResponse | null;
-  payment_wallet?: TaobaoShopWalletResponse | null;
+  storeAlipayWallet?: TaobaoShopWalletResponse;
+  store_alipay_wallet?: TaobaoShopWalletResponse;
   unconfirmedAlipay?: TaobaoShopWalletResponse;
   unconfirmed_alipay?: TaobaoShopWalletResponse;
   unconfirmedWechat?: TaobaoShopWalletResponse;
@@ -582,22 +585,42 @@ function normalizeTaobaoShopWallet(wallet: TaobaoShopWalletResponse): TaobaoShop
   };
 }
 
+function normalizeStoreAlipayType(rawType: string | undefined): StoreAlipayType {
+  // 后端返回大写 WalletType 枚举值，淘宝店铺支付宝只可能是 ASSET_RMB（丙火/小小）或 TAOBAO（兔仔）
+  const upper = (rawType ?? "").toUpperCase();
+  return upper === "TAOBAO" ? "TAOBAO" : "ASSET_RMB";
+}
+
+function normalizeStoreAlipayWallet(wallet: TaobaoShopWalletResponse): TaobaoStoreAlipayWallet {
+  return {
+    ...normalizeTaobaoShopWallet(wallet),
+    type: normalizeStoreAlipayType(wallet.type)
+  };
+}
+
 function normalizeTaobaoShop(shop: TaobaoShopResponse): TaobaoShop {
-  const paymentWallet = shop.paymentWallet ?? shop.payment_wallet ?? null;
+  const storeAlipayWallet = shop.storeAlipayWallet ?? shop.store_alipay_wallet;
   const unconfirmedAlipay = shop.unconfirmedAlipay ?? shop.unconfirmed_alipay;
   const unconfirmedWechat = shop.unconfirmedWechat ?? shop.unconfirmed_wechat;
   const aggregatorFrozen = shop.aggregatorFrozen ?? shop.aggregator_frozen;
   const aggregatorAvailable = shop.aggregatorAvailable ?? shop.aggregator_available;
   const bankCard = shop.bankCard ?? shop.bank_card;
 
-  if (!unconfirmedAlipay || !unconfirmedWechat || !aggregatorFrozen || !aggregatorAvailable || !bankCard) {
+  if (
+    !storeAlipayWallet ||
+    !unconfirmedAlipay ||
+    !unconfirmedWechat ||
+    !aggregatorFrozen ||
+    !aggregatorAvailable ||
+    !bankCard
+  ) {
     throw new Error("淘宝店铺响应字段不完整");
   }
 
   return {
     id: String(shop.id),
     name: shop.name,
-    paymentWallet: paymentWallet ? normalizeTaobaoShopWallet(paymentWallet) : null,
+    storeAlipayWallet: normalizeStoreAlipayWallet(storeAlipayWallet),
     unconfirmedAlipay: normalizeTaobaoShopWallet(unconfirmedAlipay),
     unconfirmedWechat: normalizeTaobaoShopWallet(unconfirmedWechat),
     aggregatorFrozen: normalizeTaobaoShopWallet(aggregatorFrozen),
@@ -737,7 +760,7 @@ export async function withdrawTaobao(
   return normalizeFlowReport(data);
 }
 
-export async function transferTaobaoToAsset(
+export async function transferTaobaoToStoreAlipay(
   shopId: string,
   payload: { amount?: string; remark?: string }
 ): Promise<TaobaoFlowReport> {
@@ -749,7 +772,7 @@ export async function transferTaobaoToAsset(
     body.remark = payload.remark;
   }
   const data = (await postJson(
-    `/api/taobao/shops/${shopId}/transfer-to-asset`,
+    `/api/taobao/shops/${shopId}/transfer-to-store-alipay`,
     body
   )) as TaobaoFlowReportResponse;
   return normalizeFlowReport(data);
