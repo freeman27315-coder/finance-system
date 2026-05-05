@@ -762,7 +762,7 @@ export async function withdrawTaobao(
 
 export async function transferTaobaoToStoreAlipay(
   shopId: string,
-  payload: { amount?: string; remark?: string }
+  payload: { amount?: string; remark?: string; targetWalletId?: string }
 ): Promise<TaobaoFlowReport> {
   const body: Record<string, unknown> = {};
   if (payload.amount) {
@@ -771,11 +771,31 @@ export async function transferTaobaoToStoreAlipay(
   if (payload.remark) {
     body.remark = payload.remark;
   }
+  if (payload.targetWalletId) {
+    body.target_wallet_id = Number(payload.targetWalletId);
+  }
   const data = (await postJson(
     `/api/taobao/shops/${shopId}/transfer-to-store-alipay`,
     body
   )) as TaobaoFlowReportResponse;
   return normalizeFlowReport(data);
+}
+
+export async function transferAssetWallets(
+  fromWalletId: string,
+  toWalletId: string,
+  amount: string,
+  remark?: string
+): Promise<unknown> {
+  const body: Record<string, unknown> = {
+    from_wallet_id: Number(fromWalletId),
+    to_wallet_id: Number(toWalletId),
+    amount
+  };
+  if (remark) {
+    body.remark = remark;
+  }
+  return postJson("/api/wallets/transfer", body);
 }
 
 export async function getTaobaoOrders(
