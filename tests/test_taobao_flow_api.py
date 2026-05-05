@@ -275,7 +275,8 @@ def test_transfer_to_store_alipay_a_shop_explicit_amount(client):
     assert Decimal(payload["amount"]) == Decimal("300")
     assert Decimal(payload["fromWalletBalance"]) == Decimal("200.000000")
     assert Decimal(payload["toWalletBalance"]) == Decimal("300.000000")
-    assert payload["remark"] == "提现"
+    # default remark 现在带目标名
+    assert payload["remark"] == "提现 → 丙火网络支付宝"
 
     assert _wallet_balance(shop.bank_card_wallet_id) == Decimal("200.000000")
     assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("300.000000")
@@ -355,6 +356,298 @@ def test_transfer_to_store_alipay_custom_remark(client):
     )
     assert response.status_code == 200
     assert response.json()["remark"] == "5月转资产"
+
+
+# ---------------------------------------------------------------------------
+# /transfer-to-store-alipay - target_wallet_id 扩展（issue #76）
+# ---------------------------------------------------------------------------
+
+
+def _wallet_id_by_name(name: str) -> int:
+    """按 name 取（非软删的）资产钱包 id。仅用于测试，假设 name 唯一。"""
+    db = database.SessionLocal()
+    try:
+        w = db.scalar(select(Wallet).where(Wallet.name == name, Wallet.deleted_at.is_(None)))
+        if w is None:
+            raise AssertionError(f"测试种子里找不到钱包: {name}")
+        return w.id
+    finally:
+        db.close()
+
+
+def test_transfer_default_target_for_a_shop_unchanged(client):
+    """丙火不传 target_wallet_id → 转到 shop.store_alipay_wallet（即丙火网络支付宝）。"""
+    shop = _shop_by_name("丙火电玩")
+    db = database.SessionLocal()
+    try:
+        credit(db, shop.bank_card_wallet_id, Decimal("100"), remark="种子")
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
+        json={"amount": "60"},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["toWalletId"] == shop.store_alipay_wallet_id
+    # remark 默认带目标名
+    assert payload["remark"] == "提现 → 丙火网络支付宝"
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("60.000000")
+
+
+def test_transfer_default_target_for_xiaoxiao(client):
+    """小小不传 target_wallet_id → 转到 shop.store_alipay_wallet（小小电玩支付宝）。"""
+    shop = _shop_by_name("小小电玩")
+    db = database.SessionLocal()
+    try:
+        credit(db, shop.bank_card_wallet_id, Decimal("40"), remark="种子")
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
+        json={"amount": "40"},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["toWalletId"] == shop.store_alipay_wallet_id
+    assert payload["remark"] == "提现 → 小小电玩支付宝"
+
+
+def test_transfer_default_target_for_tuzai(client):
+    """兔仔不传 target_wallet_id → 转到 shop.store_alipay_wallet（兔仔电玩支付宝,type=TAOBAO）。"""
+    shop = _shop_by_name("兔仔电玩")
+    db = database.SessionLocal()
+    try:
+        credit(db, shop.bank_card_wallet_id, Decimal("25"), remark="种子")
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
+        json={"amount": "25"},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["toWalletId"] == shop.store_alipay_wallet_id
+    assert payload["remark"] == "提现 → 兔仔电玩支付宝"
+
+
+def test_transfer_a_shop_to_other_alipay_sub_wallet(client):
+    """丙火显式传 TOM支付宝 ID → 银行卡 debit + TOM支付宝 credit；丙火网络支付宝余额不动。"""
+    shop = _shop_by_name("丙火电玩")
+    tom_id = _wallet_id_by_name("TOM支付宝")
+
+    db = database.SessionLocal()
+    try:
+        credit(db, shop.bank_card_wallet_id, Decimal("400"), remark="种子")
+        db.commit()
+    finally:
+        db.close()
+
+    binghuo_alipay_before = _wallet_balance(shop.store_alipay_wallet_id)
+
+    response = client.post(
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
+        json={"target_wallet_id": tom_id, "amount": "150"},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["toWalletId"] == tom_id
+    assert payload["remark"] == "提现 → TOM支付宝"
+    assert Decimal(payload["amount"]) == Decimal("150")
+
+    # 银行卡 debit、TOM credit
+    assert _wallet_balance(shop.bank_card_wallet_id) == Decimal("250.000000")
+    assert _wallet_balance(tom_id) == Decimal("150.000000")
+    # 丙火网络支付宝（store_alipay_wallet）余额不动
+    assert _wallet_balance(shop.store_alipay_wallet_id) == binghuo_alipay_before
+
+
+def test_transfer_a_shop_to_boss_alipay(client):
+    """丙火显式传 BOSS支付宝 ID → 银行卡 debit + BOSS支付宝 credit。"""
+    shop = _shop_by_name("丙火电玩")
+    boss_id = _wallet_id_by_name("BOSS支付宝")
+
+    db = database.SessionLocal()
+    try:
+        credit(db, shop.bank_card_wallet_id, Decimal("200"), remark="种子")
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
+        json={"target_wallet_id": boss_id, "amount": "75"},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["toWalletId"] == boss_id
+    assert payload["remark"] == "提现 → BOSS支付宝"
+    assert _wallet_balance(boss_id) == Decimal("75.000000")
+
+
+def test_transfer_a_shop_400_when_target_not_alipay_sub_wallet(client):
+    """小小传 RMB 顶级钱包（非支付宝子钱包）→ 400。"""
+    shop = _shop_by_name("小小电玩")
+    rmb_root_id = _wallet_id_by_name("RMB钱包")
+
+    db = database.SessionLocal()
+    try:
+        credit(db, shop.bank_card_wallet_id, Decimal("100"), remark="种子")
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
+        json={"target_wallet_id": rmb_root_id, "amount": "10"},
+    )
+    # RMB 顶级是 is_group=True → 先被 is_group 校验拦下；测试只关 400 即可
+    assert response.status_code == 400
+
+
+def test_transfer_a_shop_400_when_target_is_non_alipay_leaf(client):
+    """小小传非支付宝子钱包的资产叶子（如跳舞姬微信，在 微信钱包 group 下）→ 400。"""
+    shop = _shop_by_name("小小电玩")
+    wechat_leaf_id = _wallet_id_by_name("跳舞姬微信")
+
+    db = database.SessionLocal()
+    try:
+        credit(db, shop.bank_card_wallet_id, Decimal("50"), remark="种子")
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
+        json={"target_wallet_id": wechat_leaf_id, "amount": "5"},
+    )
+    assert response.status_code == 400
+    assert "资产支付宝" in response.json()["detail"]
+
+
+def test_transfer_b_shop_400_when_target_not_self_store_alipay(client):
+    """兔仔传非自身 store_alipay_wallet 的 target → 400 兔仔店铺只能转回自身店铺支付宝。"""
+    shop = _shop_by_name("兔仔电玩")
+    tom_id = _wallet_id_by_name("TOM支付宝")
+
+    db = database.SessionLocal()
+    try:
+        credit(db, shop.bank_card_wallet_id, Decimal("60"), remark="种子")
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
+        json={"target_wallet_id": tom_id, "amount": "10"},
+    )
+    assert response.status_code == 400
+    assert "兔仔" in response.json()["detail"]
+
+
+def test_transfer_b_shop_explicit_self_store_alipay_succeeds(client):
+    """兔仔显式传自身 store_alipay_wallet_id → 200，与默认行为一致。"""
+    shop = _shop_by_name("兔仔电玩")
+    db = database.SessionLocal()
+    try:
+        credit(db, shop.bank_card_wallet_id, Decimal("33"), remark="种子")
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
+        json={"target_wallet_id": shop.store_alipay_wallet_id, "amount": "33"},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["toWalletId"] == shop.store_alipay_wallet_id
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("33.000000")
+
+
+def test_transfer_400_when_target_soft_deleted(client):
+    """目标钱包已软删 → 400。"""
+    shop = _shop_by_name("丙火电玩")
+    tom_id = _wallet_id_by_name("TOM支付宝")
+
+    # 先软删 TOM支付宝
+    db = database.SessionLocal()
+    try:
+        tom = db.get(Wallet, tom_id)
+        tom.deleted_at = datetime.now(timezone.utc)
+        credit(db, shop.bank_card_wallet_id, Decimal("100"), remark="种子")
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
+        json={"target_wallet_id": tom_id, "amount": "10"},
+    )
+    assert response.status_code == 400
+    assert "已删除" in response.json()["detail"]
+
+
+def test_transfer_400_when_target_is_group(client):
+    """目标是分组（如 RMB 顶级 group）→ 400 分组钱包不可作为目标。"""
+    shop = _shop_by_name("丙火电玩")
+    rmb_root_id = _wallet_id_by_name("RMB钱包")
+
+    db = database.SessionLocal()
+    try:
+        credit(db, shop.bank_card_wallet_id, Decimal("20"), remark="种子")
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
+        json={"target_wallet_id": rmb_root_id, "amount": "10"},
+    )
+    assert response.status_code == 400
+    assert "分组" in response.json()["detail"]
+
+
+def test_transfer_404_when_target_wallet_not_found(client):
+    """目标 wallet_id 不存在 → 404。"""
+    shop = _shop_by_name("丙火电玩")
+    db = database.SessionLocal()
+    try:
+        credit(db, shop.bank_card_wallet_id, Decimal("10"), remark="种子")
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
+        json={"target_wallet_id": 999999, "amount": "1"},
+    )
+    assert response.status_code == 404
+    assert "目标钱包不存在" in response.json()["detail"]
+
+
+def test_transfer_400_when_target_equals_bank_card(client):
+    """目标 == 银行卡本身 → 400 不能转给自己。"""
+    shop = _shop_by_name("丙火电玩")
+    db = database.SessionLocal()
+    try:
+        credit(db, shop.bank_card_wallet_id, Decimal("10"), remark="种子")
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
+        json={"target_wallet_id": shop.bank_card_wallet_id, "amount": "1"},
+    )
+    assert response.status_code == 400
+    assert "不能转给自己" in response.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
