@@ -402,16 +402,16 @@ export const mockXboxSummary: XboxSummary = {
 };
 
 // ---------------------------------------------------------------------------
-// Taobao mock（API 失败时回退）—— 3 店铺 × 5 钱包 + 兔仔无 paymentWallet
+// Taobao mock（API 失败时回退）—— PR #73 后：storeAlipayWallet 必填带 type
 // ---------------------------------------------------------------------------
 
 export const mockTaobaoShops: TaobaoShop[] = [
   {
     id: "1",
     name: "丙火电玩",
-    paymentWallet: { id: "3", name: "丙火网络支付宝", balanceMinor: 0 },
-    unconfirmedAlipay: { id: "12", name: "丙火电玩 支付宝在途", balanceMinor: 18_400_00 },
-    unconfirmedWechat: { id: "13", name: "丙火电玩 微信在途", balanceMinor: 6_280_00 },
+    storeAlipayWallet: { id: "3", name: "丙火网络支付宝", balanceMinor: 0, type: "ASSET_RMB" },
+    unconfirmedAlipay: { id: "12", name: "丙火电玩 支付宝支付在途", balanceMinor: 18_400_00 },
+    unconfirmedWechat: { id: "13", name: "丙火电玩 微信支付在途", balanceMinor: 6_280_00 },
     aggregatorFrozen: { id: "14", name: "丙火电玩 聚合支付·冻结中", balanceMinor: 42_500_00 },
     aggregatorAvailable: { id: "15", name: "丙火电玩 聚合支付·可提现", balanceMinor: 12_350_00 },
     bankCard: { id: "16", name: "丙火电玩 银行卡", balanceMinor: 80_000_00 },
@@ -421,9 +421,9 @@ export const mockTaobaoShops: TaobaoShop[] = [
   {
     id: "2",
     name: "兔仔电玩",
-    paymentWallet: null,
-    unconfirmedAlipay: { id: "17", name: "兔仔电玩 支付宝在途", balanceMinor: 5_200_00 },
-    unconfirmedWechat: { id: "18", name: "兔仔电玩 微信在途", balanceMinor: 1_800_00 },
+    storeAlipayWallet: { id: "22", name: "兔仔电玩支付宝", balanceMinor: 0, type: "TAOBAO" },
+    unconfirmedAlipay: { id: "17", name: "兔仔电玩 支付宝支付在途", balanceMinor: 5_200_00 },
+    unconfirmedWechat: { id: "18", name: "兔仔电玩 微信支付在途", balanceMinor: 1_800_00 },
     aggregatorFrozen: { id: "19", name: "兔仔电玩 聚合支付·冻结中", balanceMinor: 22_000_00 },
     aggregatorAvailable: { id: "20", name: "兔仔电玩 聚合支付·可提现", balanceMinor: 4_500_00 },
     bankCard: { id: "21", name: "兔仔电玩 银行卡", balanceMinor: 30_000_00 },
@@ -433,12 +433,12 @@ export const mockTaobaoShops: TaobaoShop[] = [
   {
     id: "3",
     name: "小小电玩",
-    paymentWallet: { id: "11", name: "小小电玩支付宝", balanceMinor: 0 },
-    unconfirmedAlipay: { id: "22", name: "小小电玩 支付宝在途", balanceMinor: 9_300_00 },
-    unconfirmedWechat: { id: "23", name: "小小电玩 微信在途", balanceMinor: 3_500_00 },
-    aggregatorFrozen: { id: "24", name: "小小电玩 聚合支付·冻结中", balanceMinor: 28_000_00 },
-    aggregatorAvailable: { id: "25", name: "小小电玩 聚合支付·可提现", balanceMinor: 7_200_00 },
-    bankCard: { id: "26", name: "小小电玩 银行卡", balanceMinor: 50_000_00 },
+    storeAlipayWallet: { id: "11", name: "小小电玩支付宝", balanceMinor: 0, type: "ASSET_RMB" },
+    unconfirmedAlipay: { id: "23", name: "小小电玩 支付宝支付在途", balanceMinor: 9_300_00 },
+    unconfirmedWechat: { id: "24", name: "小小电玩 微信支付在途", balanceMinor: 3_500_00 },
+    aggregatorFrozen: { id: "25", name: "小小电玩 聚合支付·冻结中", balanceMinor: 28_000_00 },
+    aggregatorAvailable: { id: "26", name: "小小电玩 聚合支付·可提现", balanceMinor: 7_200_00 },
+    bankCard: { id: "27", name: "小小电玩 银行卡", balanceMinor: 50_000_00 },
     remark: null,
     createdAt: "2026-05-05T11:17:14"
   }
