@@ -1,7 +1,6 @@
 """Taobao shop API routes."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from decimal import Decimal
 from io import BytesIO
 from typing import Optional
@@ -20,7 +19,6 @@ from src.models.taobao import (
 )
 from src.models.wallet import (
     Currency,
-    TransactionDirection,
     Wallet,
     WalletTransaction,
     WalletType,
@@ -33,6 +31,7 @@ from src.services.taobao_import import (
     TaobaoImportError,
     import_qianniu_workbook,
 )
+from src.services.taobao_maturity import calculate_pending_maturity
 
 
 router = APIRouter(prefix="/taobao", tags=["taobao"])
@@ -61,6 +60,8 @@ class TaobaoShopOut(BaseModel):
     aggregator_frozen: TaobaoShopWalletOut
     aggregator_available: TaobaoShopWalletOut
     bank_card: TaobaoShopWalletOut
+    aggregator_matured_amount: Decimal
+    aggregator_matured_count: int
     remark: Optional[str] = None
     created_at: str
 
@@ -164,7 +165,10 @@ def _serialize_wallet(wallet: Wallet) -> TaobaoShopWalletOut:
     )
 
 
-def serialize_shop(shop: TaobaoShop) -> TaobaoShopOut:
+def serialize_shop(shop: TaobaoShop, db: Session) -> TaobaoShopOut:
+    matured_amount, matured_count = calculate_pending_maturity(
+        db, shop.aggregator_frozen_wallet_id
+    )
     return TaobaoShopOut(
         id=shop.id,
         name=shop.name,
@@ -174,6 +178,8 @@ def serialize_shop(shop: TaobaoShop) -> TaobaoShopOut:
         aggregator_frozen=_serialize_wallet(shop.aggregator_frozen_wallet),
         aggregator_available=_serialize_wallet(shop.aggregator_available_wallet),
         bank_card=_serialize_wallet(shop.bank_card_wallet),
+        aggregator_matured_amount=matured_amount,
+        aggregator_matured_count=matured_count,
         remark=shop.remark,
         created_at=shop.created_at.isoformat() if shop.created_at else "",
     )
@@ -258,7 +264,7 @@ def _shop_wallet_ids(shop: TaobaoShop) -> set[int]:
 
 @router.get("/shops", response_model=list[TaobaoShopOut], response_model_by_alias=True)
 def get_shops(db: Session = Depends(get_db)) -> list[TaobaoShopOut]:
-    return [serialize_shop(shop) for shop in list_taobao_shops(db)]
+    return [serialize_shop(shop, db) for shop in list_taobao_shops(db)]
 
 
 @router.post(
@@ -321,41 +327,16 @@ def release_matured_aggregator(
 ) -> ReleaseReportOut:
     """一键解冻所有到期聚合冻结流水。
 
-    - 查询 ``aggregator_frozen_wallet`` 上 ``mature_at <= now()`` 的所有 in 流水
-    - 仅解冻"仍有效"的流水（其 id 仍是某 TaobaoOrder 的 bookkeeping_tx_id）
-      —— 防御性，避免把已被 reconcile 撤销的旧流水重复解冻
+    - 通过 ``calculate_pending_maturity`` 算出可解冻金额与笔数
+      （查询条件、防御性过滤都集中在 helper 内，与 GET /taobao/shops 共享）
     - 把累计金额从 frozen debit、credit 到 available
     - 单一事务；无到期流水返回 200 + matured_count=0
     """
     shop = _get_shop_or_404(db, shop_id)
-    now = datetime.now(timezone.utc)
 
-    matured_txs = list(
-        db.scalars(
-            select(WalletTransaction)
-            .where(
-                WalletTransaction.wallet_id == shop.aggregator_frozen_wallet_id,
-                WalletTransaction.direction == TransactionDirection.IN.value,
-                WalletTransaction.mature_at.is_not(None),
-                WalletTransaction.mature_at <= now,
-            )
-            .order_by(WalletTransaction.id)
-        )
+    matured_amount, matured_count = calculate_pending_maturity(
+        db, shop.aggregator_frozen_wallet_id
     )
-
-    # 防御：只解冻仍被某 order.bookkeeping_tx_id 引用的（说明状态未变化、未被撤）
-    if matured_txs:
-        tx_ids = [tx.id for tx in matured_txs]
-        active_tx_ids = set(
-            db.scalars(
-                select(TaobaoOrder.bookkeeping_tx_id)
-                .where(TaobaoOrder.bookkeeping_tx_id.in_(tx_ids))
-            )
-        )
-        matured_txs = [tx for tx in matured_txs if tx.id in active_tx_ids]
-
-    matured_count = len(matured_txs)
-    matured_amount = sum((Decimal(tx.amount) for tx in matured_txs), Decimal("0"))
 
     if matured_count > 0:
         try:

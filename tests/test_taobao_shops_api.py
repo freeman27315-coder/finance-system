@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -6,8 +7,13 @@ from sqlalchemy import select
 
 from src import database
 from src.main import app
-from src.models.taobao import TaobaoShop
-from src.models.wallet import Currency, Wallet, WalletType
+from src.models.taobao import (
+    TaobaoOrder,
+    TaobaoOrderPaymentMethod,
+    TaobaoOrderStatus,
+    TaobaoShop,
+)
+from src.models.wallet import Currency, Wallet, WalletType, credit
 from src.services.assets import ensure_default_asset_wallets
 from src.services.taobao import ensure_default_taobao_wallets
 
@@ -179,3 +185,127 @@ def test_xiaoxiao_alipay_visible_in_asset_list(client):
     sub_names = {child["name"] for child in alipay_group["children"]}
     assert "小小电玩支付宝" in sub_names
     assert "丙火网络支付宝" in sub_names
+
+
+# ---------------------------------------------------------------------------
+# aggregatorMaturedAmount / aggregatorMaturedCount 字段（Issue #80）
+# ---------------------------------------------------------------------------
+
+
+def _seed_frozen_tx(
+    shop: TaobaoShop,
+    amount: Decimal,
+    mature_at: datetime,
+    *,
+    bind_to_order: bool = True,
+    order_number: str | None = None,
+) -> int:
+    """直接往 aggregator_frozen 钱包注入一笔 in 流水（可选绑定到 order）。
+
+    返回插入的 WalletTransaction.id。
+    """
+    db = database.SessionLocal()
+    try:
+        tx = credit(
+            db,
+            shop.aggregator_frozen_wallet_id,
+            amount,
+            remark="测试种子",
+            mature_at=mature_at,
+        )
+        if bind_to_order:
+            order = TaobaoOrder(
+                shop_id=shop.id,
+                order_number=order_number or f"SEED_{tx.id}",
+                payment_method=TaobaoOrderPaymentMethod.WECHAT.value,
+                amount=amount,
+                status=TaobaoOrderStatus.RECEIVED.value,
+                bookkeeping_wallet_id=shop.aggregator_frozen_wallet_id,
+                bookkeeping_tx_id=tx.id,
+            )
+            db.add(order)
+        db.commit()
+        return tx.id
+    finally:
+        db.close()
+
+
+def _shop_by_name(name: str) -> TaobaoShop:
+    db = database.SessionLocal()
+    try:
+        return db.scalar(select(TaobaoShop).where(TaobaoShop.name == name))
+    finally:
+        db.close()
+
+
+def test_shops_default_pending_maturity_is_zero(client):
+    """默认（无任何流水）→ 每个店铺 aggregatorMaturedAmount=0, aggregatorMaturedCount=0。"""
+    response = client.get("/taobao/shops")
+    assert response.status_code == 200, response.text
+    shops = response.json()
+
+    assert len(shops) == 3
+    for shop in shops:
+        assert "aggregatorMaturedAmount" in shop
+        assert "aggregatorMaturedCount" in shop
+        assert Decimal(shop["aggregatorMaturedAmount"]) == Decimal("0")
+        assert shop["aggregatorMaturedCount"] == 0
+
+
+def test_shops_pending_maturity_excludes_unmatured(client):
+    """1 笔已到期 + 1 笔未到期 → 仅已到期那笔被计入。"""
+    shop = _shop_by_name("丙火电玩")
+    now = datetime.now(timezone.utc)
+
+    _seed_frozen_tx(shop, Decimal("120"), now - timedelta(hours=1), order_number="MATURED_X")
+    _seed_frozen_tx(shop, Decimal("50"), now + timedelta(days=2), order_number="FUTURE_X")
+
+    response = client.get("/taobao/shops")
+    assert response.status_code == 200, response.text
+    shops = {s["name"]: s for s in response.json()}
+
+    binghuo = shops["丙火电玩"]
+    assert Decimal(binghuo["aggregatorMaturedAmount"]) == Decimal("120")
+    assert binghuo["aggregatorMaturedCount"] == 1
+
+    # 其他店铺无任何流水，依然为 0
+    assert Decimal(shops["兔仔电玩"]["aggregatorMaturedAmount"]) == Decimal("0")
+    assert shops["兔仔电玩"]["aggregatorMaturedCount"] == 0
+    assert Decimal(shops["小小电玩"]["aggregatorMaturedAmount"]) == Decimal("0")
+    assert shops["小小电玩"]["aggregatorMaturedCount"] == 0
+
+
+def test_shops_pending_maturity_aggregates_three_matured(client):
+    """3 笔已到期 → 累计金额 = 三笔之和，count=3。"""
+    shop = _shop_by_name("小小电玩")
+    now = datetime.now(timezone.utc)
+
+    _seed_frozen_tx(shop, Decimal("33.33"), now - timedelta(days=2), order_number="A")
+    _seed_frozen_tx(shop, Decimal("66.67"), now - timedelta(hours=3), order_number="B")
+    _seed_frozen_tx(shop, Decimal("100"), now - timedelta(minutes=5), order_number="C")
+
+    response = client.get("/taobao/shops")
+    assert response.status_code == 200, response.text
+    shops = {s["name"]: s for s in response.json()}
+
+    xiaoxiao = shops["小小电玩"]
+    assert Decimal(xiaoxiao["aggregatorMaturedAmount"]) == Decimal("200")
+    assert xiaoxiao["aggregatorMaturedCount"] == 3
+
+
+def test_shops_pending_maturity_skips_orphan_tx(client):
+    """1 笔已到期 + 1 笔已被 reconcile 撤销（无 order 引用）→ 已撤的不计。"""
+    shop = _shop_by_name("兔仔电玩")
+    now = datetime.now(timezone.utc)
+
+    _seed_frozen_tx(shop, Decimal("88"), now - timedelta(hours=2), order_number="ALIVE")
+    # 第二笔不绑订单，模拟已被 reconcile 撤
+    _seed_frozen_tx(shop, Decimal("999"), now - timedelta(hours=2), bind_to_order=False)
+
+    response = client.get("/taobao/shops")
+    assert response.status_code == 200, response.text
+    shops = {s["name"]: s for s in response.json()}
+
+    tuzai = shops["兔仔电玩"]
+    assert Decimal(tuzai["aggregatorMaturedAmount"]) == Decimal("88")
+    assert tuzai["aggregatorMaturedCount"] == 1
