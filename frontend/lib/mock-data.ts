@@ -415,6 +415,8 @@ export const mockTaobaoShops: TaobaoShop[] = [
     aggregatorFrozen: { id: "14", name: "丙火电玩 聚合支付·冻结中", balanceMinor: 42_500_00 },
     aggregatorAvailable: { id: "15", name: "丙火电玩 聚合支付·可提现", balanceMinor: 12_350_00 },
     bankCard: { id: "16", name: "丙火电玩 银行卡", balanceMinor: 80_000_00 },
+    aggregatorMaturedAmountMinor: 0,
+    aggregatorMaturedCount: 0,
     remark: null,
     createdAt: "2026-05-05T11:17:14"
   },
@@ -427,6 +429,8 @@ export const mockTaobaoShops: TaobaoShop[] = [
     aggregatorFrozen: { id: "19", name: "兔仔电玩 聚合支付·冻结中", balanceMinor: 22_000_00 },
     aggregatorAvailable: { id: "20", name: "兔仔电玩 聚合支付·可提现", balanceMinor: 4_500_00 },
     bankCard: { id: "21", name: "兔仔电玩 银行卡", balanceMinor: 30_000_00 },
+    aggregatorMaturedAmountMinor: 0,
+    aggregatorMaturedCount: 0,
     remark: null,
     createdAt: "2026-05-05T11:17:14"
   },
@@ -439,6 +443,8 @@ export const mockTaobaoShops: TaobaoShop[] = [
     aggregatorFrozen: { id: "25", name: "小小电玩 聚合支付·冻结中", balanceMinor: 28_000_00 },
     aggregatorAvailable: { id: "26", name: "小小电玩 聚合支付·可提现", balanceMinor: 7_200_00 },
     bankCard: { id: "27", name: "小小电玩 银行卡", balanceMinor: 50_000_00 },
+    aggregatorMaturedAmountMinor: 0,
+    aggregatorMaturedCount: 0,
     remark: null,
     createdAt: "2026-05-05T11:17:14"
   }

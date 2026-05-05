@@ -619,16 +619,18 @@ function WalletRow({
   onWithdraw,
   onTransferToStoreAlipay,
   releasing,
-  releaseReport,
-  onRelease
+  onRelease,
+  maturityInfo
 }: {
   row: WalletRowDef;
   onShowTransactions: (wallet: TaobaoShopWallet, label: string) => void;
   onWithdraw: () => void;
   onTransferToStoreAlipay: () => void;
   releasing: boolean;
-  releaseReport: TaobaoReleaseReport | null;
   onRelease: () => void;
+  // PR #82：仅聚合冻结行使用，传后端实时聚合的"待解冻"金额 + 笔数
+  // 决定按钮高亮（emerald）与否（ghost 灰色），并在行下方显示信息条
+  maturityInfo?: { maturedAmountMinor: number; maturedCount: number };
 }) {
   const isBankCard = row.kind === "bank-card";
   const isFrozen = row.kind === "aggregator-frozen";
@@ -643,59 +645,70 @@ function WalletRow({
           ? "text-amber-700"
           : "text-foreground";
 
+  // 聚合冻结行：是否有可解冻笔数（后端实时数据 OR 本次解冻 report 里的 maturedCount）
+  const hasMatured = isFrozen && (maturityInfo?.maturedCount ?? 0) > 0;
+  const showMaturityBar = isFrozen && maturityInfo && maturityInfo.maturedCount > 0;
+
   return (
     <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex items-center gap-2">
         {row.icon}
         <div className="text-sm font-medium">{row.label}</div>
       </div>
-      <div className="flex items-center justify-between gap-3 sm:justify-end">
-        <div className={cn("tabular-nums text-base font-semibold", balanceColor)}>
-          {formatMoney(row.wallet.balanceMinor, "CNY")}
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {isFrozen ? (
+      <div className="flex flex-col items-stretch gap-1 sm:items-end">
+        <div className="flex items-center justify-between gap-3 sm:justify-end">
+          <div className={cn("tabular-nums text-base font-semibold", balanceColor)}>
+            {formatMoney(row.wallet.balanceMinor, "CNY")}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {isFrozen ? (
+              <Button
+                variant={hasMatured ? "outline" : "ghost"}
+                size="sm"
+                onClick={onRelease}
+                disabled={releasing}
+                className={cn(
+                  hasMatured
+                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20"
+                    : "text-muted-foreground"
+                )}
+                title={hasMatured ? "一键解冻所有到期" : "暂无可解冻"}
+              >
+                {releasing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Snowflake className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+                一键解冻到期
+              </Button>
+            ) : null}
+            {isAvailable ? (
+              <Button variant="outline" size="sm" onClick={onWithdraw}>
+                <ArrowRightLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                提现
+              </Button>
+            ) : null}
+            {isBankCard ? (
+              <Button variant="outline" size="sm" onClick={onTransferToStoreAlipay}>
+                <ArrowRightLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                转店铺支付宝
+              </Button>
+            ) : null}
             <Button
-              variant="outline"
+              variant="ghost"
               size="sm"
-              onClick={onRelease}
-              disabled={releasing}
-              className={cn(
-                releaseReport && releaseReport.maturedCount > 0
-                  ? "border-emerald-500/50 bg-emerald-50/60 text-emerald-700"
-                  : ""
-              )}
-              title="一键解冻所有到期"
+              onClick={() => onShowTransactions(row.wallet, row.label)}
             >
-              {releasing ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-              ) : (
-                <Snowflake className="h-3.5 w-3.5" aria-hidden="true" />
-              )}
-              一键解冻到期
+              <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />
+              流水
             </Button>
-          ) : null}
-          {isAvailable ? (
-            <Button variant="outline" size="sm" onClick={onWithdraw}>
-              <ArrowRightLeft className="h-3.5 w-3.5" aria-hidden="true" />
-              提现
-            </Button>
-          ) : null}
-          {isBankCard ? (
-            <Button variant="outline" size="sm" onClick={onTransferToStoreAlipay}>
-              <ArrowRightLeft className="h-3.5 w-3.5" aria-hidden="true" />
-              转店铺支付宝
-            </Button>
-          ) : null}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => onShowTransactions(row.wallet, row.label)}
-          >
-            <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />
-            流水
-          </Button>
+          </div>
         </div>
+        {showMaturityBar ? (
+          <div className="text-xs tabular-nums text-emerald-600">
+            ↳ 待解冻 {formatMoney(maturityInfo.maturedAmountMinor, "CNY")} ({maturityInfo.maturedCount} 笔)
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -817,8 +830,15 @@ function ShopCard({
               onWithdraw={onWithdraw}
               onTransferToStoreAlipay={onTransferToStoreAlipay}
               releasing={releaseMutation.isPending}
-              releaseReport={releaseReport}
               onRelease={() => releaseMutation.mutate()}
+              maturityInfo={
+                row.kind === "aggregator-frozen"
+                  ? {
+                      maturedAmountMinor: shop.aggregatorMaturedAmountMinor,
+                      maturedCount: shop.aggregatorMaturedCount
+                    }
+                  : undefined
+              }
             />
           ))}
         </div>

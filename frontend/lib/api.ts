@@ -493,6 +493,11 @@ type TaobaoShopResponse = {
   aggregator_available?: TaobaoShopWalletResponse;
   bankCard?: TaobaoShopWalletResponse;
   bank_card?: TaobaoShopWalletResponse;
+  // PR #81：实时聚合"待解冻"金额 + 笔数（Decimal 字符串 / 整数）
+  aggregatorMaturedAmount?: string | number;
+  aggregator_matured_amount?: string | number;
+  aggregatorMaturedCount?: number;
+  aggregator_matured_count?: number;
   remark?: string | null;
   createdAt?: string;
   created_at?: string;
@@ -617,6 +622,9 @@ function normalizeTaobaoShop(shop: TaobaoShopResponse): TaobaoShop {
     throw new Error("淘宝店铺响应字段不完整");
   }
 
+  const maturedAmountRaw = shop.aggregatorMaturedAmount ?? shop.aggregator_matured_amount ?? 0;
+  const maturedCountRaw = shop.aggregatorMaturedCount ?? shop.aggregator_matured_count ?? 0;
+
   return {
     id: String(shop.id),
     name: shop.name,
@@ -626,6 +634,8 @@ function normalizeTaobaoShop(shop: TaobaoShopResponse): TaobaoShop {
     aggregatorFrozen: normalizeTaobaoShopWallet(aggregatorFrozen),
     aggregatorAvailable: normalizeTaobaoShopWallet(aggregatorAvailable),
     bankCard: normalizeTaobaoShopWallet(bankCard),
+    aggregatorMaturedAmountMinor: decimalToMinor(maturedAmountRaw, "CNY"),
+    aggregatorMaturedCount: Number(maturedCountRaw) || 0,
     remark: shop.remark ?? null,
     createdAt: shop.createdAt ?? shop.created_at ?? ""
   };

@@ -135,6 +135,10 @@ export type TaobaoShop = {
   aggregatorFrozen: TaobaoShopWallet;
   aggregatorAvailable: TaobaoShopWallet;
   bankCard: TaobaoShopWallet;
+  // PR #81/#82：聚合冻结钱包内"已到期、可一键解冻"的实时聚合数据
+  // 仅用于前端 UI 显示"待解冻 ¥X (N 笔)"，与 aggregatorFrozen.balanceMinor 不冲突
+  aggregatorMaturedAmountMinor: number;
+  aggregatorMaturedCount: number;
   remark: string | null;
   createdAt: string;
 };
