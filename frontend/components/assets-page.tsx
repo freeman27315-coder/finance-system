@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDownLeft,
+  ArrowLeftRight,
   ArrowUpRight,
   ChevronDown,
   ChevronRight,
@@ -24,7 +25,8 @@ import {
   deleteAssetWallet,
   getAssetTransactions,
   getAssetWallets,
-  patchAssetWallet
+  patchAssetWallet,
+  transferAssetWallets
 } from "@/lib/api";
 import { formatMoney, sumMinor } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -66,6 +68,27 @@ function collectGroupIds(wallets: WalletBalance[]): string[] {
 
 function isTopLevelWallet(wallet: WalletBalance): boolean {
   return !wallet.parentId && wallet.isGroup;
+}
+
+// 找资产支付宝下子钱包：递归 wallets 树，找 type === "ASSET_RMB" 且父钱包 name === "支付宝钱包" 的叶子节点
+function findAlipaySubWallets(wallets: WalletBalance[]): WalletBalance[] {
+  const result: WalletBalance[] = [];
+  const visit = (nodes: WalletBalance[], parentName: string | null) => {
+    for (const node of nodes) {
+      if (
+        !node.isGroup &&
+        node.type === "ASSET_RMB" &&
+        parentName === "支付宝钱包"
+      ) {
+        result.push(node);
+      }
+      if (node.children && node.children.length > 0) {
+        visit(node.children, node.name);
+      }
+    }
+  };
+  visit(wallets, null);
+  return result;
 }
 
 function AssetSummaryCards({ wallets, currency }: { wallets: WalletBalance[]; currency: Currency }) {
@@ -416,26 +439,164 @@ function DeleteWalletModal({
   );
 }
 
+function AssetTransferModal({
+  fromWallet,
+  candidates,
+  onClose
+}: {
+  fromWallet: WalletBalance;
+  candidates: WalletBalance[];
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const otherCandidates = candidates.filter((wallet) => wallet.id !== fromWallet.id);
+  const [toWalletId, setToWalletId] = useState<string>(otherCandidates[0]?.id ?? "");
+  const [amount, setAmount] = useState("");
+  const [remark, setRemark] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!toWalletId) {
+        throw new Error("请选择目标钱包");
+      }
+      if (toWalletId === fromWallet.id) {
+        throw new Error("不能转账给自己");
+      }
+      const num = Number.parseFloat(amount);
+      if (!amount || Number.isNaN(num) || num <= 0) {
+        throw new Error("金额必须大于 0");
+      }
+      // 校验：金额不超过 from 余额（以 minor 单位换算粗校验，最终以后端为准）
+      const amountMinor = Math.round(num * 100);
+      if (amountMinor > fromWallet.balanceMinor) {
+        throw new Error("金额超过当前钱包余额");
+      }
+      return transferAssetWallets(
+        fromWallet.id,
+        toWalletId,
+        amount,
+        remark.trim() === "" ? undefined : remark.trim()
+      );
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["assets"] });
+      await queryClient.invalidateQueries({ queryKey: ["asset-wallets"] });
+      await queryClient.invalidateQueries({ queryKey: ["asset-transactions"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      onClose();
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : "转账失败");
+    }
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Card className="w-full max-w-md">
+        <CardHeader>
+          <CardTitle>支付宝子钱包间转账</CardTitle>
+          <div className="mt-1 text-xs text-muted-foreground">
+            本期仅支持同币种（CNY ↔ CNY），跨币种暂不支持。
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">
+            <div className="text-xs text-muted-foreground">从（不可改）</div>
+            <div className="mt-1 flex items-center justify-between gap-3">
+              <div className="font-medium">{fromWallet.name}</div>
+              <div className="tabular-nums text-base font-semibold">
+                {formatMoney(fromWallet.balanceMinor, "CNY")}
+              </div>
+            </div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">目标钱包</div>
+            <select
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm tabular-nums outline-none focus:ring-2 focus:ring-primary"
+              value={toWalletId}
+              onChange={(event) => setToWalletId(event.target.value)}
+              disabled={otherCandidates.length === 0}
+            >
+              {otherCandidates.length === 0 ? (
+                <option value="">无其他支付宝子钱包</option>
+              ) : (
+                otherCandidates.map((wallet) => (
+                  <option key={wallet.id} value={wallet.id}>
+                    {`${wallet.name}（${formatMoney(wallet.balanceMinor, "CNY")}）`}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">金额（CNY）</div>
+            <input
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={amount}
+              onChange={(event) => setAmount(event.target.value)}
+              placeholder="转账金额"
+              type="number"
+              min="0"
+              step="0.01"
+              autoFocus
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">备注（选填）</div>
+            <textarea
+              className="min-h-[60px] w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={remark}
+              onChange={(event) => setRemark(event.target.value)}
+              placeholder="备注"
+            />
+          </div>
+          {error ? (
+            <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
+              {error}
+            </div>
+          ) : null}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>
+              取消
+            </Button>
+            <Button
+              onClick={() => mutation.mutate()}
+              disabled={mutation.isPending || otherCandidates.length === 0}
+            >
+              {mutation.isPending ? "提交中..." : "确认转账"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function AssetTree({
   wallets,
   expandedIds,
   selectedWalletId,
+  alipaySubWalletIds,
   onToggle,
   onSelectLeaf,
   onSelectGroup,
   onShowTransactions,
   onEdit,
-  onDelete
+  onDelete,
+  onTransfer
 }: {
   wallets: WalletBalance[];
   expandedIds: Set<string>;
   selectedWalletId: string;
+  alipaySubWalletIds: Set<string>;
   onToggle: (walletId: string) => void;
   onSelectLeaf: (walletId: string, mode?: MovementMode) => void;
   onSelectGroup: (walletId: string) => void;
   onShowTransactions: (walletId: string) => void;
   onEdit: (wallet: WalletBalance) => void;
   onDelete: (wallet: WalletBalance) => void;
+  onTransfer: (wallet: WalletBalance) => void;
 }) {
   const renderNode = (wallet: WalletBalance, depth: number) => {
     const hasChildren = Boolean(wallet.children?.length);
@@ -504,6 +665,12 @@ function AssetTree({
                       <List className="h-4 w-4" />
                       流水
                     </Button>
+                    {alipaySubWalletIds.has(wallet.id) ? (
+                      <Button variant="ghost" size="sm" onClick={() => onTransfer(wallet)}>
+                        <ArrowLeftRight className="h-4 w-4" aria-hidden="true" />
+                        转账
+                      </Button>
+                    ) : null}
                   </>
                 )}
                 <Button variant="outline" size="sm" onClick={() => onEdit(wallet)}>
@@ -600,6 +767,7 @@ export function AssetsPage() {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [editTarget, setEditTarget] = useState<WalletBalance | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<WalletBalance | null>(null);
+  const [transferTarget, setTransferTarget] = useState<WalletBalance | null>(null);
   const { data: wallets = [], isFetching, refetch } = useQuery({
     queryKey: ["assets"],
     queryFn: getAssetWallets
@@ -611,6 +779,11 @@ export function AssetsPage() {
   );
   const leafWallets = useMemo(() => flattenLeafWallets(scopedWallets), [scopedWallets]);
   const groupWallets = useMemo(() => flattenGroupWallets(scopedWallets), [scopedWallets]);
+  const alipaySubWallets = useMemo(() => findAlipaySubWallets(wallets), [wallets]);
+  const alipaySubWalletIds = useMemo(
+    () => new Set(alipaySubWallets.map((wallet) => wallet.id)),
+    [alipaySubWallets]
+  );
 
   useEffect(() => {
     const groupIds = collectGroupIds(scopedWallets);
@@ -675,6 +848,7 @@ export function AssetsPage() {
         wallets={scopedWallets}
         expandedIds={expandedIds}
         selectedWalletId={selectedWallet?.id ?? ""}
+        alipaySubWalletIds={alipaySubWalletIds}
         onToggle={(walletId) =>
           setExpandedIds((current) => {
             const next = new Set(current);
@@ -699,6 +873,7 @@ export function AssetsPage() {
         }}
         onEdit={setEditTarget}
         onDelete={setDeleteTarget}
+        onTransfer={setTransferTarget}
       />
       <AssetActions
         leafWallets={leafWallets}
@@ -716,6 +891,13 @@ export function AssetsPage() {
       ) : null}
       {deleteTarget ? (
         <DeleteWalletModal wallet={deleteTarget} onClose={() => setDeleteTarget(null)} />
+      ) : null}
+      {transferTarget ? (
+        <AssetTransferModal
+          fromWallet={transferTarget}
+          candidates={alipaySubWallets}
+          onClose={() => setTransferTarget(null)}
+        />
       ) : null}
     </div>
   );

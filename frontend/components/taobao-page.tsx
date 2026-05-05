@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  getAssetWallets,
   getTaobaoShops,
   getTaobaoWalletTransactions,
   importTaobaoExcel,
@@ -31,8 +32,30 @@ import type {
   TaobaoImportReport,
   TaobaoReleaseReport,
   TaobaoShop,
-  TaobaoShopWallet
+  TaobaoShopWallet,
+  WalletBalance
 } from "@/types";
+
+// 找资产支付宝下子钱包：递归 wallets 树，找 type === "ASSET_RMB" 且父钱包 name === "支付宝钱包" 的叶子节点
+function findAlipaySubWallets(wallets: WalletBalance[]): WalletBalance[] {
+  const result: WalletBalance[] = [];
+  const visit = (nodes: WalletBalance[], parentName: string | null) => {
+    for (const node of nodes) {
+      if (
+        !node.isGroup &&
+        node.type === "ASSET_RMB" &&
+        parentName === "支付宝钱包"
+      ) {
+        result.push(node);
+      }
+      if (node.children && node.children.length > 0) {
+        visit(node.children, node.name);
+      }
+    }
+  };
+  visit(wallets, null);
+  return result;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -284,6 +307,27 @@ function TransferToStoreAlipayModal({
   const [error, setError] = useState<string | null>(null);
   const isBookkeeping = shop.storeAlipayWallet.type === "TAOBAO";
 
+  // 仅丙火/小小（type === "ASSET_RMB"）需要加目标下拉，从资产支付宝下子钱包加载
+  const { data: assetWallets = [] } = useQuery({
+    queryKey: ["asset-wallets"],
+    queryFn: getAssetWallets,
+    enabled: !isBookkeeping
+  });
+
+  const alipaySubWallets = !isBookkeeping ? findAlipaySubWallets(assetWallets) : [];
+
+  // 默认选当前 storeAlipayWallet
+  const [targetWalletId, setTargetWalletId] = useState<string>(shop.storeAlipayWallet.id);
+
+  // 资产钱包加载完成后，确认默认目标存在；如不存在则 fallback 到第一个候选
+  useEffect(() => {
+    if (isBookkeeping) return;
+    if (alipaySubWallets.length === 0) return;
+    if (!alipaySubWallets.find((w) => w.id === targetWalletId)) {
+      setTargetWalletId(alipaySubWallets[0].id);
+    }
+  }, [alipaySubWallets, isBookkeeping, targetWalletId]);
+
   const mutation = useMutation({
     mutationFn: async () => {
       let amountValue: string | undefined;
@@ -294,15 +338,22 @@ function TransferToStoreAlipayModal({
         }
         amountValue = amount;
       }
-      return transferTaobaoToStoreAlipay(shop.id, {
+      // 兔仔：不传 target_wallet_id（后端走 shop.storeAlipayWallet）
+      // 丙火/小小：传选中的 targetWalletId
+      const payload: { amount?: string; remark?: string; targetWalletId?: string } = {
         amount: amountValue,
         remark: remark.trim() === "" ? undefined : remark.trim()
-      });
+      };
+      if (!isBookkeeping && targetWalletId) {
+        payload.targetWalletId = targetWalletId;
+      }
+      return transferTaobaoToStoreAlipay(shop.id, payload);
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["taobao-shops"] });
       await queryClient.invalidateQueries({ queryKey: ["taobao-wallet-transactions", shop.id] });
       await queryClient.invalidateQueries({ queryKey: ["asset-wallets"] });
+      await queryClient.invalidateQueries({ queryKey: ["assets"] });
       await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       if (isBookkeeping) {
         onBookkeepingSuccess(`${shop.name}：已记账（实际钱不在手中）`);
@@ -314,7 +365,9 @@ function TransferToStoreAlipayModal({
     }
   });
 
-  const targetName = shop.storeAlipayWallet.name;
+  const targetName = isBookkeeping
+    ? shop.storeAlipayWallet.name
+    : alipaySubWallets.find((w) => w.id === targetWalletId)?.name ?? shop.storeAlipayWallet.name;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -337,6 +390,34 @@ function TransferToStoreAlipayModal({
               {formatMoney(shop.bankCard.balanceMinor, "CNY")}
             </div>
           </div>
+          {isBookkeeping ? (
+            <div className="rounded-md border border-amber-200 bg-amber-50/60 p-3 text-sm">
+              <div className="text-xs text-muted-foreground">将转入</div>
+              <div className="mt-1 text-sm font-medium text-amber-700">
+                {shop.storeAlipayWallet.name}（账面）
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              <div className="text-sm text-muted-foreground">目标支付宝</div>
+              <select
+                className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm tabular-nums outline-none focus:ring-2 focus:ring-primary"
+                value={targetWalletId}
+                onChange={(event) => setTargetWalletId(event.target.value)}
+                disabled={alipaySubWallets.length === 0}
+              >
+                {alipaySubWallets.length === 0 ? (
+                  <option value="">加载中...</option>
+                ) : (
+                  alipaySubWallets.map((wallet) => (
+                    <option key={wallet.id} value={wallet.id}>
+                      {`${wallet.name}（${formatMoney(wallet.balanceMinor, "CNY")}）`}
+                    </option>
+                  ))
+                )}
+              </select>
+            </div>
+          )}
           <div className="space-y-1">
             <div className="text-sm text-muted-foreground">金额（CNY，留空 = 全部余额）</div>
             <input
