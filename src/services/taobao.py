@@ -12,19 +12,22 @@ from src.models.wallet import Currency, Wallet, WalletType, create_wallet
 
 # 每店铺自动建的 5 个 TAOBAO 钱包后缀
 TAOBAO_SHOP_WALLET_SUFFIXES = (
-    "支付宝在途",
-    "微信在途",
+    "支付宝支付在途",
+    "微信支付在途",
     "聚合支付·冻结中",
     "聚合支付·可提现",
     "银行卡",
 )
 
+# 兔仔的店铺支付宝钱包名（type=TAOBAO 顶级,非资产页可见）
+TUZAI_STORE_ALIPAY_WALLET_NAME = "兔仔电玩支付宝"
+
 # 3 个店铺的初始化配置
-# payment_wallet_name 为支付宝钱包分组下的子钱包名（兔仔电玩为 None）
+# store_alipay_wallet_name 为支付宝钱包分组下的子钱包名（兔仔为 None,改为单建 TAOBAO 钱包）
 DEFAULT_TAOBAO_SHOPS = (
-    {"name": "丙火电玩", "payment_wallet_name": "丙火网络支付宝"},
-    {"name": "兔仔电玩", "payment_wallet_name": None},
-    {"name": "小小电玩", "payment_wallet_name": "小小电玩支付宝"},
+    {"name": "丙火电玩", "store_alipay_wallet_name": "丙火网络支付宝"},
+    {"name": "兔仔电玩", "store_alipay_wallet_name": None},
+    {"name": "小小电玩", "store_alipay_wallet_name": "小小电玩支付宝"},
 )
 
 
@@ -92,7 +95,9 @@ def ensure_default_taobao_wallets(session: Session) -> None:
     Run order:
       1. 在资产支付宝下补建 '小小电玩支付宝' 子钱包（如缺失）
       2. 创建 3 个 TaobaoShop（已存在则跳过）
-      3. 每店铺自动建 5 个 TAOBAO 钱包
+      3. 每店铺自动建 5 个 TAOBAO 钱包（支付宝支付在途/微信支付在途/聚合冻结/聚合可提现/银行卡）
+      4. 兔仔的 store_alipay_wallet 指向独立的 type=TAOBAO 顶级钱包"兔仔电玩支付宝"
+         （账面记账,不在 GET /wallets/assets 树中可见）
     """
     # 1. 先确保 "小小电玩支付宝" 在 支付宝钱包 分组下存在
     _ensure_alipay_sub_wallet(session, "小小电玩支付宝")
@@ -100,7 +105,7 @@ def ensure_default_taobao_wallets(session: Session) -> None:
     # 2. 创建/复用 3 个店铺
     for shop_config in DEFAULT_TAOBAO_SHOPS:
         shop_name: str = shop_config["name"]
-        payment_wallet_name: Optional[str] = shop_config["payment_wallet_name"]
+        store_alipay_wallet_name: Optional[str] = shop_config["store_alipay_wallet_name"]
 
         existing_shop = session.scalar(
             select(TaobaoShop).where(TaobaoShop.name == shop_name)
@@ -114,15 +119,17 @@ def ensure_default_taobao_wallets(session: Session) -> None:
             wallet = _ensure_taobao_wallet(session, f"{shop_name} {suffix}")
             wallets.append(wallet)
 
-        # payment_wallet：若配置了名称则在支付宝钱包下找；否则保持 None
-        payment_wallet_id: Optional[int] = None
-        if payment_wallet_name:
-            payment_wallet = _ensure_alipay_sub_wallet(session, payment_wallet_name)
-            payment_wallet_id = payment_wallet.id
+        # 4. 解析店铺支付宝钱包：
+        #    - A 类（丙火/小小）：在资产支付宝下找/建
+        #    - B 类（兔仔）：单建 type=TAOBAO 顶级钱包"兔仔电玩支付宝"
+        if store_alipay_wallet_name:
+            store_alipay_wallet = _ensure_alipay_sub_wallet(session, store_alipay_wallet_name)
+        else:
+            store_alipay_wallet = _ensure_taobao_wallet(session, TUZAI_STORE_ALIPAY_WALLET_NAME)
 
         shop = TaobaoShop(
             name=shop_name,
-            payment_wallet_id=payment_wallet_id,
+            store_alipay_wallet_id=store_alipay_wallet.id,
             unconfirmed_alipay_wallet_id=wallets[0].id,
             unconfirmed_wechat_wallet_id=wallets[1].id,
             aggregator_frozen_wallet_id=wallets[2].id,

@@ -3,7 +3,7 @@
 覆盖：
 - /aggregator/release：到期累计、无到期、防御性排除已撤流水
 - /withdraw：可提现 → 银行卡 / 余额不足 / amount<=0
-- /transfer-to-asset：丙火 / 兔仔禁用 / amount 默认全额 / 银行卡空
+- /transfer-to-store-alipay：丙火 / 兔仔均成功 / amount 默认全额 / 银行卡空
 - /orders：列表 + status/payment_method 过滤 + 分页 + 排序
 - /wallets/{id}/transactions：mature_at 字段、wallet_id 校验
 """
@@ -250,14 +250,13 @@ def test_withdraw_400_when_amount_not_positive(client):
 
 
 # ---------------------------------------------------------------------------
-# /transfer-to-asset
+# /transfer-to-store-alipay
 # ---------------------------------------------------------------------------
 
 
-def test_transfer_to_asset_a_shop_explicit_amount(client):
-    """丙火电玩：bank_card → 丙火网络支付宝，指定 amount。"""
+def test_transfer_to_store_alipay_a_shop_explicit_amount(client):
+    """丙火电玩：bank_card → 丙火网络支付宝（资产支付宝子钱包），指定 amount。"""
     shop = _shop_by_name("丙火电玩")
-    assert shop.payment_wallet_id is not None
 
     db = database.SessionLocal()
     try:
@@ -267,7 +266,7 @@ def test_transfer_to_asset_a_shop_explicit_amount(client):
         db.close()
 
     response = client.post(
-        f"/taobao/shops/{shop.id}/transfer-to-asset",
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
         json={"amount": "300"},
     )
     assert response.status_code == 200, response.text
@@ -279,26 +278,38 @@ def test_transfer_to_asset_a_shop_explicit_amount(client):
     assert payload["remark"] == "提现"
 
     assert _wallet_balance(shop.bank_card_wallet_id) == Decimal("200.000000")
-    assert _wallet_balance(shop.payment_wallet_id) == Decimal("300.000000")
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("300.000000")
 
 
-def test_transfer_to_asset_b_shop_400(client):
-    """兔仔电玩无 payment_wallet → 400。"""
+def test_transfer_to_store_alipay_b_shop_succeeds(client):
+    """兔仔电玩：bank_card → 兔仔电玩支付宝（type=TAOBAO,账面记账）→ 成功。"""
     shop = _shop_by_name("兔仔电玩")
-    assert shop.payment_wallet_id is None
+
+    db = database.SessionLocal()
+    try:
+        credit(db, shop.bank_card_wallet_id, Decimal("80"), remark="种子")
+        db.commit()
+    finally:
+        db.close()
 
     response = client.post(
-        f"/taobao/shops/{shop.id}/transfer-to-asset",
-        json={"amount": "10"},
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
+        json={"amount": "30"},
     )
-    assert response.status_code == 400
-    assert "支付宝" in response.json()["detail"]
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert Decimal(payload["amount"]) == Decimal("30")
+    assert Decimal(payload["fromWalletBalance"]) == Decimal("50.000000")
+    assert Decimal(payload["toWalletBalance"]) == Decimal("30.000000")
+
+    assert _wallet_balance(shop.bank_card_wallet_id) == Decimal("50.000000")
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("30.000000")
 
 
-def test_transfer_to_asset_default_amount_is_full_bank_balance(client):
+def test_transfer_to_store_alipay_default_amount_is_full_bank_balance(client):
     """amount 不传 → 默认转走银行卡全余额。"""
     shop = _shop_by_name("小小电玩")
-    assert shop.payment_wallet_id is not None
 
     db = database.SessionLocal()
     try:
@@ -308,7 +319,7 @@ def test_transfer_to_asset_default_amount_is_full_bank_balance(client):
         db.close()
 
     response = client.post(
-        f"/taobao/shops/{shop.id}/transfer-to-asset",
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
         json={},
     )
     assert response.status_code == 200, response.text
@@ -319,17 +330,17 @@ def test_transfer_to_asset_default_amount_is_full_bank_balance(client):
     assert Decimal(payload["toWalletBalance"]) == Decimal("777.000000")
 
 
-def test_transfer_to_asset_400_when_bank_card_empty(client):
+def test_transfer_to_store_alipay_400_when_bank_card_empty(client):
     """银行卡余额为 0 时 amount 默认 0 → 400。"""
     shop = _shop_by_name("丙火电玩")
     response = client.post(
-        f"/taobao/shops/{shop.id}/transfer-to-asset",
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
         json={},
     )
     assert response.status_code == 400
 
 
-def test_transfer_to_asset_custom_remark(client):
+def test_transfer_to_store_alipay_custom_remark(client):
     shop = _shop_by_name("丙火电玩")
     db = database.SessionLocal()
     try:
@@ -339,7 +350,7 @@ def test_transfer_to_asset_custom_remark(client):
         db.close()
 
     response = client.post(
-        f"/taobao/shops/{shop.id}/transfer-to-asset",
+        f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
         json={"amount": "50", "remark": "5月转资产"},
     )
     assert response.status_code == 200
@@ -492,7 +503,7 @@ def test_wallet_transactions_404_when_wallet_not_in_shop(client):
         shop.aggregator_frozen_wallet_id,
         shop.aggregator_available_wallet_id,
         shop.bank_card_wallet_id,
-        shop.payment_wallet_id,
+        shop.store_alipay_wallet_id,
     }
     response = client.get(
         f"/taobao/shops/{shop.id}/wallets/{other_wallet_id}/transactions"
@@ -500,19 +511,19 @@ def test_wallet_transactions_404_when_wallet_not_in_shop(client):
     assert response.status_code == 404
 
 
-def test_wallet_transactions_payment_wallet_allowed(client):
-    """payment_wallet（资产支付宝）也应被允许查询。"""
+def test_wallet_transactions_store_alipay_wallet_allowed(client):
+    """store_alipay_wallet（店铺支付宝）也应被允许查询。"""
     shop = _shop_by_name("丙火电玩")
-    # 先 credit 到 payment_wallet
+    # 先 credit 到 store_alipay_wallet
     db = database.SessionLocal()
     try:
-        credit(db, shop.payment_wallet_id, Decimal("88"), remark="测试支付宝入账")
+        credit(db, shop.store_alipay_wallet_id, Decimal("88"), remark="测试支付宝入账")
         db.commit()
     finally:
         db.close()
 
     response = client.get(
-        f"/taobao/shops/{shop.id}/wallets/{shop.payment_wallet_id}/transactions"
+        f"/taobao/shops/{shop.id}/wallets/{shop.store_alipay_wallet_id}/transactions"
     )
     assert response.status_code == 200
     txs = response.json()

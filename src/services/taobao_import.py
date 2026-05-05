@@ -233,29 +233,25 @@ def _resolve_target_wallet(
     payment_method: TaobaoOrderPaymentMethod,
     system_status: TaobaoOrderStatus,
 ) -> Optional[int]:
-    """三维分流（支付方式 × 系统状态 × 店铺类型）→ 目标钱包 id。
+    """三维分流（支付方式 × 系统状态）→ 目标钱包 id。
 
     返回 None 表示该状态不入账（如 closed）。
 
-    分流矩阵：
-    - alipay/shipped_unconfirmed → unconfirmed_alipay  (A/B 一致)
-    - alipay/received            → A 类: payment_wallet  | B 类: bank_card
-    - wechat/shipped_unconfirmed → unconfirmed_wechat  (A/B 一致)
-    - wechat/received            → aggregator_frozen   (A/B 一致;聚合支付独立于店铺归属)
+    分流矩阵（A/B 已统一,不再分流）：
+    - alipay/shipped_unconfirmed → unconfirmed_alipay
+    - alipay/received            → store_alipay_wallet（A: 资产支付宝子钱包 / B: 兔仔电玩支付宝）
+    - wechat/shipped_unconfirmed → unconfirmed_wechat
+    - wechat/received            → aggregator_frozen（聚合支付独立于店铺归属）
     - closed                     → None (不入账)
     """
     if system_status == TaobaoOrderStatus.CLOSED:
         return None
 
-    is_b_type = shop.payment_wallet_id is None  # 兔仔电玩
-
     if payment_method == TaobaoOrderPaymentMethod.ALIPAY:
         if system_status == TaobaoOrderStatus.SHIPPED_UNCONFIRMED:
             return shop.unconfirmed_alipay_wallet_id
         if system_status == TaobaoOrderStatus.RECEIVED:
-            if is_b_type:
-                return shop.bank_card_wallet_id  # 兔仔停在银行卡
-            return shop.payment_wallet_id
+            return shop.store_alipay_wallet_id
     elif payment_method == TaobaoOrderPaymentMethod.WECHAT:
         if system_status == TaobaoOrderStatus.SHIPPED_UNCONFIRMED:
             return shop.unconfirmed_wechat_wallet_id
@@ -330,17 +326,42 @@ def import_qianniu_workbook(
 
     调用方负责 commit / rollback。本函数只 add + flush，**不 commit**。
     任何 SQLAlchemy 异常会向上抛，调用方应 rollback。
+
+    解析时会先把所有数据行解析一次，校验"店铺名称"列与上传 ``shop.name`` 一致，
+    任何一行不匹配（含空字符串）→ 抛 TaobaoImportError，路由层翻译为 400 整体回滚。
     """
     rows = parse_workbook(file_obj)
     report = ImportReport(shop_name=shop.name)
 
+    # 第一遍：解析所有数据行 + 校验店铺名称
+    parsed_rows: list[tuple[int, ParsedRow]] = []
+    parse_errors: list[str] = []
+    mismatched_shop_names: set[str] = set()
     for row_index, raw_row in enumerate(rows[1:], start=2):
-        report.total_rows_parsed += 1
         try:
             parsed = _parse_row(row_index, raw_row)
         except Exception as exc:
-            report.errors.append(f"行 {row_index} 解析异常: {exc}")
+            parse_errors.append(f"行 {row_index} 解析异常: {exc}")
             continue
+        parsed_rows.append((row_index, parsed))
+        # 行级店铺名校验：空字符串视为不匹配
+        if parsed.shop_name_in_row != shop.name:
+            mismatched_shop_names.add(parsed.shop_name_in_row)
+
+    if mismatched_shop_names:
+        # 排序后展示,稳定输出便于测试
+        names = ", ".join(sorted(mismatched_shop_names))
+        raise TaobaoImportError(
+            f"Excel 包含其他店铺数据：{names}，请上传匹配 {shop.name} 的 Excel"
+        )
+
+    # 第二遍：实际入账（解析阶段的解析异常仍写到 report.errors）
+    for err in parse_errors:
+        report.errors.append(err)
+        report.total_rows_parsed += 1
+
+    for row_index, parsed in parsed_rows:
+        report.total_rows_parsed += 1
 
         # 跳过未付款 / 未发货
         if parsed.is_pending_pay_or_unshipped:
