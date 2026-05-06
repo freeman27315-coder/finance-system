@@ -219,6 +219,7 @@ def _seed_frozen_tx(
                 order_number=order_number or f"SEED_{tx.id}",
                 payment_method=TaobaoOrderPaymentMethod.WECHAT.value,
                 amount=amount,
+                gross_amount=amount,
                 status=TaobaoOrderStatus.RECEIVED.value,
                 bookkeeping_wallet_id=shop.aggregator_frozen_wallet_id,
                 bookkeeping_tx_id=tx.id,

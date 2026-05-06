@@ -87,8 +87,17 @@ class TaobaoOrder(Base):
     payment_method: Mapped[TaobaoOrderPaymentMethod] = mapped_column(
         String(16), nullable=False
     )
+    # amount 语义：当前入账钱包的金额。在途 = gross；已确认 = net（gross - fee）
     amount: Mapped[Decimal] = mapped_column(
         Numeric(18, 6), nullable=False, default=Decimal("0")
+    )
+    # gross_amount：Excel 原始金额（已确认用 "确认收货打款金额"，在途用 "买家实付金额"）
+    gross_amount: Mapped[Decimal] = mapped_column(
+        Numeric(18, 6), nullable=False, default=Decimal("0")
+    )
+    # fee_amount：仅 received 时填值（gross × 0.002，2 位 ROUND_HALF_UP）；在途为 NULL
+    fee_amount: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(18, 6), nullable=True
     )
     status: Mapped[TaobaoOrderStatus] = mapped_column(String(32), nullable=False)
     bookkeeping_wallet_id: Mapped[Optional[int]] = mapped_column(
@@ -101,6 +110,10 @@ class TaobaoOrder(Base):
         DateTime(timezone=True), nullable=True
     )
     received_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # confirmed_at：来自 Excel "确认收货时间"。微信 mature_at 计算基础。
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     last_synced_at: Mapped[datetime] = mapped_column(
