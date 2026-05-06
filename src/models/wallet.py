@@ -6,10 +6,11 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, func, select
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, select
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 from src.database import Base
+from src.utils.time import china_now
 
 
 class WalletType(str, Enum):
@@ -48,7 +49,7 @@ class Wallet(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=func.now(),
+        default=china_now,
     )
     deleted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
@@ -77,7 +78,7 @@ class WalletTransaction(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=func.now(),
+        default=china_now,
     )
     mature_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),

@@ -26,11 +26,12 @@ from sqlalchemy.orm import Session
 
 from src.models.taobao import TaobaoOrder
 from src.models.wallet import TransactionDirection, WalletTransaction
+from src.utils.time import china_now
 
 
 def _today_cutoff() -> datetime:
-    """返回明天 00:00:00（naive 本地时间）—— mature_at < cutoff 即视为今天或之前到期。"""
-    now = datetime.now()
+    """返回明天 00:00:00（中国时间 naive）—— mature_at < cutoff 即视为今天或之前到期。"""
+    now = china_now()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     return today_start + timedelta(days=1)
 

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from src.database import get_db
 from src.models.wallet import Wallet, credit, debit, list_transactions
 from src.services.assets import create_asset_sub_wallet, is_asset_wallet, list_asset_wallets
+from src.utils.time import china_now
 
 
 router = APIRouter(prefix="/wallets/assets", tags=["asset-wallets"])
@@ -214,7 +215,7 @@ def delete_asset_wallet(
             detail="请先删除子钱包",
         )
 
-    wallet.deleted_at = func.now()
+    wallet.deleted_at = china_now()
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
