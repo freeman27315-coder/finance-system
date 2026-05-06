@@ -4,8 +4,9 @@
 1. 解析 .xlsx 文件 → 标准化结构化行（v2 14 列严格表头）
 2. 按 14 个字段 / 5 状态映射 / 2 支付方式 / 2 店铺类型分流入账
 3. 0.6% 手续费规则：仅 received 时扣（gross - round(gross*0.006, 2)）
-4. 微信/received 的 mature_at = ``(确认收货日期 + 7 天) 当天 00:00:00``
-   —— 按"日"对齐：5/5 任何时刻确认的订单 → 5/12 0:00 起一起到期解冻
+4. 微信/received 的 mature_at = ``confirmed_at + 7 天``（精确到分秒，与千牛后台一致）
+   —— 4/29 14:30 确认 → 5/6 14:30 进入"聚合可提现"显示
+   —— 实际可点提现按钮要等 5/7（与千牛节奏一致，CEO 手动把控,系统不强制拦截）
 5. 老订单状态变化 reconcile（撤旧流水 + 建新流水；在途→确认差额=fee 自然消失）
 6. 导入末尾自动跑解冻（与原 release_aggregator 端点逻辑一致）
 7. 单一事务原子（异常由调用方 rollback）
@@ -334,13 +335,12 @@ def _credit_for_row(
     wallet_id: int,
     amount: Decimal,
 ) -> WalletTransaction:
-    """按规则 credit。微信/received 写 mature_at = (确认收货日期 + 7 天) 当天 00:00:00。
+    """按规则 credit。微信/received 写 mature_at = confirmed_at + 7 天（精确到分秒）。
 
     ``amount`` 已是入账钱包应入账的"当前金额"（received 是 net；shipped_unconfirmed 是 gross）。
 
-    mature_at 按"日"对齐：5/5 14:30 与 5/5 02:15 确认的订单 mature_at 都是 5/12 00:00:00，
-    这样 5/12 任意时刻调用 release（mature_at <= now()）都能把 5/5 整天订单一起解冻，
-    符合 CEO 业务"每天解冻 7 天前 0 点到 23:59 的订单"逻辑。
+    mature_at 与千牛后台一致：4/29 14:30 确认收货 → 5/6 14:30 进入"聚合可提现"。
+    （CEO 沿千牛节奏手动操作提现,系统不强制拦截当天提现）
     """
     mature_at: Optional[datetime] = None
     if (
@@ -349,9 +349,7 @@ def _credit_for_row(
     ):
         # 优先用 confirmed_at（Excel "确认收货时间"），缺失时兜底用 shipped_at；都缺则 now()
         base = parsed.confirmed_at or parsed.shipped_at or datetime.now()
-        # 按"日"对齐：截到当天 0:00:00 再加 7 天 → 7 天后的 0:00:00 起到期
-        base_day_start = base.replace(hour=0, minute=0, second=0, microsecond=0)
-        mature_at = base_day_start + timedelta(days=WECHAT_MATURE_DAYS)
+        mature_at = base + timedelta(days=WECHAT_MATURE_DAYS)
     remark = f"千牛订单 #{parsed.order_number} {parsed.system_status.value}"
     return credit(
         session,
