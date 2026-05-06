@@ -25,7 +25,7 @@ TUZAI_STORE_ALIPAY_WALLET_NAME = "兔仔电玩支付宝"
 # 3 个店铺的初始化配置
 # store_alipay_wallet_name 为支付宝钱包分组下的子钱包名（兔仔为 None,改为单建 TAOBAO 钱包）
 DEFAULT_TAOBAO_SHOPS = (
-    {"name": "丙火电玩", "store_alipay_wallet_name": "丙火网络支付宝"},
+    {"name": "丙火网络", "store_alipay_wallet_name": "丙火网络支付宝"},
     {"name": "兔仔电玩", "store_alipay_wallet_name": None},
     {"name": "小小电玩", "store_alipay_wallet_name": "小小电玩支付宝"},
 )

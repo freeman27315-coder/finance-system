@@ -38,7 +38,7 @@ def test_get_shops_returns_three_shops_with_six_wallets(client):
     shops = response.json()
 
     assert len(shops) == 3
-    assert {shop["name"] for shop in shops} == {"丙火电玩", "兔仔电玩", "小小电玩"}
+    assert {shop["name"] for shop in shops} == {"丙火网络", "兔仔电玩", "小小电玩"}
 
     for shop in shops:
         assert "unconfirmedAlipay" in shop
@@ -69,7 +69,7 @@ def test_store_alipay_wallet_mapping(client):
     shops = {shop["name"]: shop for shop in response.json()}
 
     # 丙火/小小指向资产支付宝下的子钱包（type=asset_rmb）
-    binghuo = shops["丙火电玩"]
+    binghuo = shops["丙火网络"]
     assert binghuo["storeAlipayWallet"]["name"] == "丙火网络支付宝"
     assert binghuo["storeAlipayWallet"]["type"] == WalletType.ASSET_RMB.value
 
@@ -159,14 +159,14 @@ def test_taobao_wallet_names_use_renamed_suffixes(client):
             ).all()
         }
         # 新后缀必须存在
-        assert "丙火电玩 支付宝支付在途" in names
-        assert "丙火电玩 微信支付在途" in names
+        assert "丙火网络 支付宝支付在途" in names
+        assert "丙火网络 微信支付在途" in names
         assert "兔仔电玩 支付宝支付在途" in names
         assert "小小电玩 微信支付在途" in names
         # 旧后缀不应再出现
         for old_name in (
-            "丙火电玩 支付宝在途",
-            "丙火电玩 微信在途",
+            "丙火网络 支付宝在途",
+            "丙火网络 微信在途",
             "兔仔电玩 支付宝在途",
         ):
             assert old_name not in names
@@ -255,7 +255,7 @@ def test_shops_default_pending_maturity_is_zero(client):
 
 def test_shops_pending_maturity_excludes_unmatured(client):
     """1 笔已到期 + 1 笔未到期 → 仅已到期那笔被计入。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     now = datetime.now(timezone.utc)
 
     _seed_frozen_tx(shop, Decimal("120"), now - timedelta(hours=1), order_number="MATURED_X")
@@ -265,7 +265,7 @@ def test_shops_pending_maturity_excludes_unmatured(client):
     assert response.status_code == 200, response.text
     shops = {s["name"]: s for s in response.json()}
 
-    binghuo = shops["丙火电玩"]
+    binghuo = shops["丙火网络"]
     assert Decimal(binghuo["aggregatorMaturedAmount"]) == Decimal("120")
     assert binghuo["aggregatorMaturedCount"] == 1
 
