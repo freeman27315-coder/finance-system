@@ -4,8 +4,8 @@
 - 端点 happy path：新订单 / 老订单 / 状态变化 / 关闭 / 跳过
 - 14 列严格表头校验（多 1 列、少 1 列、列名错都视为结构错）
 - 三维分流矩阵（A 类 vs B 类 / alipay vs wechat / shipped_unconfirmed vs received）
-- 0.2% 手续费规则：仅 received 时扣，net = gross - round(gross*0.002, 2) ROUND_HALF_UP
-  边界值：56→0.11、269→0.54、27.50→0.06、100→0.20
+- 0.6% 手续费规则：仅 received 时扣，net = gross - round(gross*0.006, 2) ROUND_HALF_UP
+  边界值：56→0.34、269→1.61、27.50→0.17、100→0.60
 - 在途订单 amount=gross；已确认订单 amount=net、gross/fee/confirmed_at 都填值
 - 微信/received → aggregator_frozen + mature_at = confirmed_at + 7d；缺失时兜底 shipped_at + 7d
 - reconcile：在途→确认（debit gross + credit net，差额=fee 自然消失）
@@ -338,7 +338,7 @@ def test_import_400_when_file_empty(client):
 
 
 def test_new_alipay_received_a_shop_to_store_alipay_wallet(client):
-    """A 类店铺（丙火）alipay/received → store_alipay_wallet,扣 0.2% 手续费。"""
+    """A 类店铺（丙火）alipay/received → store_alipay_wallet,扣 0.6% 手续费。"""
     shop = _shop_by_name("丙火网络")
     rows = [_row(
         order_no="ORDER_A1",
@@ -357,10 +357,10 @@ def test_new_alipay_received_a_shop_to_store_alipay_wallet(client):
     payload = response.json()
     assert payload["createdOrders"] == 1
 
-    # 100.00 → fee 0.20 → net 99.80
-    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("99.800000")
+    # 100.00 → fee 0.60 → net 99.40
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("99.400000")
     assert _wallet_balance(shop.unconfirmed_alipay_wallet_id) == Decimal("0.000000")
-    assert Decimal(payload["totalFeeAmount"]) == Decimal("0.20")
+    assert Decimal(payload["totalFeeAmount"]) == Decimal("0.60")
 
 
 def test_new_alipay_received_b_shop_to_store_alipay_wallet(client):
@@ -380,8 +380,8 @@ def test_new_alipay_received_b_shop_to_store_alipay_wallet(client):
     )]
     response = _post_import(client, shop.id, _build_xlsx(rows))
     assert response.status_code == 200, response.text
-    # 50 → fee 0.10 → net 49.90
-    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("49.900000")
+    # 50 → fee 0.30 → net 49.70
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("49.700000")
     assert _wallet_balance(shop.bank_card_wallet_id) == Decimal("0.000000")
 
 
@@ -405,12 +405,14 @@ def test_new_wechat_received_to_aggregator_frozen_with_mature_at_from_confirmed_
     response = _post_import(client, shop.id, _build_xlsx(rows))
     assert response.status_code == 200, response.text
 
-    # 200 → fee 0.40 → net 199.60
-    assert _wallet_balance(shop.aggregator_frozen_wallet_id) == Decimal("199.600000")
+    # 200 → fee 1.20 → net 198.80
+    assert _wallet_balance(shop.aggregator_frozen_wallet_id) == Decimal("198.800000")
     tx = _last_tx(shop.aggregator_frozen_wallet_id)
     assert tx is not None
     assert tx.mature_at is not None
-    expected_mature = datetime.strptime(confirmed_at_str, "%Y-%m-%d %H:%M:%S") + timedelta(days=7)
+    # mature_at 按"日"对齐：confirmed_at 当天 0:00 + 7 天
+    confirmed_dt = datetime.strptime(confirmed_at_str, "%Y-%m-%d %H:%M:%S")
+    expected_mature = confirmed_dt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=7)
     assert tx.mature_at.replace(tzinfo=None) == expected_mature
 
 
@@ -434,7 +436,9 @@ def test_mature_at_falls_back_to_shipped_at_when_confirmed_at_missing(client):
     assert response.status_code == 200, response.text
 
     tx = _last_tx(shop.aggregator_frozen_wallet_id)
-    expected = datetime.strptime(shipped_at_str, "%Y-%m-%d %H:%M:%S") + timedelta(days=7)
+    # mature_at 按"日"对齐：shipped_at 当天 0:00 + 7 天
+    shipped_dt = datetime.strptime(shipped_at_str, "%Y-%m-%d %H:%M:%S")
+    expected = shipped_dt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=7)
     assert tx.mature_at.replace(tzinfo=None) == expected
 
 
@@ -455,8 +459,8 @@ def test_new_wechat_received_b_shop_also_to_aggregator_frozen(client):
     )]
     response = _post_import(client, shop.id, _build_xlsx(rows))
     assert response.status_code == 200, response.text
-    # 60 → fee 0.12 → net 59.88
-    assert _wallet_balance(shop.aggregator_frozen_wallet_id) == Decimal("59.880000")
+    # 60 → fee 0.36 → net 59.64
+    assert _wallet_balance(shop.aggregator_frozen_wallet_id) == Decimal("59.640000")
 
 
 def test_new_alipay_shipped_unconfirmed_to_unconfirmed_alipay(client):
@@ -509,18 +513,18 @@ def test_new_wechat_shipped_unconfirmed_to_unconfirmed_wechat(client):
 
 
 # ---------------------------------------------------------------------------
-# 0.2% 手续费精度（CEO 边界值）
+# 0.6% 手续费精度（CEO 边界值）
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "gross,expected_net,expected_fee",
     [
-        ("56.00", "55.890000", "0.110000"),
-        ("269.00", "268.460000", "0.540000"),
-        ("27.50", "27.440000", "0.060000"),  # 0.055 → ROUND_HALF_UP → 0.06
-        ("100.00", "99.800000", "0.200000"),
-        ("57.00", "56.890000", "0.110000"),
+        ("56.00", "55.660000", "0.340000"),    # 56*0.006=0.336 → 0.34
+        ("269.00", "267.390000", "1.610000"),  # 269*0.006=1.614 → 1.61
+        ("27.50", "27.330000", "0.170000"),    # 27.5*0.006=0.165 → ROUND_HALF_UP → 0.17
+        ("100.00", "99.400000", "0.600000"),   # 100*0.006=0.60
+        ("57.00", "56.660000", "0.340000"),    # 57*0.006=0.342 → 0.34
     ],
 )
 def test_fee_precision_rounding_half_up(client, gross, expected_net, expected_fee):
@@ -570,8 +574,8 @@ def test_total_fee_amount_summed_across_received_rows(client):
     response = _post_import(client, shop.id, _build_xlsx(rows))
     assert response.status_code == 200, response.text
     payload = response.json()
-    # 0.11 + 0.54 + 0.20 = 0.85
-    assert Decimal(payload["totalFeeAmount"]) == Decimal("0.85")
+    # 0.34 + 1.61 + 0.60 = 2.55
+    assert Decimal(payload["totalFeeAmount"]) == Decimal("2.55")
 
 
 # ---------------------------------------------------------------------------
@@ -678,9 +682,9 @@ def test_new_closed_order_no_credit(client):
 
 
 def test_reconcile_shipped_unconfirmed_to_received_alipay(client):
-    """alipay 在途 → 确认：撤老钱包(unconfirmed_alipay 100) + 入新钱包(store_alipay 99.80)。
+    """alipay 在途 → 确认：撤老钱包(unconfirmed_alipay 100) + 入新钱包(store_alipay 99.40)。
 
-    差额 0.2 = fee 自然消失。
+    差额 0.6 = fee 自然消失。
     """
     shop = _shop_by_name("丙火网络")
     # 1) 在途 100
@@ -721,10 +725,10 @@ def test_reconcile_shipped_unconfirmed_to_received_alipay(client):
 
     # 老钱包：debit 100 → 0
     assert _wallet_balance(shop.unconfirmed_alipay_wallet_id) == Decimal("0.000000")
-    # 新钱包：credit net=99.80
-    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("99.800000")
-    # totalFee = 0.20
-    assert Decimal(payload["totalFeeAmount"]) == Decimal("0.20")
+    # 新钱包：credit net=99.40
+    assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("99.400000")
+    # totalFee = 0.60
+    assert Decimal(payload["totalFeeAmount"]) == Decimal("0.60")
 
     # 老钱包应该有 1 in + 1 out = 2 笔
     assert _wallet_tx_count(shop.unconfirmed_alipay_wallet_id) == 2
@@ -740,9 +744,9 @@ def test_reconcile_shipped_unconfirmed_to_received_alipay(client):
     status_value = order.status.value if hasattr(order.status, "value") else order.status
     assert status_value == TaobaoOrderStatus.RECEIVED.value
     assert order.bookkeeping_wallet_id == shop.store_alipay_wallet_id
-    assert Decimal(order.amount) == Decimal("99.800000")
+    assert Decimal(order.amount) == Decimal("99.400000")
     assert Decimal(order.gross_amount) == Decimal("100.000000")
-    assert Decimal(order.fee_amount) == Decimal("0.200000")
+    assert Decimal(order.fee_amount) == Decimal("0.600000")
     assert order.confirmed_at is not None
 
 
@@ -816,7 +820,7 @@ def test_reconcile_no_change_skipped(client):
 
 
 def test_reconcile_skip_jump_unconfirmed_to_received_wechat(client):
-    """跳级 wechat：在途 120 → 确认 120 → debit 120 + credit net=119.76（fee 0.24）+ mature_at。"""
+    """跳级 wechat：在途 120 → 确认 120 → debit 120 + credit net=119.28（fee 0.72）+ mature_at。"""
     shop = _shop_by_name("丙火网络")
     rows1 = [_row(
         order_no="ORDER_JUMP",
@@ -850,8 +854,8 @@ def test_reconcile_skip_jump_unconfirmed_to_received_wechat(client):
     assert payload["statusChangedOrders"] == 1
 
     assert _wallet_balance(shop.unconfirmed_wechat_wallet_id) == Decimal("0.000000")
-    # 120 → fee 0.24 → net 119.76
-    assert _wallet_balance(shop.aggregator_frozen_wallet_id) == Decimal("119.760000")
+    # 120 → fee 0.72 → net 119.28
+    assert _wallet_balance(shop.aggregator_frozen_wallet_id) == Decimal("119.280000")
 
     new_tx = _last_tx(shop.aggregator_frozen_wallet_id)
     assert new_tx.mature_at is not None
@@ -956,7 +960,7 @@ def test_full_report_counts(client):
     """5 行综合：报告字段全到位。"""
     shop = _shop_by_name("丙火网络")
     rows = [
-        # 1) received alipay 10 → fee 0.02 → net 9.98
+        # 1) received alipay 10 → fee 0.06 → net 9.94
         _row(
             order_no="F_RECV_AL",
             payment_no="P1",
@@ -1036,8 +1040,8 @@ def test_full_report_counts(client):
     assert "autoReleasedAmount" in payload
     assert "autoReleasedCount" in payload
     assert "totalFeeAmount" in payload
-    # 仅 1 个 received 行（10 → fee 0.02）
-    assert Decimal(payload["totalFeeAmount"]) == Decimal("0.02")
+    # 仅 1 个 received 行（10 → fee 0.06）
+    assert Decimal(payload["totalFeeAmount"]) == Decimal("0.06")
 
 
 def test_atomic_transaction_no_partial_on_db_error(client, monkeypatch):
@@ -1184,5 +1188,5 @@ def test_large_sample_distribution_v2(client):
     assert p["statusChangedOrders"] == 0
     assert p["closedReverted"] == 0
     assert p["errors"] == []
-    # 947 个 received,每条 100 → fee 0.20 → 总 fee = 947 * 0.20 = 189.40
-    assert Decimal(p["totalFeeAmount"]) == Decimal("189.40")
+    # 947 个 received,每条 100 → fee 0.60 → 总 fee = 947 * 0.60 = 568.20
+    assert Decimal(p["totalFeeAmount"]) == Decimal("568.20")
