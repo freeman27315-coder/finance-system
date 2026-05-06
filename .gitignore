@@ -5,6 +5,7 @@
 *.log
 *.pid
 *.db
+*.db.backup-*
 *.sqlite
 *.sqlite3
 __pycache__/
