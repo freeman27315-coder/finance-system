@@ -410,9 +410,9 @@ def test_new_wechat_received_to_aggregator_frozen_with_mature_at_from_confirmed_
     tx = _last_tx(shop.aggregator_frozen_wallet_id)
     assert tx is not None
     assert tx.mature_at is not None
-    # mature_at 按"日"对齐：confirmed_at 当天 0:00 + 7 天
+    # mature_at 精确到分秒：与千牛后台一致 confirmed_at + 7 天
     confirmed_dt = datetime.strptime(confirmed_at_str, "%Y-%m-%d %H:%M:%S")
-    expected_mature = confirmed_dt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=7)
+    expected_mature = confirmed_dt + timedelta(days=7)
     assert tx.mature_at.replace(tzinfo=None) == expected_mature
 
 
@@ -436,9 +436,9 @@ def test_mature_at_falls_back_to_shipped_at_when_confirmed_at_missing(client):
     assert response.status_code == 200, response.text
 
     tx = _last_tx(shop.aggregator_frozen_wallet_id)
-    # mature_at 按"日"对齐：shipped_at 当天 0:00 + 7 天
+    # mature_at 精确到分秒：与千牛后台一致 shipped_at + 7 天
     shipped_dt = datetime.strptime(shipped_at_str, "%Y-%m-%d %H:%M:%S")
-    expected = shipped_dt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=7)
+    expected = shipped_dt + timedelta(days=7)
     assert tx.mature_at.replace(tzinfo=None) == expected
 
 
