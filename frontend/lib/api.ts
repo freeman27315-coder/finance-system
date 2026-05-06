@@ -27,7 +27,6 @@ import type {
   TaobaoOrder,
   TaobaoOrderPaymentMethod,
   TaobaoOrderStatus,
-  TaobaoReleaseReport,
   TaobaoShop,
   TaobaoShopWallet,
   TaobaoStoreAlipayWallet,
@@ -555,18 +554,14 @@ type TaobaoImportReportResponse = {
   skipped_unpaid_or_unshipped?: number;
   skippedUnknownPayment?: number;
   skipped_unknown_payment?: number;
+  // PR #85：自动结算字段
+  autoReleasedAmount?: string | number;
+  auto_released_amount?: string | number;
+  autoReleasedCount?: number;
+  auto_released_count?: number;
+  totalFeeAmount?: string | number;
+  total_fee_amount?: string | number;
   errors?: string[];
-};
-
-type TaobaoReleaseReportResponse = {
-  maturedCount?: number;
-  matured_count?: number;
-  maturedAmount?: string | number;
-  matured_amount?: string | number;
-  frozenBalanceAfter?: string | number;
-  frozen_balance_after?: string | number;
-  availableBalanceAfter?: string | number;
-  available_balance_after?: string | number;
 };
 
 type TaobaoFlowReportResponse = {
@@ -683,16 +678,16 @@ function normalizeImportReport(data: TaobaoImportReportResponse): TaobaoImportRe
     skippedNoChange: Number(data.skippedNoChange ?? data.skipped_no_change ?? 0),
     skippedUnpaidOrUnshipped: Number(data.skippedUnpaidOrUnshipped ?? data.skipped_unpaid_or_unshipped ?? 0),
     skippedUnknownPayment: Number(data.skippedUnknownPayment ?? data.skipped_unknown_payment ?? 0),
+    autoReleasedAmountMinor: decimalToMinor(
+      data.autoReleasedAmount ?? data.auto_released_amount ?? 0,
+      "CNY"
+    ),
+    autoReleasedCount: Number(data.autoReleasedCount ?? data.auto_released_count ?? 0),
+    totalFeeAmountMinor: decimalToMinor(
+      data.totalFeeAmount ?? data.total_fee_amount ?? 0,
+      "CNY"
+    ),
     errors: data.errors ?? []
-  };
-}
-
-function normalizeReleaseReport(data: TaobaoReleaseReportResponse): TaobaoReleaseReport {
-  return {
-    maturedCount: Number(data.maturedCount ?? data.matured_count ?? 0),
-    maturedAmountMinor: decimalToMinor(data.maturedAmount ?? data.matured_amount ?? 0, "CNY"),
-    frozenBalanceAfterMinor: decimalToMinor(data.frozenBalanceAfter ?? data.frozen_balance_after ?? 0, "CNY"),
-    availableBalanceAfterMinor: decimalToMinor(data.availableBalanceAfter ?? data.available_balance_after ?? 0, "CNY")
   };
 }
 
@@ -745,14 +740,6 @@ export async function importTaobaoExcel(shopId: string, file: File): Promise<Tao
 
   const data = (text ? JSON.parse(text) : {}) as TaobaoImportReportResponse;
   return normalizeImportReport(data);
-}
-
-export async function releaseAggregator(shopId: string): Promise<TaobaoReleaseReport> {
-  const data = (await postJson(
-    `/api/taobao/shops/${shopId}/aggregator/release`,
-    {}
-  )) as TaobaoReleaseReportResponse;
-  return normalizeReleaseReport(data);
 }
 
 export async function withdrawTaobao(

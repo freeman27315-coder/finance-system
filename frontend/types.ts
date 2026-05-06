@@ -183,14 +183,13 @@ export type TaobaoImportReport = {
   skippedNoChange: number;
   skippedUnpaidOrUnshipped: number;
   skippedUnknownPayment: number;
+  // PR #85：本次导入末尾自动结算（autoRelease + 手续费扣减）
+  // - autoReleasedAmountMinor / autoReleasedCount：本次自动解冻的金额 + 笔数
+  // - totalFeeAmountMinor：本次导入产生的手续费总和
+  autoReleasedAmountMinor: number;
+  autoReleasedCount: number;
+  totalFeeAmountMinor: number;
   errors: string[];
-};
-
-export type TaobaoReleaseReport = {
-  maturedCount: number;
-  maturedAmountMinor: number;
-  frozenBalanceAfterMinor: number;
-  availableBalanceAfterMinor: number;
 };
 
 export type TaobaoFlowReport = {
