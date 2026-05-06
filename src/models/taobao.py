@@ -6,11 +6,12 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.database import Base
 from src.models.wallet import Wallet
+from src.utils.time import china_now
 
 
 class TaobaoOrderPaymentMethod(str, Enum):
@@ -51,7 +52,7 @@ class TaobaoShop(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=func.now(),
+        default=china_now,
     )
 
     store_alipay_wallet: Mapped[Wallet] = relationship(
@@ -119,12 +120,12 @@ class TaobaoOrder(Base):
     last_synced_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=func.now(),
+        default=china_now,
     )
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        server_default=func.now(),
+        default=china_now,
     )
 
     shop: Mapped[TaobaoShop] = relationship(foreign_keys=[shop_id])

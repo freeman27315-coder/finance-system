@@ -37,6 +37,7 @@ from src.models.wallet import (
     debit,
 )
 from src.services.taobao_maturity import calculate_pending_maturity, matured_active_txs
+from src.utils.time import china_now
 
 
 # 千牛 v2 导出 Excel 的标准表头（14 列严格匹配，多 1 列、少 1 列、列名错都视为结构错）
@@ -348,7 +349,7 @@ def _credit_for_row(
         and parsed.system_status == TaobaoOrderStatus.RECEIVED
     ):
         # 优先用 confirmed_at（Excel "确认收货时间"），缺失时兜底用 shipped_at；都缺则 now()
-        base = parsed.confirmed_at or parsed.shipped_at or datetime.now()
+        base = parsed.confirmed_at or parsed.shipped_at or china_now()
         mature_at = base + timedelta(days=WECHAT_MATURE_DAYS)
     remark = f"千牛订单 #{parsed.order_number} {parsed.system_status.value}"
     return credit(
@@ -574,7 +575,7 @@ def _handle_existing_order(
 
     if old_status_value == parsed.system_status.value:
         # 情况 2：无变化
-        order.last_synced_at = datetime.now()
+        order.last_synced_at = china_now()
         report.skipped_no_change += 1
         return
 
@@ -585,7 +586,7 @@ def _handle_existing_order(
         order.status = TaobaoOrderStatus.CLOSED.value
         order.bookkeeping_wallet_id = None
         order.bookkeeping_tx_id = None
-        order.last_synced_at = datetime.now()
+        order.last_synced_at = china_now()
         report.closed_reverted += 1
         return
 
