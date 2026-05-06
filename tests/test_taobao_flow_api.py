@@ -1,7 +1,7 @@
-"""淘宝 4 个金流端点 + 订单/钱包流水查询 测试。
+"""淘宝金流端点 + 订单/钱包流水查询 测试。
 
-覆盖：
-- /aggregator/release：到期累计、无到期、防御性排除已撤流水
+覆盖（issue #84 后）：
+- 一键解冻端点已删除（改为 import 末尾自动解冻），相关测试见 test_taobao_import_api.py
 - /withdraw：可提现 → 银行卡 / 余额不足 / amount<=0
 - /transfer-to-store-alipay：丙火 / 兔仔均成功 / amount 默认全额 / 银行卡空
 - /orders：列表 + status/payment_method 过滤 + 分页 + 排序
@@ -74,10 +74,7 @@ def _seed_aggregator_frozen_tx(
     bind_to_order: bool = True,
     order_number: str | None = None,
 ) -> int:
-    """直接往 aggregator_frozen 钱包注入一笔 in 流水，并视情况绑定到 TaobaoOrder。
-
-    返回：插入的 WalletTransaction.id
-    """
+    """直接往 aggregator_frozen 钱包注入一笔 in 流水，并视情况绑定到 TaobaoOrder。"""
     db = database.SessionLocal()
     try:
         tx = credit(
@@ -93,6 +90,7 @@ def _seed_aggregator_frozen_tx(
                 order_number=order_number or f"SEED_{tx.id}",
                 payment_method=TaobaoOrderPaymentMethod.WECHAT.value,
                 amount=amount,
+                gross_amount=amount,
                 status=TaobaoOrderStatus.RECEIVED.value,
                 bookkeeping_wallet_id=shop.aggregator_frozen_wallet_id,
                 bookkeeping_tx_id=tx.id,
@@ -102,78 +100,6 @@ def _seed_aggregator_frozen_tx(
         return tx.id
     finally:
         db.close()
-
-
-# ---------------------------------------------------------------------------
-# /aggregator/release
-# ---------------------------------------------------------------------------
-
-
-def test_release_aggregates_only_matured_transactions(client):
-    """3 笔流水：2 笔已到期、1 笔未到期 → 仅解冻已到期金额。"""
-    shop = _shop_by_name("丙火电玩")
-    now = datetime.now(timezone.utc)
-
-    _seed_aggregator_frozen_tx(shop, Decimal("100"), now - timedelta(days=1), order_number="MAT_1")
-    _seed_aggregator_frozen_tx(shop, Decimal("50"), now - timedelta(hours=2), order_number="MAT_2")
-    _seed_aggregator_frozen_tx(shop, Decimal("80"), now + timedelta(days=3), order_number="FUTURE_1")
-
-    # 解冻前 frozen=230, available=0
-    assert _wallet_balance(shop.aggregator_frozen_wallet_id) == Decimal("230.000000")
-    assert _wallet_balance(shop.aggregator_available_wallet_id) == Decimal("0.000000")
-
-    response = client.post(f"/taobao/shops/{shop.id}/aggregator/release")
-    assert response.status_code == 200, response.text
-    payload = response.json()
-
-    assert payload["maturedCount"] == 2
-    assert Decimal(payload["maturedAmount"]) == Decimal("150")
-    assert Decimal(payload["frozenBalanceAfter"]) == Decimal("80.000000")
-    assert Decimal(payload["availableBalanceAfter"]) == Decimal("150.000000")
-
-    # 数据库实际余额一致
-    assert _wallet_balance(shop.aggregator_frozen_wallet_id) == Decimal("80.000000")
-    assert _wallet_balance(shop.aggregator_available_wallet_id) == Decimal("150.000000")
-
-
-def test_release_when_no_matured_returns_zero(client):
-    """无到期流水时 200 + matured_count=0，不报错、不动余额。"""
-    shop = _shop_by_name("丙火电玩")
-    now = datetime.now(timezone.utc)
-    _seed_aggregator_frozen_tx(shop, Decimal("99"), now + timedelta(days=2), order_number="FUT_ONLY")
-
-    response = client.post(f"/taobao/shops/{shop.id}/aggregator/release")
-    assert response.status_code == 200, response.text
-    payload = response.json()
-
-    assert payload["maturedCount"] == 0
-    assert Decimal(payload["maturedAmount"]) == Decimal("0")
-    assert Decimal(payload["frozenBalanceAfter"]) == Decimal("99.000000")
-    assert Decimal(payload["availableBalanceAfter"]) == Decimal("0.000000")
-
-
-def test_release_skips_orphan_matured_tx(client):
-    """防御性：到期但已被 reconcile 撤掉（无 order 引用）的流水不应再被解冻。"""
-    shop = _shop_by_name("丙火电玩")
-    now = datetime.now(timezone.utc)
-
-    # 流水 A：到期，绑订单
-    _seed_aggregator_frozen_tx(shop, Decimal("200"), now - timedelta(days=1), order_number="ALIVE_A")
-    # 流水 B：到期，但故意不绑订单（模拟已被撤）
-    _seed_aggregator_frozen_tx(shop, Decimal("70"), now - timedelta(days=1), bind_to_order=False)
-
-    response = client.post(f"/taobao/shops/{shop.id}/aggregator/release")
-    assert response.status_code == 200
-    payload = response.json()
-
-    # 仅 A 被解冻
-    assert payload["maturedCount"] == 1
-    assert Decimal(payload["maturedAmount"]) == Decimal("200")
-
-
-def test_release_404_when_shop_not_found(client):
-    response = client.post("/taobao/shops/99999/aggregator/release")
-    assert response.status_code == 404
 
 
 # ---------------------------------------------------------------------------

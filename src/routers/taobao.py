@@ -79,23 +79,15 @@ class TaobaoImportReportOut(BaseModel):
     skipped_no_change: int
     skipped_unpaid_or_unshipped: int
     skipped_unknown_payment: int
+    auto_released_amount: Decimal
+    auto_released_count: int
+    total_fee_amount: Decimal
     errors: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
 # 金流端点请求 / 响应模型
 # ---------------------------------------------------------------------------
-
-
-class ReleaseReportOut(BaseModel):
-    """聚合冻结一键解冻响应。"""
-
-    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
-
-    matured_count: int
-    matured_amount: Decimal
-    frozen_balance_after: Decimal
-    available_balance_after: Decimal
 
 
 class WithdrawRequest(BaseModel):
@@ -195,6 +187,9 @@ def _serialize_report(report: ImportReport) -> TaobaoImportReportOut:
         skipped_no_change=report.skipped_no_change,
         skipped_unpaid_or_unshipped=report.skipped_unpaid_or_unshipped,
         skipped_unknown_payment=report.skipped_unknown_payment,
+        auto_released_amount=Decimal(report.auto_released_amount),
+        auto_released_count=report.auto_released_count,
+        total_fee_amount=Decimal(report.total_fee_amount),
         errors=list(report.errors),
     )
 
@@ -314,54 +309,6 @@ def import_qianniu_excel(
         raise
 
     return _serialize_report(report)
-
-
-@router.post(
-    "/shops/{shop_id}/aggregator/release",
-    response_model=ReleaseReportOut,
-    response_model_by_alias=True,
-)
-def release_matured_aggregator(
-    shop_id: int,
-    db: Session = Depends(get_db),
-) -> ReleaseReportOut:
-    """一键解冻所有到期聚合冻结流水。
-
-    - 通过 ``calculate_pending_maturity`` 算出可解冻金额与笔数
-      （查询条件、防御性过滤都集中在 helper 内，与 GET /taobao/shops 共享）
-    - 把累计金额从 frozen debit、credit 到 available
-    - 单一事务；无到期流水返回 200 + matured_count=0
-    """
-    shop = _get_shop_or_404(db, shop_id)
-
-    matured_amount, matured_count = calculate_pending_maturity(
-        db, shop.aggregator_frozen_wallet_id
-    )
-
-    if matured_count > 0:
-        try:
-            remark = f"解冻 {matured_count} 笔到期"
-            debit(db, shop.aggregator_frozen_wallet_id, matured_amount, remark=remark)
-            credit(db, shop.aggregator_available_wallet_id, matured_amount, remark=remark)
-            db.commit()
-        except ValueError as exc:
-            db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(exc),
-            ) from exc
-        except Exception:
-            db.rollback()
-            raise
-
-    db.refresh(shop.aggregator_frozen_wallet)
-    db.refresh(shop.aggregator_available_wallet)
-    return ReleaseReportOut(
-        matured_count=matured_count,
-        matured_amount=matured_amount,
-        frozen_balance_after=Decimal(shop.aggregator_frozen_wallet.balance),
-        available_balance_after=Decimal(shop.aggregator_available_wallet.balance),
-    )
 
 
 @router.post(

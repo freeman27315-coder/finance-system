@@ -1,16 +1,19 @@
 """千牛 Excel 导入与订单 reconcile 业务逻辑。
 
 模块职责：
-1. 解析 .xlsx 文件 → 标准化结构化行
-2. 按 9 个字段 / 5 状态映射 / 2 支付方式 / 2 店铺类型分流入账
-3. 老订单状态变化 reconcile（撤旧流水 + 建新流水）
-4. 单一事务原子（异常由调用方 rollback）
+1. 解析 .xlsx 文件 → 标准化结构化行（v2 14 列严格表头）
+2. 按 14 个字段 / 5 状态映射 / 2 支付方式 / 2 店铺类型分流入账
+3. 0.2% 手续费规则：仅 received 时扣（gross - round(gross*0.002, 2)）
+4. 微信/received 的 mature_at 用 ``确认收货时间 + 7 天``
+5. 老订单状态变化 reconcile（撤旧流水 + 建新流水；在途→确认差额=fee 自然消失）
+6. 导入末尾自动跑解冻（与原 release_aggregator 端点逻辑一致）
+7. 单一事务原子（异常由调用方 rollback）
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from io import BytesIO
 from typing import BinaryIO, Optional
 
@@ -31,32 +34,41 @@ from src.models.wallet import (
     credit,
     debit,
 )
+from src.services.taobao_maturity import calculate_pending_maturity
 
 
-# 千牛导出 Excel 的标准表头（前 9 列），多 1 列、少 1 列、列名错都视为结构错
+# 千牛 v2 导出 Excel 的标准表头（14 列严格匹配，多 1 列、少 1 列、列名错都视为结构错）
 EXPECTED_HEADERS: tuple[str, ...] = (
-    "订单编号",
-    "支付单号",
-    "支付详情",
-    "买家实付金额",
-    "订单状态",
-    "订单付款时间",
-    "店铺名称",
-    "发货时间",
-    "确认收货打款金额",
+    "订单编号",          # col 0
+    "支付单号",          # col 1
+    "支付详情",          # col 2
+    "买家实付金额",      # col 3
+    "订单状态",          # col 4
+    "订单创建时间",      # col 5  (忽略,仅占位校验)
+    "订单付款时间",      # col 6
+    "宝贝种类",          # col 7  (忽略,仅占位校验)
+    "店铺名称",          # col 8
+    "卖家服务费",        # col 9  (忽略,CEO 同意以淘宝平台 0.2% 计算)
+    "退款金额",          # col 10 (忽略,仅占位校验)
+    "发货时间",          # col 11
+    "确认收货时间",      # col 12
+    "确认收货打款金额",  # col 13
 )
 
-# 千牛订单状态字面值（用 strip 后与 dict key 对齐）
+# 千牛订单状态字面值（_normalize_status 已把全角逗号统一为半角再做比较）
 QIANNIU_STATUS_PENDING_PAY = "等待买家付款"
 QIANNIU_STATUS_PAID_UNSHIPPED = "买家已付款,等待卖家发货"
-QIANNIU_STATUS_PAID_UNSHIPPED_ALT = "买家已付款，等待卖家发货"  # 全角逗号兜底
-QIANNIU_STATUS_SHIPPED_UNCONFIRMED = "卖家已发货，等待买家确认"
-QIANNIU_STATUS_SHIPPED_UNCONFIRMED_ALT = "卖家已发货,等待买家确认"  # 半角逗号兜底
+QIANNIU_STATUS_SHIPPED_UNCONFIRMED = "卖家已发货,等待买家确认"
 QIANNIU_STATUS_RECEIVED = "交易成功"
 QIANNIU_STATUS_CLOSED = "交易关闭"
 
 # 微信冻结成熟天数
 WECHAT_MATURE_DAYS = 7
+
+# 0.2% 手续费率
+FEE_RATE = Decimal("0.002")
+# 2 位精度
+TWO_PLACES = Decimal("0.01")
 
 
 class TaobaoImportError(Exception):
@@ -75,6 +87,9 @@ class ImportReport:
     skipped_no_change: int = 0
     skipped_unpaid_or_unshipped: int = 0
     skipped_unknown_payment: int = 0
+    auto_released_amount: Decimal = field(default_factory=lambda: Decimal("0"))
+    auto_released_count: int = 0
+    total_fee_amount: Decimal = field(default_factory=lambda: Decimal("0"))
     errors: list[str] = field(default_factory=list)
 
 
@@ -85,7 +100,7 @@ class ParsedRow:
     ``system_status``/``payment_method`` 为 None 表示"应跳过"（未付款 / 未知支付）。
     """
 
-    row_index: int  # Excel 行号（1-based，第 1 行表头跳过，数据从 2 起）
+    row_index: int  # Excel 行号（1-based,第 1 行表头跳过,数据从 2 起）
     order_number: str
     payment_no: str
     payment_detail_raw: str
@@ -94,6 +109,7 @@ class ParsedRow:
     paid_at: Optional[datetime]
     shop_name_in_row: str
     shipped_at: Optional[datetime]
+    confirmed_at: Optional[datetime]
     confirmed_amount: Decimal
     payment_method: Optional[TaobaoOrderPaymentMethod]
     system_status: Optional[TaobaoOrderStatus]
@@ -137,19 +153,26 @@ def _detect_payment_method(payment_detail: str) -> Optional[TaobaoOrderPaymentMe
     return None
 
 
+def _normalize_status(qianniu_status: str) -> str:
+    """归一化中文标点（半角/全角逗号统一为半角）后再做字面值比较。"""
+    if not qianniu_status:
+        return ""
+    return qianniu_status.strip().replace("，", ",")
+
+
 def _map_status(qianniu_status: str) -> tuple[Optional[TaobaoOrderStatus], bool]:
     """千牛状态 → (系统状态, is_pending_or_unshipped)。
 
     返回 (None, True)  : 等待买家付款 / 买家已付款等待发货 → 跳过且计入 unpaid_or_unshipped
     返回 (status, False): 三个会落地的状态 (shipped_unconfirmed/received/closed)
-    返回 (None, False): 完全未知状态（不应发生，作为 errors）
+    返回 (None, False): 完全未知状态（不应发生,作为 errors）
     """
-    s = qianniu_status.strip() if qianniu_status else ""
+    s = _normalize_status(qianniu_status)
     if s == QIANNIU_STATUS_PENDING_PAY:
         return None, True
-    if s in (QIANNIU_STATUS_PAID_UNSHIPPED, QIANNIU_STATUS_PAID_UNSHIPPED_ALT):
+    if s == QIANNIU_STATUS_PAID_UNSHIPPED:
         return None, True
-    if s in (QIANNIU_STATUS_SHIPPED_UNCONFIRMED, QIANNIU_STATUS_SHIPPED_UNCONFIRMED_ALT):
+    if s == QIANNIU_STATUS_SHIPPED_UNCONFIRMED:
         return TaobaoOrderStatus.SHIPPED_UNCONFIRMED, False
     if s == QIANNIU_STATUS_RECEIVED:
         return TaobaoOrderStatus.RECEIVED, False
@@ -158,12 +181,28 @@ def _map_status(qianniu_status: str) -> tuple[Optional[TaobaoOrderStatus], bool]
     return None, False  # 未知状态
 
 
+def compute_fee_and_net(gross: Decimal) -> tuple[Decimal, Decimal]:
+    """0.2% 手续费规则：fee = round(gross × 0.002, 2) ROUND_HALF_UP；net = gross - fee。
+
+    边界值（CEO 已确认）：
+        56.00 → fee=0.11 net=55.89
+        269.00 → fee=0.54 net=268.46
+        27.50 → fee=0.06 net=27.44 （0.055 → ROUND_HALF_UP → 0.06）
+        100.00 → fee=0.20 net=99.80
+    """
+    g = Decimal(gross)
+    raw_fee = g * FEE_RATE
+    fee = raw_fee.quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+    net = g - fee
+    return fee, net
+
+
 def parse_workbook(file_obj: BinaryIO) -> list[list]:
     """读取 .xlsx → 第一工作表所有行（含表头）。
 
     校验：
     1. 必须能被 openpyxl 打开（否则 TaobaoImportError）
-    2. 第 1 行（表头）前 9 列必须等于 EXPECTED_HEADERS
+    2. 第 1 行（表头）前 14 列必须等于 EXPECTED_HEADERS
     """
     try:
         wb = load_workbook(file_obj, read_only=True, data_only=True)
@@ -193,17 +232,34 @@ def parse_workbook(file_obj: BinaryIO) -> list[list]:
 
 
 def _parse_row(row_index: int, row: tuple) -> ParsedRow:
-    """单行 → ParsedRow（不做 DB 操作）。"""
-    # 取前 9 列；不够列时 IndexError 会暴露在 errors
+    """单行 → ParsedRow（不做 DB 操作）。
+
+    14 列字段映射（仅读取必要列；col 5/7/9/10 占位校验,不读）：
+        col 0  订单编号
+        col 1  支付单号
+        col 2  支付详情
+        col 3  买家实付金额
+        col 4  订单状态
+        col 6  订单付款时间
+        col 8  店铺名称
+        col 11 发货时间
+        col 12 确认收货时间
+        col 13 确认收货打款金额
+    """
     order_number = str(row[0]).strip() if row[0] is not None else ""
     payment_no = str(row[1]).strip() if row[1] is not None else ""
     payment_detail_raw = str(row[2]) if row[2] is not None else ""
     buyer_paid_amount = _to_decimal(row[3])
     qianniu_status_raw = str(row[4]).strip() if row[4] is not None else ""
-    paid_at = _to_datetime(row[5])
-    shop_name_in_row = str(row[6]).strip() if row[6] is not None else ""
-    shipped_at = _to_datetime(row[7])
-    confirmed_amount = _to_decimal(row[8])
+    # col 5 订单创建时间 -- 忽略
+    paid_at = _to_datetime(row[6])
+    # col 7 宝贝种类 -- 忽略
+    shop_name_in_row = str(row[8]).strip() if row[8] is not None else ""
+    # col 9 卖家服务费 -- 忽略（CEO 同意以平台 0.2% 计算）
+    # col 10 退款金额 -- 忽略
+    shipped_at = _to_datetime(row[11])
+    confirmed_at = _to_datetime(row[12])
+    confirmed_amount = _to_decimal(row[13])
 
     payment_method = _detect_payment_method(payment_detail_raw)
     system_status, is_pending_or_unshipped = _map_status(qianniu_status_raw)
@@ -220,6 +276,7 @@ def _parse_row(row_index: int, row: tuple) -> ParsedRow:
         paid_at=paid_at,
         shop_name_in_row=shop_name_in_row,
         shipped_at=shipped_at,
+        confirmed_at=confirmed_at,
         confirmed_amount=confirmed_amount,
         payment_method=payment_method,
         system_status=system_status,
@@ -260,8 +317,8 @@ def _resolve_target_wallet(
     return None
 
 
-def _amount_for_status(parsed: ParsedRow) -> Decimal:
-    """按状态选金额：received 用确认收货金额；shipped_unconfirmed 用买家实付。"""
+def _gross_for_status(parsed: ParsedRow) -> Decimal:
+    """按状态选 gross：received 用确认收货金额；shipped_unconfirmed 用买家实付。"""
     if parsed.system_status == TaobaoOrderStatus.RECEIVED:
         return parsed.confirmed_amount
     if parsed.system_status == TaobaoOrderStatus.SHIPPED_UNCONFIRMED:
@@ -276,14 +333,17 @@ def _credit_for_row(
     wallet_id: int,
     amount: Decimal,
 ) -> WalletTransaction:
-    """按规则 credit。微信/received 写 mature_at = received_at + 7d。"""
+    """按规则 credit。微信/received 写 mature_at = confirmed_at + 7d（兜底用 shipped_at + 7d）。
+
+    ``amount`` 已是入账钱包应入账的"当前金额"（received 是 net；shipped_unconfirmed 是 gross）。
+    """
     mature_at: Optional[datetime] = None
     if (
         parsed.payment_method == TaobaoOrderPaymentMethod.WECHAT
         and parsed.system_status == TaobaoOrderStatus.RECEIVED
     ):
-        # received_at 优先用 shipped_at（同一行的 "发货时间"），缺失则用 paid_at；都缺则 now()
-        base = parsed.shipped_at or parsed.paid_at or datetime.now()
+        # 优先用 confirmed_at（Excel "确认收货时间"），缺失时兜底用 shipped_at；都缺则 now()
+        base = parsed.confirmed_at or parsed.shipped_at or datetime.now()
         mature_at = base + timedelta(days=WECHAT_MATURE_DAYS)
     remark = f"千牛订单 #{parsed.order_number} {parsed.system_status.value}"
     return credit(
@@ -302,7 +362,7 @@ def _debit_old_tx(
 ) -> None:
     """根据 ``order.bookkeeping_tx_id`` 找老流水的 amount，从老钱包 debit 同金额。
 
-    若 bookkeeping_tx_id / wallet_id 任一缺失，跳过（视为之前未入账）。
+    若 bookkeeping_tx_id / wallet_id 任一缺失,跳过（视为之前未入账）。
     """
     if order.bookkeeping_tx_id is None or order.bookkeeping_wallet_id is None:
         return
@@ -317,12 +377,36 @@ def _debit_old_tx(
     )
 
 
+def _auto_release_aggregator(
+    session: Session,
+    shop: TaobaoShop,
+) -> tuple[Decimal, int]:
+    """导入流程末尾自动跑解冻。复用 ``calculate_pending_maturity`` 计算 + debit/credit 转账。
+
+    返回 ``(累计金额, 笔数)``。无可解冻流水时返回 ``(Decimal("0"), 0)``,不写流水。
+
+    与原 ``release_aggregator`` 端点的逻辑保持一致：
+    - 仅算 mature_at <= now 且仍被某 ``TaobaoOrder.bookkeeping_tx_id`` 引用的流水
+    - 累计金额从 frozen debit、credit 到 available
+    """
+    matured_amount, matured_count = calculate_pending_maturity(
+        session, shop.aggregator_frozen_wallet_id
+    )
+    if matured_count <= 0 or matured_amount <= 0:
+        return Decimal("0"), 0
+
+    remark = f"导入自动解冻 {matured_count} 笔到期"
+    debit(session, shop.aggregator_frozen_wallet_id, matured_amount, remark=remark)
+    credit(session, shop.aggregator_available_wallet_id, matured_amount, remark=remark)
+    return matured_amount, matured_count
+
+
 def import_qianniu_workbook(
     session: Session,
     shop: TaobaoShop,
     file_obj: BinaryIO,
 ) -> ImportReport:
-    """主入口：解析 + 入账 + reconcile，返回 ImportReport。
+    """主入口：解析 + 入账 + reconcile + 末尾自动解冻，返回 ImportReport。
 
     调用方负责 commit / rollback。本函数只 add + flush，**不 commit**。
     任何 SQLAlchemy 异常会向上抛，调用方应 rollback。
@@ -390,6 +474,11 @@ def import_qianniu_workbook(
         else:
             _handle_existing_order(session, shop, existing, parsed, report)
 
+    # 末尾自动解冻
+    auto_amount, auto_count = _auto_release_aggregator(session, shop)
+    report.auto_released_amount = auto_amount
+    report.auto_released_count = auto_count
+
     return report
 
 
@@ -402,10 +491,18 @@ def _handle_new_order(
     """情况 1：新订单。
 
     - closed：不入账，但仍记一行 TaobaoOrder（status=closed, bookkeeping=None）
-    - 其他：按状态入账
+    - received：算 fee/net，credit 用 net；TaobaoOrder.amount=net、gross_amount=gross、fee_amount=fee、confirmed_at
+    - shipped_unconfirmed：credit 用 gross；TaobaoOrder.amount=gross、gross_amount=gross、fee_amount=NULL、confirmed_at=NULL
     """
-    amount = _amount_for_status(parsed)
+    gross = _gross_for_status(parsed)
     wallet_id = _resolve_target_wallet(shop, parsed.payment_method, parsed.system_status)
+
+    # 默认值（适配 closed / 异常分支）
+    fee: Optional[Decimal] = None
+    amount = gross
+
+    if parsed.system_status == TaobaoOrderStatus.RECEIVED:
+        fee, amount = compute_fee_and_net(gross)
 
     bookkeeping_wallet_id: Optional[int] = None
     bookkeeping_tx_id: Optional[int] = None
@@ -415,27 +512,33 @@ def _handle_new_order(
         bookkeeping_wallet_id = wallet_id
         bookkeeping_tx_id = tx.id
 
-    received_at = parsed.shipped_at if parsed.system_status == TaobaoOrderStatus.RECEIVED else None
+    received_at = (
+        parsed.confirmed_at or parsed.shipped_at
+        if parsed.system_status == TaobaoOrderStatus.RECEIVED
+        else None
+    )
+    confirmed_at = parsed.confirmed_at if parsed.system_status == TaobaoOrderStatus.RECEIVED else None
 
     order = TaobaoOrder(
         shop_id=shop.id,
         order_number=parsed.order_number,
-        payment_method=parsed.payment_method.value,
+        payment_method=parsed.payment_method.value if parsed.payment_method is not None else "alipay",
         amount=amount,
+        gross_amount=gross,
+        fee_amount=fee,
         status=parsed.system_status.value,
         bookkeeping_wallet_id=bookkeeping_wallet_id,
         bookkeeping_tx_id=bookkeeping_tx_id,
         shipped_at=parsed.shipped_at,
         received_at=received_at,
+        confirmed_at=confirmed_at,
     )
     session.add(order)
     session.flush()
 
-    if parsed.system_status == TaobaoOrderStatus.CLOSED:
-        # 新进来就 closed,不算 closed_reverted（因从未入过账）
-        report.created_orders += 1
-    else:
-        report.created_orders += 1
+    if fee is not None:
+        report.total_fee_amount += fee
+    report.created_orders += 1
 
 
 def _handle_existing_order(
@@ -448,7 +551,7 @@ def _handle_existing_order(
     """情况 2/3/4/5：老订单。
 
     2: status 没变 → 仅更新 last_synced_at
-    3/5: status 变了（包括跳级）→ 撤老流水 + 入新账
+    3/5: status 变了（包括跳级）→ 撤老流水(按老 amount) + 入新账（received → net；shipped → gross）
     4: 变 closed → 撤老流水 + 不入新账
     """
     old_status_value = order.status.value if hasattr(order.status, "value") else order.status
@@ -473,8 +576,13 @@ def _handle_existing_order(
     # 情况 3/5：变到另一个会落地的状态
     _debit_old_tx(session, order, "状态变化")
 
-    new_amount = _amount_for_status(parsed)
+    new_gross = _gross_for_status(parsed)
     new_wallet_id = _resolve_target_wallet(shop, parsed.payment_method, parsed.system_status)
+
+    new_fee: Optional[Decimal] = None
+    new_amount = new_gross
+    if parsed.system_status == TaobaoOrderStatus.RECEIVED:
+        new_fee, new_amount = compute_fee_and_net(new_gross)
 
     new_tx_id: Optional[int] = None
     if new_wallet_id is not None and new_amount > 0:
@@ -483,12 +591,17 @@ def _handle_existing_order(
 
     order.status = parsed.system_status.value
     order.amount = new_amount
+    order.gross_amount = new_gross
+    order.fee_amount = new_fee
     order.bookkeeping_wallet_id = new_wallet_id if new_tx_id is not None else None
     order.bookkeeping_tx_id = new_tx_id
     order.last_synced_at = datetime.now()
     if parsed.system_status == TaobaoOrderStatus.RECEIVED:
-        order.received_at = parsed.shipped_at or order.received_at
+        order.received_at = parsed.confirmed_at or parsed.shipped_at or order.received_at
+        order.confirmed_at = parsed.confirmed_at or order.confirmed_at
     if parsed.shipped_at is not None:
         order.shipped_at = parsed.shipped_at
 
+    if new_fee is not None:
+        report.total_fee_amount += new_fee
     report.status_changed_orders += 1
