@@ -951,6 +951,67 @@ def test_release_endpoint_removed_returns_404_or_405(client):
     assert response.status_code in (404, 405), response.text
 
 
+def test_auto_release_includes_today_future_hour_mature_at(client):
+    """CEO 业务口径：今天稍晚才到期的订单,早晨查询/导入时也应进入可提现。
+
+    场景：4/29 14:30 确认 → mature_at = 5/6 14:30。CEO 在 5/6 早晨打开千牛
+    应该看到这笔已经在"可提现"里。我们写入今天 23:00 的 mature_at（无论现在
+    几点都满足"未来时刻"）模拟此场景。
+    """
+    shop = _shop_by_name("丙火网络")
+    now = datetime.now()
+    # 今天 23:00（如果当前时刻已过 23:00,改用明天前刚刚的时刻是不可能的,
+    #  因此用"今天剩余的最晚时刻"）
+    today_late = now.replace(hour=23, minute=0, second=0, microsecond=0)
+    if today_late <= now:
+        # 已经过 23:00,跳过此测试场景以避免歧义
+        pytest.skip("当前时刻已过 23:00,无法构造今日未来时刻")
+
+    _seed_aggregator_frozen_tx(
+        shop, Decimal("123.45"), today_late, order_number="TODAY_LATE_HOUR"
+    )
+
+    response = _post_import(client, shop.id, _build_xlsx([]))
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    # 关键断言：今天 23:00 的 mature_at 也应被释放（旧逻辑会漏）
+    assert payload["autoReleasedCount"] == 1
+    assert Decimal(payload["autoReleasedAmount"]) == Decimal("123.45")
+    assert _wallet_balance(shop.aggregator_frozen_wallet_id) == Decimal("0.000000")
+    assert _wallet_balance(shop.aggregator_available_wallet_id) == Decimal("123.450000")
+
+
+def test_auto_release_idempotent_second_import_no_double_release(client):
+    """幂等性：连续导入两次,第二次不应再次释放同一批订单。
+
+    现实场景：CEO 一天导入多次 Excel,聚合可提现余额不应重复增长。
+    实现：解冻完成后清掉那批 IN 流水的 mature_at,后续查询不再命中。
+    """
+    shop = _shop_by_name("丙火网络")
+    now = datetime.now()
+    _seed_aggregator_frozen_tx(
+        shop, Decimal("88.00"), now - timedelta(hours=1), order_number="IDEMPOTENT_1"
+    )
+
+    # 第 1 次导入：应释放 88
+    r1 = _post_import(client, shop.id, _build_xlsx([]))
+    assert r1.status_code == 200
+    assert Decimal(r1.json()["autoReleasedAmount"]) == Decimal("88.00")
+    assert _wallet_balance(shop.aggregator_frozen_wallet_id) == Decimal("0.000000")
+    assert _wallet_balance(shop.aggregator_available_wallet_id) == Decimal("88.000000")
+
+    # 第 2 次导入：同一批订单 mature_at 已被清,不应再释放
+    r2 = _post_import(client, shop.id, _build_xlsx([]))
+    assert r2.status_code == 200
+    payload = r2.json()
+    assert payload["autoReleasedCount"] == 0
+    assert Decimal(payload["autoReleasedAmount"]) == Decimal("0")
+    # 余额不变
+    assert _wallet_balance(shop.aggregator_frozen_wallet_id) == Decimal("0.000000")
+    assert _wallet_balance(shop.aggregator_available_wallet_id) == Decimal("88.000000")
+
+
 # ---------------------------------------------------------------------------
 # 综合：报告字段
 # ---------------------------------------------------------------------------

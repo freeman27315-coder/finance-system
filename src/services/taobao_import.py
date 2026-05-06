@@ -36,7 +36,7 @@ from src.models.wallet import (
     credit,
     debit,
 )
-from src.services.taobao_maturity import calculate_pending_maturity
+from src.services.taobao_maturity import calculate_pending_maturity, matured_active_txs
 
 
 # 千牛 v2 导出 Excel 的标准表头（14 列严格匹配，多 1 列、少 1 列、列名错都视为结构错）
@@ -386,23 +386,34 @@ def _auto_release_aggregator(
     session: Session,
     shop: TaobaoShop,
 ) -> tuple[Decimal, int]:
-    """导入流程末尾自动跑解冻。复用 ``calculate_pending_maturity`` 计算 + debit/credit 转账。
+    """导入流程末尾自动跑解冻。
 
     返回 ``(累计金额, 笔数)``。无可解冻流水时返回 ``(Decimal("0"), 0)``,不写流水。
 
-    与原 ``release_aggregator`` 端点的逻辑保持一致：
-    - 仅算 mature_at <= now 且仍被某 ``TaobaoOrder.bookkeeping_tx_id`` 引用的流水
+    业务规则：
+    - 用 ``matured_active_txs`` 找当前应解冻的 IN 流水（``mature_at < 明天 0:00``）
     - 累计金额从 frozen debit、credit 到 available
+    - **完成后清掉这批 IN 流水的 mature_at**，保证幂等：
+      下次再导入时同一批不会被重复释放（避免 frozen 余额负向漂移）。
     """
-    matured_amount, matured_count = calculate_pending_maturity(
-        session, shop.aggregator_frozen_wallet_id
-    )
-    if matured_count <= 0 or matured_amount <= 0:
+    active_txs = matured_active_txs(session, shop.aggregator_frozen_wallet_id)
+    if not active_txs:
+        return Decimal("0"), 0
+
+    matured_amount = sum((Decimal(tx.amount) for tx in active_txs), Decimal("0"))
+    matured_count = len(active_txs)
+    if matured_amount <= 0:
         return Decimal("0"), 0
 
     remark = f"导入自动解冻 {matured_count} 笔到期"
     debit(session, shop.aggregator_frozen_wallet_id, matured_amount, remark=remark)
     credit(session, shop.aggregator_available_wallet_id, matured_amount, remark=remark)
+
+    # 幂等保护：已释放的 IN 流水清掉 mature_at,后续查询不再命中
+    for tx in active_txs:
+        tx.mature_at = None
+    session.flush()
+
     return matured_amount, matured_count
 
 
