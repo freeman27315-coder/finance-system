@@ -108,7 +108,7 @@ def _seed_aggregator_frozen_tx(
 
 
 def test_withdraw_moves_available_to_bank_card(client):
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     # 先种 200 到 available
     db = database.SessionLocal()
     try:
@@ -134,7 +134,7 @@ def test_withdraw_moves_available_to_bank_card(client):
 
 
 def test_withdraw_400_when_insufficient_balance(client):
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     response = client.post(
         f"/taobao/shops/{shop.id}/withdraw",
         json={"amount": "100"},
@@ -144,7 +144,7 @@ def test_withdraw_400_when_insufficient_balance(client):
 
 
 def test_withdraw_default_remark(client):
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     db = database.SessionLocal()
     try:
         credit(db, shop.aggregator_available_wallet_id, Decimal("50"), remark="种子")
@@ -167,7 +167,7 @@ def test_withdraw_404_when_shop_not_found(client):
 
 def test_withdraw_400_when_amount_not_positive(client):
     """Pydantic gt=0 → 422，但 0 / 负数都被拦在前面。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     response = client.post(
         f"/taobao/shops/{shop.id}/withdraw",
         json={"amount": "0"},
@@ -181,8 +181,8 @@ def test_withdraw_400_when_amount_not_positive(client):
 
 
 def test_transfer_to_store_alipay_a_shop_explicit_amount(client):
-    """丙火电玩：bank_card → 丙火网络支付宝（资产支付宝子钱包），指定 amount。"""
-    shop = _shop_by_name("丙火电玩")
+    """丙火网络：bank_card → 丙火网络支付宝（资产支付宝子钱包），指定 amount。"""
+    shop = _shop_by_name("丙火网络")
 
     db = database.SessionLocal()
     try:
@@ -259,7 +259,7 @@ def test_transfer_to_store_alipay_default_amount_is_full_bank_balance(client):
 
 def test_transfer_to_store_alipay_400_when_bank_card_empty(client):
     """银行卡余额为 0 时 amount 默认 0 → 400。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     response = client.post(
         f"/taobao/shops/{shop.id}/transfer-to-store-alipay",
         json={},
@@ -268,7 +268,7 @@ def test_transfer_to_store_alipay_400_when_bank_card_empty(client):
 
 
 def test_transfer_to_store_alipay_custom_remark(client):
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     db = database.SessionLocal()
     try:
         credit(db, shop.bank_card_wallet_id, Decimal("100"), remark="种子")
@@ -303,7 +303,7 @@ def _wallet_id_by_name(name: str) -> int:
 
 def test_transfer_default_target_for_a_shop_unchanged(client):
     """丙火不传 target_wallet_id → 转到 shop.store_alipay_wallet（即丙火网络支付宝）。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     db = database.SessionLocal()
     try:
         credit(db, shop.bank_card_wallet_id, Decimal("100"), remark="种子")
@@ -365,7 +365,7 @@ def test_transfer_default_target_for_tuzai(client):
 
 def test_transfer_a_shop_to_other_alipay_sub_wallet(client):
     """丙火显式传 TOM支付宝 ID → 银行卡 debit + TOM支付宝 credit；丙火网络支付宝余额不动。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     tom_id = _wallet_id_by_name("TOM支付宝")
 
     db = database.SessionLocal()
@@ -396,7 +396,7 @@ def test_transfer_a_shop_to_other_alipay_sub_wallet(client):
 
 def test_transfer_a_shop_to_boss_alipay(client):
     """丙火显式传 BOSS支付宝 ID → 银行卡 debit + BOSS支付宝 credit。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     boss_id = _wallet_id_by_name("BOSS支付宝")
 
     db = database.SessionLocal()
@@ -499,7 +499,7 @@ def test_transfer_b_shop_explicit_self_store_alipay_succeeds(client):
 
 def test_transfer_400_when_target_soft_deleted(client):
     """目标钱包已软删 → 400。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     tom_id = _wallet_id_by_name("TOM支付宝")
 
     # 先软删 TOM支付宝
@@ -522,7 +522,7 @@ def test_transfer_400_when_target_soft_deleted(client):
 
 def test_transfer_400_when_target_is_group(client):
     """目标是分组（如 RMB 顶级 group）→ 400 分组钱包不可作为目标。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rmb_root_id = _wallet_id_by_name("RMB钱包")
 
     db = database.SessionLocal()
@@ -542,7 +542,7 @@ def test_transfer_400_when_target_is_group(client):
 
 def test_transfer_404_when_target_wallet_not_found(client):
     """目标 wallet_id 不存在 → 404。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     db = database.SessionLocal()
     try:
         credit(db, shop.bank_card_wallet_id, Decimal("10"), remark="种子")
@@ -560,7 +560,7 @@ def test_transfer_404_when_target_wallet_not_found(client):
 
 def test_transfer_400_when_target_equals_bank_card(client):
     """目标 == 银行卡本身 → 400 不能转给自己。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     db = database.SessionLocal()
     try:
         credit(db, shop.bank_card_wallet_id, Decimal("10"), remark="种子")
@@ -608,7 +608,7 @@ def _seed_orders(shop: TaobaoShop) -> None:
 
 
 def test_list_orders_returns_all_for_shop_sorted_desc(client):
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     _seed_orders(shop)
 
     response = client.get(f"/taobao/shops/{shop.id}/orders")
@@ -622,7 +622,7 @@ def test_list_orders_returns_all_for_shop_sorted_desc(client):
 
 
 def test_list_orders_filter_by_status(client):
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     _seed_orders(shop)
 
     response = client.get(
@@ -637,7 +637,7 @@ def test_list_orders_filter_by_status(client):
 
 
 def test_list_orders_filter_by_payment_method(client):
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     _seed_orders(shop)
 
     response = client.get(
@@ -651,7 +651,7 @@ def test_list_orders_filter_by_payment_method(client):
 
 
 def test_list_orders_pagination(client):
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     _seed_orders(shop)
 
     response = client.get(
@@ -664,7 +664,7 @@ def test_list_orders_pagination(client):
 
 
 def test_list_orders_400_on_invalid_status(client):
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     response = client.get(
         f"/taobao/shops/{shop.id}/orders",
         params={"status": "BOGUS"},
@@ -679,7 +679,7 @@ def test_list_orders_404_when_shop_not_found(client):
 
 def test_list_orders_isolated_by_shop(client):
     """丙火店的订单不会出现在小小店的列表里。"""
-    binghuo = _shop_by_name("丙火电玩")
+    binghuo = _shop_by_name("丙火网络")
     xiaoxiao = _shop_by_name("小小电玩")
     _seed_orders(binghuo)
 
@@ -694,7 +694,7 @@ def test_list_orders_isolated_by_shop(client):
 
 
 def test_wallet_transactions_returns_mature_at(client):
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     now = datetime.now(timezone.utc)
     _seed_aggregator_frozen_tx(shop, Decimal("100"), now + timedelta(days=5), order_number="MAT_TX_1")
 
@@ -713,7 +713,7 @@ def test_wallet_transactions_returns_mature_at(client):
 
 def test_wallet_transactions_404_when_wallet_not_in_shop(client):
     """随便挑一个非该店铺的 wallet_id → 404。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     other = _shop_by_name("小小电玩")
     other_wallet_id = other.bank_card_wallet_id
     assert other_wallet_id not in {
@@ -732,7 +732,7 @@ def test_wallet_transactions_404_when_wallet_not_in_shop(client):
 
 def test_wallet_transactions_store_alipay_wallet_allowed(client):
     """store_alipay_wallet（店铺支付宝）也应被允许查询。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     # 先 credit 到 store_alipay_wallet
     db = database.SessionLocal()
     try:
@@ -752,7 +752,7 @@ def test_wallet_transactions_store_alipay_wallet_allowed(client):
 
 
 def test_wallet_transactions_404_when_shop_not_found(client):
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     response = client.get(
         f"/taobao/shops/99999/wallets/{shop.aggregator_frozen_wallet_id}/transactions"
     )
@@ -761,7 +761,7 @@ def test_wallet_transactions_404_when_shop_not_found(client):
 
 def test_wallet_transactions_pagination_and_desc(client):
     """流水按 id desc 倒序 + 分页。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     db = database.SessionLocal()
     try:
         for i in range(5):

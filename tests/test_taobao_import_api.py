@@ -93,7 +93,7 @@ def _row(
     buyer_paid: str,
     status_zh: str,
     paid_at: str = "",
-    shop_name: str = "丙火电玩",
+    shop_name: str = "丙火网络",
     shipped_at: str = "",
     confirmed_at: str = "",
     confirmed_amount: str = "0.00",
@@ -210,7 +210,7 @@ def test_import_404_when_shop_not_found(client):
 
 
 def test_import_400_when_not_xlsx(client):
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     response = client.post(
         f"/taobao/shops/{shop.id}/import",
         files={"file": ("export.csv", b"some,csv,data", "text/csv")},
@@ -221,7 +221,7 @@ def test_import_400_when_not_xlsx(client):
 
 def test_import_400_when_header_wrong_in_middle(client):
     """中间一列改名 → 400 表头错。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     bad_headers = HEADERS.copy()
     bad_headers[7] = "WRONG_COL"  # 把 "宝贝种类" 改错
     content = _build_xlsx([], headers=bad_headers)
@@ -232,7 +232,7 @@ def test_import_400_when_header_wrong_in_middle(client):
 
 def test_import_400_when_columns_too_few(client):
     """少 1 列（13 列）→ 400 列数不足。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     content = _build_xlsx([], headers=HEADERS[:13])
     response = _post_import(client, shop.id, content)
     assert response.status_code == 400
@@ -240,7 +240,7 @@ def test_import_400_when_columns_too_few(client):
 
 def test_import_400_when_old_v1_9col_header_rejected(client):
     """v1 旧 9 列表头 → 14 列严格校验下应被 400 拒绝。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     old_headers = [
         "订单编号", "支付单号", "支付详情", "买家实付金额", "订单状态",
         "订单付款时间", "店铺名称", "发货时间", "确认收货打款金额",
@@ -252,7 +252,7 @@ def test_import_400_when_old_v1_9col_header_rejected(client):
 
 def test_import_400_when_row_shop_name_mismatched(client):
     """行内店铺名 != 上传 shop.name → 400 + 错误信息含两个店铺名 + 整体回滚。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rows = [
         _row(
             order_no="ROW_OK",
@@ -261,7 +261,7 @@ def test_import_400_when_row_shop_name_mismatched(client):
             buyer_paid="10.00",
             status_zh="交易成功",
             paid_at="2026-04-29 23:00:00",
-            shop_name="丙火电玩",
+            shop_name="丙火网络",
             shipped_at="2026-04-30 00:00:00",
             confirmed_at="2026-04-30 12:00:00",
             confirmed_amount="10.00",
@@ -283,7 +283,7 @@ def test_import_400_when_row_shop_name_mismatched(client):
     assert response.status_code == 400, response.text
     detail = response.json()["detail"]
     assert "兔仔电玩" in detail
-    assert "丙火电玩" in detail
+    assert "丙火网络" in detail
 
     # 整体回滚
     assert _wallet_balance(shop.store_alipay_wallet_id) == Decimal("0.000000")
@@ -298,7 +298,7 @@ def test_import_400_when_row_shop_name_mismatched(client):
 
 def test_import_400_when_row_shop_name_empty(client):
     """行内店铺名为空 → 视为不匹配 → 400。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rows = [
         _row(
             order_no="ROW_EMPTY_SHOP",
@@ -318,7 +318,7 @@ def test_import_400_when_row_shop_name_empty(client):
 
 
 def test_import_400_when_file_empty(client):
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     response = client.post(
         f"/taobao/shops/{shop.id}/import",
         files={
@@ -339,7 +339,7 @@ def test_import_400_when_file_empty(client):
 
 def test_new_alipay_received_a_shop_to_store_alipay_wallet(client):
     """A 类店铺（丙火）alipay/received → store_alipay_wallet,扣 0.2% 手续费。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rows = [_row(
         order_no="ORDER_A1",
         payment_no="PAY_A1",
@@ -347,7 +347,7 @@ def test_new_alipay_received_a_shop_to_store_alipay_wallet(client):
         buyer_paid="100.00",
         status_zh="交易成功",
         paid_at="2026-04-29 23:57:43",
-        shop_name="丙火电玩",
+        shop_name="丙火网络",
         shipped_at="2026-04-30 00:03:21",
         confirmed_at="2026-04-30 14:00:00",
         confirmed_amount="100.00",
@@ -387,7 +387,7 @@ def test_new_alipay_received_b_shop_to_store_alipay_wallet(client):
 
 def test_new_wechat_received_to_aggregator_frozen_with_mature_at_from_confirmed_at(client):
     """wechat/received → aggregator_frozen，mature_at = confirmed_at + 7d。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     confirmed_at_str = "2026-04-30 14:30:00"
     shipped_at_str = "2026-04-30 00:03:21"
     rows = [_row(
@@ -397,7 +397,7 @@ def test_new_wechat_received_to_aggregator_frozen_with_mature_at_from_confirmed_
         buyer_paid="200.00",
         status_zh="交易成功",
         paid_at="2026-04-29 23:57:43",
-        shop_name="丙火电玩",
+        shop_name="丙火网络",
         shipped_at=shipped_at_str,
         confirmed_at=confirmed_at_str,
         confirmed_amount="200.00",
@@ -416,7 +416,7 @@ def test_new_wechat_received_to_aggregator_frozen_with_mature_at_from_confirmed_
 
 def test_mature_at_falls_back_to_shipped_at_when_confirmed_at_missing(client):
     """confirmed_at 缺失时,mature_at 兜底用 shipped_at + 7d。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     shipped_at_str = "2026-04-30 00:03:21"
     rows = [_row(
         order_no="ORDER_FB",
@@ -425,7 +425,7 @@ def test_mature_at_falls_back_to_shipped_at_when_confirmed_at_missing(client):
         buyer_paid="100.00",
         status_zh="交易成功",
         paid_at="2026-04-29 23:57:43",
-        shop_name="丙火电玩",
+        shop_name="丙火网络",
         shipped_at=shipped_at_str,
         confirmed_at="",  # 缺失
         confirmed_amount="100.00",
@@ -461,7 +461,7 @@ def test_new_wechat_received_b_shop_also_to_aggregator_frozen(client):
 
 def test_new_alipay_shipped_unconfirmed_to_unconfirmed_alipay(client):
     """alipay/shipped_unconfirmed → unconfirmed_alipay,金额用买家实付（gross）,不扣手续费。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rows = [_row(
         order_no="ORDER_S1",
         payment_no="PAY_S1",
@@ -469,7 +469,7 @@ def test_new_alipay_shipped_unconfirmed_to_unconfirmed_alipay(client):
         buyer_paid="27.50",
         status_zh="卖家已发货，等待买家确认",
         paid_at="2026-04-29 23:46:25",
-        shop_name="丙火电玩",
+        shop_name="丙火网络",
         shipped_at="2026-04-30 00:10:45",
         confirmed_at="",
         confirmed_amount="0.00",
@@ -490,7 +490,7 @@ def test_new_alipay_shipped_unconfirmed_to_unconfirmed_alipay(client):
 
 def test_new_wechat_shipped_unconfirmed_to_unconfirmed_wechat(client):
     """wechat/shipped_unconfirmed → unconfirmed_wechat,不扣手续费。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rows = [_row(
         order_no="ORDER_S2",
         payment_no="PAY_S2",
@@ -498,7 +498,7 @@ def test_new_wechat_shipped_unconfirmed_to_unconfirmed_wechat(client):
         buyer_paid="33.00",
         status_zh="卖家已发货，等待买家确认",
         paid_at="2026-04-29 23:46:25",
-        shop_name="丙火电玩",
+        shop_name="丙火网络",
         shipped_at="2026-04-30 00:10:45",
         confirmed_at="",
         confirmed_amount="0.00",
@@ -525,7 +525,7 @@ def test_new_wechat_shipped_unconfirmed_to_unconfirmed_wechat(client):
 )
 def test_fee_precision_rounding_half_up(client, gross, expected_net, expected_fee):
     """逐个边界金额跑 alipay/received，验证 net & fee 精度。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rows = [_row(
         order_no=f"FEE_{gross}",
         payment_no=f"PF_{gross}",
@@ -533,7 +533,7 @@ def test_fee_precision_rounding_half_up(client, gross, expected_net, expected_fe
         buyer_paid=gross,
         status_zh="交易成功",
         paid_at="2026-04-29 23:00:00",
-        shop_name="丙火电玩",
+        shop_name="丙火网络",
         shipped_at="2026-04-30 00:00:00",
         confirmed_at="2026-04-30 14:00:00",
         confirmed_amount=gross,
@@ -551,7 +551,7 @@ def test_fee_precision_rounding_half_up(client, gross, expected_net, expected_fe
 
 def test_total_fee_amount_summed_across_received_rows(client):
     """totalFeeAmount = 所有 received 行 fee 之和。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rows = [
         _row(
             order_no=f"SUM_F_{i}",
@@ -560,7 +560,7 @@ def test_total_fee_amount_summed_across_received_rows(client):
             buyer_paid=str(amt),
             status_zh="交易成功",
             paid_at="2026-04-29 23:00:00",
-            shop_name="丙火电玩",
+            shop_name="丙火网络",
             shipped_at="2026-04-30 00:00:00",
             confirmed_at="2026-04-30 14:00:00",
             confirmed_amount=str(amt),
@@ -581,7 +581,7 @@ def test_total_fee_amount_summed_across_received_rows(client):
 
 def test_skip_pending_pay_and_paid_unshipped(client):
     """等待买家付款 / 买家已付款等待发货 → 跳过，不入账。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rows = [
         _row(
             order_no="ORDER_PEND",
@@ -590,7 +590,7 @@ def test_skip_pending_pay_and_paid_unshipped(client):
             buyer_paid="0.00",
             status_zh="等待买家付款",
             paid_at="",
-            shop_name="丙火电玩",
+            shop_name="丙火网络",
             shipped_at="",
             confirmed_amount="0.00",
         ),
@@ -601,7 +601,7 @@ def test_skip_pending_pay_and_paid_unshipped(client):
             buyer_paid="10.00",
             status_zh="买家已付款,等待卖家发货",
             paid_at="2026-04-29 23:00:00",
-            shop_name="丙火电玩",
+            shop_name="丙火网络",
             shipped_at="",
             confirmed_amount="0.00",
         ),
@@ -624,7 +624,7 @@ def test_skip_pending_pay_and_paid_unshipped(client):
 
 def test_skip_unknown_payment_method(client):
     """支付详情含怪字符串 → skippedUnknownPayment + 不入账。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rows = [_row(
         order_no="ORDER_UNKNOWN",
         payment_no="PAY_UNKNOWN",
@@ -632,7 +632,7 @@ def test_skip_unknown_payment_method(client):
         buyer_paid="50.00",
         status_zh="交易成功",
         paid_at="2026-04-29 23:00:00",
-        shop_name="丙火电玩",
+        shop_name="丙火网络",
         shipped_at="2026-04-30 00:00:00",
         confirmed_at="2026-04-30 14:00:00",
         confirmed_amount="50.00",
@@ -646,7 +646,7 @@ def test_skip_unknown_payment_method(client):
 
 def test_new_closed_order_no_credit(client):
     """新订单状态就是 closed → 不入账。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rows = [_row(
         order_no="ORDER_CLOSED",
         payment_no="PAY_CLOSED",
@@ -654,7 +654,7 @@ def test_new_closed_order_no_credit(client):
         buyer_paid="0.00",
         status_zh="交易关闭",
         paid_at="",
-        shop_name="丙火电玩",
+        shop_name="丙火网络",
         shipped_at="",
         confirmed_amount="0.00",
     )]
@@ -682,7 +682,7 @@ def test_reconcile_shipped_unconfirmed_to_received_alipay(client):
 
     差额 0.2 = fee 自然消失。
     """
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     # 1) 在途 100
     rows1 = [_row(
         order_no="ORDER_RECONCILE",
@@ -691,7 +691,7 @@ def test_reconcile_shipped_unconfirmed_to_received_alipay(client):
         buyer_paid="100.00",
         status_zh="卖家已发货，等待买家确认",
         paid_at="2026-04-29 23:00:00",
-        shop_name="丙火电玩",
+        shop_name="丙火网络",
         shipped_at="2026-04-30 00:00:00",
         confirmed_amount="0.00",
     )]
@@ -708,7 +708,7 @@ def test_reconcile_shipped_unconfirmed_to_received_alipay(client):
         buyer_paid="100.00",
         status_zh="交易成功",
         paid_at="2026-04-29 23:00:00",
-        shop_name="丙火电玩",
+        shop_name="丙火网络",
         shipped_at="2026-04-30 00:00:00",
         confirmed_at="2026-04-30 14:00:00",
         confirmed_amount="100.00",
@@ -748,7 +748,7 @@ def test_reconcile_shipped_unconfirmed_to_received_alipay(client):
 
 def test_reconcile_to_closed_no_new_credit(client):
     """状态从 shipped_unconfirmed → closed：撤老钱包,无新流水。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rows1 = [_row(
         order_no="ORDER_TO_CLOSED",
         payment_no="PAY_C1",
@@ -756,7 +756,7 @@ def test_reconcile_to_closed_no_new_credit(client):
         buyer_paid="80.00",
         status_zh="卖家已发货，等待买家确认",
         paid_at="2026-04-29 23:00:00",
-        shop_name="丙火电玩",
+        shop_name="丙火网络",
         shipped_at="2026-04-30 00:00:00",
         confirmed_amount="0.00",
     )]
@@ -770,7 +770,7 @@ def test_reconcile_to_closed_no_new_credit(client):
         buyer_paid="80.00",
         status_zh="交易关闭",
         paid_at="2026-04-29 23:00:00",
-        shop_name="丙火电玩",
+        shop_name="丙火网络",
         shipped_at="2026-04-30 00:00:00",
         confirmed_amount="0.00",
     )]
@@ -790,7 +790,7 @@ def test_reconcile_to_closed_no_new_credit(client):
 
 def test_reconcile_no_change_skipped(client):
     """状态没变 → skippedNoChange + 0 流水变化。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rows = [_row(
         order_no="ORDER_SAME",
         payment_no="PAY_SAME",
@@ -798,7 +798,7 @@ def test_reconcile_no_change_skipped(client):
         buyer_paid="55.00",
         status_zh="卖家已发货，等待买家确认",
         paid_at="2026-04-29 23:00:00",
-        shop_name="丙火电玩",
+        shop_name="丙火网络",
         shipped_at="2026-04-30 00:00:00",
         confirmed_amount="0.00",
     )]
@@ -817,7 +817,7 @@ def test_reconcile_no_change_skipped(client):
 
 def test_reconcile_skip_jump_unconfirmed_to_received_wechat(client):
     """跳级 wechat：在途 120 → 确认 120 → debit 120 + credit net=119.76（fee 0.24）+ mature_at。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rows1 = [_row(
         order_no="ORDER_JUMP",
         payment_no="PAY_J1",
@@ -825,7 +825,7 @@ def test_reconcile_skip_jump_unconfirmed_to_received_wechat(client):
         buyer_paid="120.00",
         status_zh="卖家已发货，等待买家确认",
         paid_at="2026-04-29 23:00:00",
-        shop_name="丙火电玩",
+        shop_name="丙火网络",
         shipped_at="2026-04-30 00:00:00",
         confirmed_amount="0.00",
     )]
@@ -839,7 +839,7 @@ def test_reconcile_skip_jump_unconfirmed_to_received_wechat(client):
         buyer_paid="120.00",
         status_zh="交易成功",
         paid_at="2026-04-29 23:00:00",
-        shop_name="丙火电玩",
+        shop_name="丙火网络",
         shipped_at="2026-04-30 00:00:00",
         confirmed_at="2026-04-30 14:00:00",
         confirmed_amount="120.00",
@@ -900,7 +900,7 @@ def _seed_aggregator_frozen_tx(
 
 def test_auto_release_on_import_moves_matured_to_available(client):
     """fixture 灌入到期流水 → 导入新订单 → 报告含 autoReleased*。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     now = datetime.now(timezone.utc)
     _seed_aggregator_frozen_tx(shop, Decimal("100"), now - timedelta(days=1), order_number="MAT_AR_1")
     _seed_aggregator_frozen_tx(shop, Decimal("50"), now - timedelta(hours=2), order_number="MAT_AR_2")
@@ -926,7 +926,7 @@ def test_auto_release_on_import_moves_matured_to_available(client):
 
 def test_auto_release_no_matured_returns_zero(client):
     """无任何到期流水时 autoReleased*=0,不动余额。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     now = datetime.now(timezone.utc)
     _seed_aggregator_frozen_tx(shop, Decimal("99"), now + timedelta(days=2), order_number="FUT_ONLY_AR")
 
@@ -942,7 +942,7 @@ def test_auto_release_no_matured_returns_zero(client):
 
 def test_release_endpoint_removed_returns_404_or_405(client):
     """一键解冻端点已删,POST 应 404/405。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     response = client.post(f"/taobao/shops/{shop.id}/aggregator/release")
     assert response.status_code in (404, 405), response.text
 
@@ -954,7 +954,7 @@ def test_release_endpoint_removed_returns_404_or_405(client):
 
 def test_full_report_counts(client):
     """5 行综合：报告字段全到位。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rows = [
         # 1) received alipay 10 → fee 0.02 → net 9.98
         _row(
@@ -964,7 +964,7 @@ def test_full_report_counts(client):
             buyer_paid="10.00",
             status_zh="交易成功",
             paid_at="2026-04-29 23:00:00",
-            shop_name="丙火电玩",
+            shop_name="丙火网络",
             shipped_at="2026-04-30 00:00:00",
             confirmed_at="2026-04-30 14:00:00",
             confirmed_amount="10.00",
@@ -977,7 +977,7 @@ def test_full_report_counts(client):
             buyer_paid="20.00",
             status_zh="卖家已发货，等待买家确认",
             paid_at="2026-04-29 23:00:00",
-            shop_name="丙火电玩",
+            shop_name="丙火网络",
             shipped_at="2026-04-30 00:00:00",
             confirmed_amount="0.00",
         ),
@@ -989,7 +989,7 @@ def test_full_report_counts(client):
             buyer_paid="0.00",
             status_zh="等待买家付款",
             paid_at="",
-            shop_name="丙火电玩",
+            shop_name="丙火网络",
             shipped_at="",
             confirmed_amount="0.00",
         ),
@@ -1001,7 +1001,7 @@ def test_full_report_counts(client):
             buyer_paid="30.00",
             status_zh="交易成功",
             paid_at="2026-04-29 23:00:00",
-            shop_name="丙火电玩",
+            shop_name="丙火网络",
             shipped_at="2026-04-30 00:00:00",
             confirmed_at="2026-04-30 14:00:00",
             confirmed_amount="30.00",
@@ -1014,7 +1014,7 @@ def test_full_report_counts(client):
             buyer_paid="0.00",
             status_zh="交易关闭",
             paid_at="",
-            shop_name="丙火电玩",
+            shop_name="丙火网络",
             shipped_at="",
             confirmed_amount="0.00",
         ),
@@ -1023,7 +1023,7 @@ def test_full_report_counts(client):
     assert response.status_code == 200, response.text
     payload = response.json()
 
-    assert payload["shopName"] == "丙火电玩"
+    assert payload["shopName"] == "丙火网络"
     assert payload["totalRowsParsed"] == 5
     assert payload["createdOrders"] == 3
     assert payload["statusChangedOrders"] == 0
@@ -1042,7 +1042,7 @@ def test_full_report_counts(client):
 
 def test_atomic_transaction_no_partial_on_db_error(client, monkeypatch):
     """单一事务原子：一条流水抛错应整个 rollback。"""
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rows = [
         _row(
             order_no="OK_1",
@@ -1051,7 +1051,7 @@ def test_atomic_transaction_no_partial_on_db_error(client, monkeypatch):
             buyer_paid="10.00",
             status_zh="交易成功",
             paid_at="2026-04-29 23:00:00",
-            shop_name="丙火电玩",
+            shop_name="丙火网络",
             shipped_at="2026-04-30 00:00:00",
             confirmed_at="2026-04-30 14:00:00",
             confirmed_amount="10.00",
@@ -1063,7 +1063,7 @@ def test_atomic_transaction_no_partial_on_db_error(client, monkeypatch):
             buyer_paid="20.00",
             status_zh="交易成功",
             paid_at="2026-04-29 23:00:00",
-            shop_name="丙火电玩",
+            shop_name="丙火网络",
             shipped_at="2026-04-30 00:00:00",
             confirmed_at="2026-04-30 14:00:00",
             confirmed_amount="20.00",
@@ -1122,7 +1122,7 @@ def test_large_sample_distribution_v2(client):
 
     支付方式分布: wechat 1325 / alipay 413 (近似)
     """
-    shop = _shop_by_name("丙火电玩")
+    shop = _shop_by_name("丙火网络")
     rows: list[list] = []
     idx = 0
 
@@ -1152,7 +1152,7 @@ def test_large_sample_distribution_v2(client):
             buyer_paid=str(amount),
             status_zh=status,
             paid_at=pay_time,
-            shop_name="丙火电玩",
+            shop_name="丙火网络",
             shipped_at=ship_time,
             confirmed_at=confirm_time,
             confirmed_amount=confirm_amount,
