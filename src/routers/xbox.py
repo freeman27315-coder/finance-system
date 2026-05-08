@@ -1,11 +1,12 @@
 """XBOX account API routes."""
 from __future__ import annotations
 
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -17,8 +18,13 @@ from src.models.xbox import (
     XboxAccountStatus,
     XboxCountry,
     XboxCurrency,
+    XboxOrder,
+    XboxOrderStatus,
+    XboxSaleRecord,
     XboxTransaction,
     XboxTransactionType,
+    XboxWalletItem,
+    XboxWalletMethod,
 )
 from src.services.xbox_account import (
     change_password,
@@ -27,6 +33,20 @@ from src.services.xbox_account import (
     list_accounts as service_list_accounts,
     list_audit_logs,
     update_account_fields,
+)
+from src.services.xbox_order import (
+    create_order as service_create_order,
+    get_order_or_404,
+    list_orders as service_list_orders,
+    update_order_completion,
+)
+from src.services.xbox_sale import (
+    list_sale_records,
+    update_sale_record_fields,
+)
+from src.services.xbox_wallet_setting import (
+    list_wallet_methods,
+    upsert_wallet_settings,
 )
 
 
@@ -451,3 +471,355 @@ def xbox_summary(db: Session = Depends(get_db)) -> XboxSummaryOut:
         USD=totals.get(XboxCurrency.USD.value, empty),
         GBP=totals.get(XboxCurrency.GBP.value, empty),
     )
+
+
+# ==================================================================
+# PR #110 P0.2 — 订单 / 销售记录 / 钱包设置 端点
+# ==================================================================
+
+
+# ----- Schemas -----
+class XboxOrderCreate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    account_id: int
+    order_no: str = Field(..., min_length=1, max_length=64)
+    amount_local: Decimal
+    currency_local: str = Field(..., min_length=1, max_length=8)
+    order_at: datetime
+    exchange_rate: Optional[Decimal] = None
+
+
+class XboxOrderCompletion(BaseModel):
+    """订单补齐字段。全部填齐后自动转销售记录。"""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    sale_date: Optional[date] = None
+    product_name: Optional[str] = Field(None, min_length=1, max_length=255)
+    operator_name: Optional[str] = Field(None, min_length=1, max_length=64)
+    sale_price: Optional[Decimal] = None
+    sale_currency: Optional[str] = None
+    wallet_method_id: Optional[int] = None
+    wallet_item_id: Optional[int] = None
+
+
+class XboxOrderOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    id: int
+    account_id: int
+    order_no: str
+    amount_local: Decimal
+    currency_local: str
+    exchange_rate: Optional[Decimal] = None
+    rmb_cost: Decimal
+    order_at: str
+    status: str
+    sale_date: Optional[str] = None
+    product_name: Optional[str] = None
+    operator_name: Optional[str] = None
+    sale_price: Optional[Decimal] = None
+    sale_currency: Optional[str] = None
+    wallet_method_id: Optional[int] = None
+    wallet_item_id: Optional[int] = None
+    sale_record_id: Optional[int] = None
+    created_at: str
+    last_updated_at: str
+
+
+class XboxSaleRecordOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    id: int
+    account_id: int
+    sale_date: str
+    product_name: str
+    operator_name: str
+    sale_price: Decimal
+    sale_currency: str
+    wallet_method_id: int
+    wallet_item_id: int
+    wallet_item_label: str
+    wallet_pool_id: int
+    bookkeeping_tx_id: Optional[int] = None
+    order_ids: list[int] = Field(default_factory=list)
+    created_at: str
+    last_updated_at: str
+
+
+class XboxSaleRecordUpdate(BaseModel):
+    """改销售记录字段。后端自动联动钱包余额。"""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    sale_date: Optional[date] = None
+    product_name: Optional[str] = None
+    operator_name: Optional[str] = None
+    sale_price: Optional[Decimal] = None
+    sale_currency: Optional[str] = None
+    wallet_method_id: Optional[int] = None
+    wallet_item_id: Optional[int] = None
+    wallet_item_label: Optional[str] = None
+    wallet_pool_id: Optional[int] = None
+
+
+class XboxWalletItemOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    id: int
+    code: str
+    label: str
+    wallet_pool_id: int
+    is_active: bool
+
+
+class XboxWalletMethodOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    id: int
+    code: str
+    label: str
+    is_active: bool
+    items: list[XboxWalletItemOut]
+
+
+# ----- Serializers -----
+def serialize_order(order: XboxOrder) -> XboxOrderOut:
+    return XboxOrderOut(
+        id=order.id,
+        account_id=order.account_id,
+        order_no=order.order_no,
+        amount_local=order.amount_local,
+        currency_local=order.currency_local,
+        exchange_rate=order.exchange_rate,
+        rmb_cost=order.rmb_cost,
+        order_at=order.order_at.isoformat() if order.order_at else "",
+        status=order.status,
+        sale_date=order.sale_date.isoformat() if order.sale_date else None,
+        product_name=order.product_name,
+        operator_name=order.operator_name,
+        sale_price=order.sale_price,
+        sale_currency=order.sale_currency,
+        wallet_method_id=order.wallet_method_id,
+        wallet_item_id=order.wallet_item_id,
+        sale_record_id=order.sale_record_id,
+        created_at=order.created_at.isoformat() if order.created_at else "",
+        last_updated_at=order.last_updated_at.isoformat() if order.last_updated_at else "",
+    )
+
+
+def serialize_sale_record(record: XboxSaleRecord, order_ids: list[int]) -> XboxSaleRecordOut:
+    return XboxSaleRecordOut(
+        id=record.id,
+        account_id=record.account_id,
+        sale_date=record.sale_date.isoformat() if record.sale_date else "",
+        product_name=record.product_name,
+        operator_name=record.operator_name,
+        sale_price=record.sale_price,
+        sale_currency=record.sale_currency,
+        wallet_method_id=record.wallet_method_id,
+        wallet_item_id=record.wallet_item_id,
+        wallet_item_label=record.wallet_item_label,
+        wallet_pool_id=record.wallet_pool_id,
+        bookkeeping_tx_id=record.bookkeeping_tx_id,
+        order_ids=order_ids,
+        created_at=record.created_at.isoformat() if record.created_at else "",
+        last_updated_at=record.last_updated_at.isoformat() if record.last_updated_at else "",
+    )
+
+
+def serialize_method(method: XboxWalletMethod) -> XboxWalletMethodOut:
+    items = sorted(method.items, key=lambda i: i.id)
+    return XboxWalletMethodOut(
+        id=method.id,
+        code=method.code,
+        label=method.label,
+        is_active=method.is_active,
+        items=[
+            XboxWalletItemOut(
+                id=it.id,
+                code=it.code,
+                label=it.label,
+                wallet_pool_id=it.wallet_pool_id,
+                is_active=it.is_active,
+            )
+            for it in items
+        ],
+    )
+
+
+# ----- Order endpoints -----
+@router.post(
+    "/orders",
+    response_model=XboxOrderOut,
+    response_model_by_alias=True,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_order_endpoint(request: XboxOrderCreate, db: Session = Depends(get_db)) -> XboxOrderOut:
+    """手动建订单（P0.2 阶段,P2 改为 Microsoft 自动同步）。"""
+    account = get_account_or_404(db, request.account_id)
+    try:
+        order = service_create_order(
+            db,
+            account=account,
+            order_no=request.order_no,
+            amount_local=request.amount_local,
+            currency_local=request.currency_local,
+            order_at=request.order_at,
+            exchange_rate=request.exchange_rate,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(order)
+    return serialize_order(order)
+
+
+@router.get(
+    "/orders",
+    response_model=list[XboxOrderOut],
+    response_model_by_alias=True,
+)
+def list_orders_endpoint(
+    account_id: Optional[int] = Query(None, alias="accountId"),
+    status_filter: Optional[XboxOrderStatus] = Query(None, alias="status"),
+    db: Session = Depends(get_db),
+) -> list[XboxOrderOut]:
+    orders = service_list_orders(
+        db,
+        account_id=account_id,
+        status=status_filter.value if status_filter else None,
+    )
+    return [serialize_order(o) for o in orders]
+
+
+@router.patch(
+    "/orders/{order_id}",
+    response_model=XboxOrderOut,
+    response_model_by_alias=True,
+)
+def patch_order_endpoint(
+    order_id: int,
+    request: XboxOrderCompletion,
+    db: Session = Depends(get_db),
+) -> XboxOrderOut:
+    """补齐订单字段。全部填齐自动转销售（CEO Q3A）。"""
+    order = get_order_or_404(db, order_id)
+    if order is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="订单不存在")
+    try:
+        update_order_completion(
+            db,
+            order,
+            sale_date=request.sale_date,
+            product_name=request.product_name,
+            operator_name=request.operator_name,
+            sale_price=request.sale_price,
+            sale_currency=request.sale_currency,
+            wallet_method_id=request.wallet_method_id,
+            wallet_item_id=request.wallet_item_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(order)
+    return serialize_order(order)
+
+
+# ----- Sale record endpoints -----
+@router.get(
+    "/sale-records",
+    response_model=list[XboxSaleRecordOut],
+    response_model_by_alias=True,
+)
+def list_sale_records_endpoint(
+    account_id: Optional[int] = Query(None, alias="accountId"),
+    wallet_pool_id: Optional[int] = Query(None, alias="walletPoolId"),
+    db: Session = Depends(get_db),
+) -> list[XboxSaleRecordOut]:
+    records = list_sale_records(db, account_id=account_id, wallet_pool_id=wallet_pool_id)
+    out: list[XboxSaleRecordOut] = []
+    for record in records:
+        order_ids = [
+            o.id
+            for o in db.scalars(
+                select(XboxOrder).where(XboxOrder.sale_record_id == record.id)
+            )
+        ]
+        out.append(serialize_sale_record(record, order_ids))
+    return out
+
+
+@router.patch(
+    "/sale-records/{record_id}",
+    response_model=XboxSaleRecordOut,
+    response_model_by_alias=True,
+)
+def patch_sale_record_endpoint(
+    record_id: int,
+    request: XboxSaleRecordUpdate,
+    db: Session = Depends(get_db),
+) -> XboxSaleRecordOut:
+    """改销售记录字段（自动联动钱包余额, CEO Q2A + Q3A）。"""
+    record = db.get(XboxSaleRecord, record_id)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="销售记录不存在")
+    try:
+        update_sale_record_fields(
+            db,
+            record,
+            sale_date=request.sale_date,
+            product_name=request.product_name,
+            operator_name=request.operator_name,
+            sale_price=request.sale_price,
+            sale_currency=request.sale_currency,
+            wallet_method_id=request.wallet_method_id,
+            wallet_item_id=request.wallet_item_id,
+            wallet_item_label=request.wallet_item_label,
+            wallet_pool_id=request.wallet_pool_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(record)
+    order_ids = [
+        o.id
+        for o in db.scalars(select(XboxOrder).where(XboxOrder.sale_record_id == record.id))
+    ]
+    return serialize_sale_record(record, order_ids)
+
+
+# ----- Wallet settings endpoints -----
+@router.put(
+    "/wallet-settings",
+    response_model=dict,
+)
+def upsert_wallet_settings_endpoint(
+    payload: list[dict] = Body(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    """财务系统推送钱包设置（IF-02）。
+
+    Body 是 method 列表。每条 method 含 code/label/items[]。
+    item 含 code/label/walletPoolId/isActive。
+    """
+    try:
+        result = upsert_wallet_settings(db, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    return result
+
+
+@router.get(
+    "/wallet-settings",
+    response_model=list[XboxWalletMethodOut],
+    response_model_by_alias=True,
+)
+def list_wallet_settings_endpoint(
+    only_active: bool = Query(True, alias="onlyActive"),
+    db: Session = Depends(get_db),
+) -> list[XboxWalletMethodOut]:
+    methods = list_wallet_methods(db, only_active=only_active)
+    return [serialize_method(m) for m in methods]

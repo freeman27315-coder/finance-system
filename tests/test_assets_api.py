@@ -39,8 +39,8 @@ def test_default_asset_wallets_are_listed(client):
     assert response.status_code == 200, response.text
     wallets = response.json()
     names = {wallet["name"] for wallet in wallets}
-    assert {"RMB钱包", "USDT钱包"}.issubset(names)
-    assert {wallet["currency"] for wallet in wallets} == {"CNY", "USDT"}
+    assert {"RMB钱包", "USDT钱包", "USD钱包"}.issubset(names)
+    assert {wallet["currency"] for wallet in wallets} == {"CNY", "USDT", "USD"}
     assert all(wallet["parent_id"] is None for wallet in wallets)
     assert all(wallet["is_group"] for wallet in wallets)
 

@@ -16,6 +16,7 @@ from src.utils.time import china_now
 class WalletType(str, Enum):
     ASSET_RMB = "ASSET_RMB"
     ASSET_USDT = "ASSET_USDT"
+    ASSET_USD = "ASSET_USD"  # PR #110 (P0.2): XBOX USD 销售收入资金池
     VENDOR = "VENDOR"
     XBOX = "XBOX"
     TAOBAO = "TAOBAO"
