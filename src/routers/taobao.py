@@ -681,7 +681,7 @@ def list_wallet_daily_summary_for_shop(
         stmt = stmt.where(business_date >= from_)
     if to:
         stmt = stmt.where(business_date <= to)
-    stmt = stmt.group_by(business_date).order_by(text("d DESC"))
+    stmt = stmt.group_by(business_date).order_by(text("d ASC"))
 
     rows = db.execute(stmt).all()
 

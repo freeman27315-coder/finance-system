@@ -238,7 +238,7 @@ function DailySummaryModal({
           <div className="mt-1 text-xs text-muted-foreground">
             当前余额 <span className="tabular-nums">{formatMoney(wallet.balanceMinor, "CNY")}</span>
             <span className="mx-2">·</span>
-            按日期降序展示每日入账/出账/净额/笔数
+            按日期升序展示每日入账/出账/净额/笔数（旧 → 新）
           </div>
         </CardHeader>
         <CardContent className="flex-1 overflow-y-auto">
