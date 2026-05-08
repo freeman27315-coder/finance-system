@@ -919,3 +919,178 @@ def test_daily_summary_store_alipay_wallet_allowed(client):
     assert rows[0]["date"] == "2026-05-06"
     assert Decimal(rows[0]["inAmount"]) == Decimal("99")
     assert rows[0]["count"] == 1
+
+
+def _seed_tx_with_order(
+    wallet_id: int,
+    *,
+    amount: Decimal,
+    tx_created_at: datetime,
+    order_status: str,
+    confirmed_at: datetime | None = None,
+    shipped_at: datetime | None = None,
+    shop_id: int = 1,
+    order_number: str | None = None,
+) -> tuple[int, int]:
+    """注入一笔 IN 流水 + 关联 TaobaoOrder（模拟 Excel 导入产生的）。
+
+    返回 ``(tx_id, order_id)``。用于验证 daily-summary 按业务日期聚合的逻辑。
+    """
+    db = database.SessionLocal()
+    try:
+        tx = WalletTransaction(
+            wallet_id=wallet_id,
+            amount=amount,
+            direction="in",
+            remark="测试订单流水",
+            created_at=tx_created_at,
+        )
+        db.add(tx)
+        db.flush()
+
+        wallet = db.get(Wallet, wallet_id)
+        wallet.balance = Decimal(wallet.balance) + amount
+
+        order = TaobaoOrder(
+            shop_id=shop_id,
+            order_number=order_number or f"BIZ_DATE_{tx.id}",
+            payment_method=TaobaoOrderPaymentMethod.ALIPAY.value,
+            amount=amount,
+            gross_amount=amount,
+            status=order_status,
+            bookkeeping_wallet_id=wallet_id,
+            bookkeeping_tx_id=tx.id,
+            confirmed_at=confirmed_at,
+            shipped_at=shipped_at,
+        )
+        db.add(order)
+        db.commit()
+        return tx.id, order.id
+    finally:
+        db.close()
+
+
+def test_daily_summary_business_date_received_uses_confirmed_at(client):
+    """IN 流水关联 received 订单 → 按 order.confirmed_at 聚合,不是 tx.created_at。
+
+    场景：5/8 才导入 5/6 确认收货的订单。日汇总应显示 5/6 +¥X,不是 5/8。
+    """
+    shop = _shop_by_name("丙火网络")
+    wid = shop.store_alipay_wallet_id
+
+    # 模拟：CEO 5/8 14:00 才导入,但订单是 5/6 10:00 确认收货
+    _seed_tx_with_order(
+        wid,
+        amount=Decimal("99.40"),
+        tx_created_at=datetime(2026, 5, 8, 14, 0, 0),    # 导入时刻
+        order_status=TaobaoOrderStatus.RECEIVED.value,
+        confirmed_at=datetime(2026, 5, 6, 10, 0, 0),     # 业务时刻
+        shop_id=shop.id,
+        order_number="ALIPAY_RECV_56",
+    )
+
+    response = client.get(f"/taobao/shops/{shop.id}/wallets/{wid}/daily-summary")
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    # 关键断言：date 应该是 5/6（confirmed_at 那天）,不是 5/8（导入那天）
+    assert rows[0]["date"] == "2026-05-06"
+    assert Decimal(rows[0]["inAmount"]) == Decimal("99.40")
+
+
+def test_daily_summary_business_date_shipped_uses_shipped_at(client):
+    """IN 流水关联 shipped_unconfirmed 订单 → 按 order.shipped_at 聚合。"""
+    shop = _shop_by_name("丙火网络")
+    wid = shop.unconfirmed_alipay_wallet_id
+
+    # 5/8 导入,但订单 5/4 发货（在途）
+    _seed_tx_with_order(
+        wid,
+        amount=Decimal("100"),
+        tx_created_at=datetime(2026, 5, 8, 14, 0, 0),
+        order_status=TaobaoOrderStatus.SHIPPED_UNCONFIRMED.value,
+        shipped_at=datetime(2026, 5, 4, 9, 0, 0),
+        shop_id=shop.id,
+        order_number="ALIPAY_SHIP_54",
+    )
+
+    response = client.get(f"/taobao/shops/{shop.id}/wallets/{wid}/daily-summary")
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    assert rows[0]["date"] == "2026-05-04"  # shipped_at 的那天
+    assert Decimal(rows[0]["inAmount"]) == Decimal("100")
+
+
+def test_daily_summary_out_uses_created_at_even_with_order(client):
+    """OUT 流水即使关联订单也用 created_at（reconcile 撤旧的语义是操作日）。"""
+    shop = _shop_by_name("丙火网络")
+    wid = shop.unconfirmed_alipay_wallet_id
+
+    # 直接 insert 一笔 OUT 流水 + 关联订单
+    db = database.SessionLocal()
+    try:
+        tx = WalletTransaction(
+            wallet_id=wid,
+            amount=Decimal("50"),
+            direction="out",
+            remark="reconcile 撤旧",
+            created_at=datetime(2026, 5, 8, 16, 0, 0),  # 操作日
+        )
+        db.add(tx)
+        db.flush()
+        wallet = db.get(Wallet, wid)
+        wallet.balance = Decimal(wallet.balance) - Decimal("50")
+
+        order = TaobaoOrder(
+            shop_id=shop.id,
+            order_number="OUT_TX_TEST",
+            payment_method=TaobaoOrderPaymentMethod.ALIPAY.value,
+            amount=Decimal("50"),
+            gross_amount=Decimal("50"),
+            status=TaobaoOrderStatus.RECEIVED.value,
+            bookkeeping_wallet_id=wid,
+            bookkeeping_tx_id=tx.id,
+            confirmed_at=datetime(2026, 5, 6, 10, 0, 0),
+        )
+        db.add(order)
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get(f"/taobao/shops/{shop.id}/wallets/{wid}/daily-summary")
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    # 关键：OUT 流水按 created_at（5/8 操作日）,不是 confirmed_at（5/6）
+    assert rows[0]["date"] == "2026-05-08"
+    assert Decimal(rows[0]["outAmount"]) == Decimal("50")
+
+
+def test_daily_summary_mix_business_and_operation_dates(client):
+    """混合：order IN 用业务日 + 手动 OUT 用操作日,各日聚合到正确日期。
+
+    场景验证 CEO 真实使用：聚合可提现钱包
+    - 5/13 release 流水（IN, 无 order） → 5/13 +¥
+    - 5/13 提现 OUT（无 order） → 5/13 -¥
+    - 应该看到 5/13 一行,IN/OUT 都有
+    """
+    shop = _shop_by_name("丙火网络")
+    wid = shop.aggregator_available_wallet_id
+
+    # 5/13 release 进账（无 order 关联）
+    _seed_tx_with_date(wid, amount=Decimal("198.80"), direction="in",
+                       created_at=datetime(2026, 5, 13, 0, 0, 0))
+    # 5/13 提现出账
+    _seed_tx_with_date(wid, amount=Decimal("198.80"), direction="out",
+                       created_at=datetime(2026, 5, 13, 12, 30, 0))
+
+    response = client.get(f"/taobao/shops/{shop.id}/wallets/{wid}/daily-summary")
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    assert rows[0]["date"] == "2026-05-13"
+    assert Decimal(rows[0]["inAmount"]) == Decimal("198.80")
+    assert Decimal(rows[0]["outAmount"]) == Decimal("198.80")
+    assert Decimal(rows[0]["netAmount"]) == Decimal("0")
+    assert rows[0]["count"] == 2
