@@ -102,6 +102,7 @@ def update_account_fields(
     account: XboxAccount,
     *,
     name: Optional[str] = None,
+    account_no: Optional[str] = None,
     login_email: Optional[str] = None,
     exchange_rate: Optional[Decimal] = None,
     rmb_cost: Optional[Decimal] = None,
@@ -109,8 +110,28 @@ def update_account_fields(
     remark: Optional[str] = None,
     operator: str = "manual",
 ) -> XboxAccount:
-    """更新非敏感字段（不能在这里改 password / status,有专门接口）。"""
+    """更新非敏感字段（不能在这里改 password / status,有专门接口）。
+
+    ``account_no`` 也可在此修改,会校验唯一性 + 同步更新 ``name`` 字段
+    （前端把 account_no 当主标识,name 是兼容字段,保持二者一致）。
+    """
     changes: list[str] = []
+    if account_no is not None and account_no != account.account_no:
+        # 唯一性校验
+        if account_no:  # 非空才查重(空字符串等同于清除)
+            existing = session.scalar(
+                select(XboxAccount).where(
+                    XboxAccount.account_no == account_no,
+                    XboxAccount.id != account.id,
+                )
+            )
+            if existing is not None:
+                raise ValueError(f"账号编号 {account_no} 已被其他账号占用")
+        changes.append(f"account_no: {account.account_no} → {account_no}")
+        account.account_no = account_no or None
+        # 同步 name 字段(前端用 account_no 作主标识,保持二者一致)
+        if account_no:
+            account.name = account_no
     if name is not None and name != account.name:
         changes.append(f"name: {account.name} → {name}")
         account.name = name

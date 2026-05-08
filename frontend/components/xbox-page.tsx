@@ -277,6 +277,7 @@ function CreateAccountModal({
 // PR P0.1 编辑账号普通字段
 function EditAccountModal({ account, onClose }: { account: XboxAccount; onClose: () => void }) {
   const queryClient = useQueryClient();
+  const [accountNo, setAccountNo] = useState(account.accountNo ?? "");
   const [loginEmail, setLoginEmail] = useState(account.loginEmail ?? "");
   const [exchangeRate, setExchangeRate] = useState(
     account.exchangeRate != null ? String(account.exchangeRate) : ""
@@ -285,13 +286,16 @@ function EditAccountModal({ account, onClose }: { account: XboxAccount; onClose:
   const [error, setError] = useState<string | null>(null);
 
   const mutation = useMutation({
-    mutationFn: async () =>
-      // 不传 name 字段（后端不变更）。账号编号是不可变主标识,目前也不在此处编辑
-      updateXboxAccount(account.id, {
+    mutationFn: async () => {
+      const trimmedAccountNo = accountNo.trim();
+      if (!trimmedAccountNo) throw new Error("账号编号不能为空");
+      return updateXboxAccount(account.id, {
+        accountNo: trimmedAccountNo,
         loginEmail: loginEmail.trim(),
         exchangeRate: exchangeRate.trim() === "" ? "" : exchangeRate.trim(),
         remark: remark
-      }),
+      });
+    },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["xbox-accounts"] });
       await queryClient.invalidateQueries({ queryKey: ["xbox-summary"] });
@@ -310,6 +314,17 @@ function EditAccountModal({ account, onClose }: { account: XboxAccount; onClose:
           <CardTitle>编辑账号 · {heading}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">
+              账号编号 <span className="text-red-600">*</span>
+            </div>
+            <input
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={accountNo}
+              onChange={(event) => setAccountNo(event.target.value)}
+              placeholder="如 BH-US-001"
+            />
+          </div>
           <div className="space-y-1">
             <div className="text-sm text-muted-foreground">登录邮箱</div>
             <input
@@ -838,7 +853,7 @@ function AccountsTable({
       <TableBody>
         {accounts.map((account) => (
           <TableRow key={account.id}>
-            <TableCell className="font-medium">
+            <TableCell className="text-xs tabular-nums text-muted-foreground">
               {account.accountNo ?? account.name}
             </TableCell>
             <TableCell className="text-xs text-muted-foreground">

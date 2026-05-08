@@ -63,11 +63,15 @@ class XboxAccountCreate(BaseModel):
 
 
 class XboxAccountUpdate(BaseModel):
-    """编辑账号普通字段（不含 password / status,有专门接口）。"""
+    """编辑账号普通字段（不含 password / status,有专门接口）。
+
+    ``account_no`` 也可在此修改（PR 后续）,会校验唯一性 + 同步 name。
+    """
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
 
     name: Optional[str] = Field(None, min_length=1, max_length=120)
+    account_no: Optional[str] = Field(None, max_length=64)
     login_email: Optional[str] = Field(None, max_length=255)
     exchange_rate: Optional[Decimal] = None
     rmb_cost: Optional[Decimal] = None
@@ -288,16 +292,20 @@ def patch_account(
 ) -> XboxAccountOut:
     """更新账号普通字段（不含密码 / 状态）。"""
     account = get_account_or_404(db, account_id)
-    update_account_fields(
-        db,
-        account,
-        name=request.name,
-        login_email=request.login_email,
-        exchange_rate=request.exchange_rate,
-        rmb_cost=request.rmb_cost,
-        local_balance=request.local_balance,
-        remark=request.remark,
-    )
+    try:
+        update_account_fields(
+            db,
+            account,
+            name=request.name,
+            account_no=request.account_no,
+            login_email=request.login_email,
+            exchange_rate=request.exchange_rate,
+            rmb_cost=request.rmb_cost,
+            local_balance=request.local_balance,
+            remark=request.remark,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     db.commit()
     db.refresh(account)
     return serialize_account(account)
