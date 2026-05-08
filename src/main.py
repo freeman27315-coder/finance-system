@@ -1,11 +1,37 @@
 """Finance system API application."""
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 
-from src import database
+
+def _load_dotenv_basic() -> None:
+    """简单读 .env 到 os.environ（不依赖 python-dotenv,只支持 KEY=VALUE 格式）。
+
+    项目根目录的 .env 已 .gitignore。XBOX_ACCOUNT_PASSWORD_KEY 等敏感配置走这。
+    """
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        key = key.strip()
+        value = value.strip()
+        # 不覆盖已存在的环境变量(允许 export 优先)
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_dotenv_basic()
+
+
+from src import database  # noqa: E402  必须在 _load_dotenv_basic 之后
 from src.routers.assets import router as assets_router
 from src.routers.vendors import router as vendors_router
 from src.routers.xbox import router as xbox_router
