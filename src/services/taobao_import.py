@@ -391,31 +391,66 @@ def _auto_release_aggregator(
 
     返回 ``(累计金额, 笔数)``。无可解冻流水时返回 ``(Decimal("0"), 0)``,不写流水。
 
-    业务规则：
+    业务规则（CEO 2026-05-08 确认,见 ``.claude/skills/taobao-cashflow-rules``）：
     - 用 ``matured_active_txs`` 找当前应解冻的 IN 流水（``mature_at < 明天 0:00``）
-    - 累计金额从 frozen debit、credit 到 available
-    - **完成后清掉这批 IN 流水的 mature_at**，保证幂等：
-      下次再导入时同一批不会被重复释放（避免 frozen 余额负向漂移）。
+    - **按 mature_at 日期分组**：每天的订单单独一对 debit/credit,
+      让聚合可提现日汇总按"订单原本到期日"散开（5/12 ¥X、5/13 ¥Y...）
+      而不是挤在 release 操作日一行
+    - credit 时填 ``business_date = mature_at 那天``,daily-summary 据此聚合
+    - 完成后清掉 frozen IN 的 mature_at,保证幂等
     """
     active_txs = matured_active_txs(session, shop.aggregator_frozen_wallet_id)
     if not active_txs:
         return Decimal("0"), 0
 
-    matured_amount = sum((Decimal(tx.amount) for tx in active_txs), Decimal("0"))
-    matured_count = len(active_txs)
-    if matured_amount <= 0:
+    # 按 mature_at 当天 0:00 分组（让同一天解冻的订单合并成一对 debit/credit）
+    groups: dict[datetime, list[WalletTransaction]] = {}
+    for tx in active_txs:
+        if tx.mature_at is None:
+            continue
+        # 取 naive China 当天 0:00 作为组 key（mature_at 已是 naive china_now 写入）
+        day_start = tx.mature_at.replace(hour=0, minute=0, second=0, microsecond=0)
+        # 防御 tzinfo: 不应该有,但若有就剥掉
+        if day_start.tzinfo is not None:
+            day_start = day_start.replace(tzinfo=None)
+        groups.setdefault(day_start, []).append(tx)
+
+    if not groups:
         return Decimal("0"), 0
 
-    remark = f"导入自动解冻 {matured_count} 笔到期"
-    debit(session, shop.aggregator_frozen_wallet_id, matured_amount, remark=remark)
-    credit(session, shop.aggregator_available_wallet_id, matured_amount, remark=remark)
+    total_amount = Decimal("0")
+    total_count = 0
 
-    # 幂等保护：已释放的 IN 流水清掉 mature_at,后续查询不再命中
-    for tx in active_txs:
-        tx.mature_at = None
+    # 按日期升序处理,生成稳定的流水顺序
+    for day_start in sorted(groups.keys()):
+        txs_in_group = groups[day_start]
+        group_amount = sum((Decimal(t.amount) for t in txs_in_group), Decimal("0"))
+        group_count = len(txs_in_group)
+        if group_amount <= 0:
+            continue
+
+        date_label = day_start.date().isoformat()
+        remark = f"导入自动解冻 {group_count} 笔（{date_label} 到期批次）"
+
+        debit(session, shop.aggregator_frozen_wallet_id, group_amount, remark=remark)
+        # available IN 写 business_date = 这批的 mature 那天,用于日汇总聚合
+        credit(
+            session,
+            shop.aggregator_available_wallet_id,
+            group_amount,
+            remark=remark,
+            business_date=day_start.date(),
+        )
+
+        # 幂等保护：清这批 frozen IN 的 mature_at
+        for tx in txs_in_group:
+            tx.mature_at = None
+
+        total_amount += group_amount
+        total_count += group_count
+
     session.flush()
-
-    return matured_amount, matured_count
+    return total_amount, total_count
 
 
 def import_qianniu_workbook(

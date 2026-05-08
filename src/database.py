@@ -44,6 +44,7 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     _ensure_wallet_is_group_column()
+    _ensure_wallet_transaction_business_date_column()
 
 
 def _ensure_wallet_is_group_column() -> None:
@@ -61,6 +62,27 @@ def _ensure_wallet_is_group_column() -> None:
 
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE wallets ADD COLUMN is_group BOOLEAN NOT NULL DEFAULT 0"))
+
+
+def _ensure_wallet_transaction_business_date_column() -> None:
+    """Add WalletTransaction.business_date for existing SQLite dev databases.
+
+    business_date 用于聚合可提现 IN 流水标记业务日期(=mature_at 那天),
+    daily-summary 端点据此聚合。见 .claude/skills/taobao-cashflow-rules。
+    """
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+
+    inspector = inspect(engine)
+    if "wallet_transactions" not in inspector.get_table_names():
+        return
+
+    column_names = {column["name"] for column in inspector.get_columns("wallet_transactions")}
+    if "business_date" in column_names:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE wallet_transactions ADD COLUMN business_date DATE"))
 
 
 def get_db() -> Iterator[Session]:

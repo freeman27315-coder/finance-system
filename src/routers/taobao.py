@@ -617,11 +617,20 @@ def list_wallet_daily_summary_for_shop(
             detail="该钱包不属于本店铺",
         )
 
-    # 业务日期 CASE 表达式
-    # IN 流水 + order received → confirmed_at
-    # IN 流水 + order shipped_unconfirmed → shipped_at
-    # 其他 → tx.created_at
+    # 业务日期 CASE 表达式（优先级从高到低）
+    # 1. IN 流水 + business_date 不为空 → 用 business_date
+    #    （聚合释放写入 available IN 时填 mature_at 那天）
+    # 2. IN 流水 + order received → confirmed_at
+    # 3. IN 流水 + order shipped_unconfirmed → shipped_at
+    # 4. 其他（OUT、reconcile、手动操作、历史无 business_date 的 release）→ tx.created_at
     business_date = case(
+        (
+            and_(
+                WalletTransaction.direction == "in",
+                WalletTransaction.business_date.is_not(None),
+            ),
+            WalletTransaction.business_date,
+        ),
         (
             and_(
                 WalletTransaction.direction == "in",

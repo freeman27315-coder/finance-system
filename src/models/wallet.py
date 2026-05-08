@@ -1,12 +1,12 @@
 """Wallet models and balance movement helpers."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, select
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Text, select
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 from src.database import Base
@@ -84,6 +84,14 @@ class WalletTransaction(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    # 业务日期标识（仅 IN 流水使用,标记"这笔钱业务上属于哪一天"）：
+    # - 聚合释放(_auto_release_aggregator) 写入的 available IN tx：填 mature_at 那天
+    # - 其他流水：留 NULL,daily-summary 端点回退用 created_at 或 order 业务日期
+    # 见 .claude/skills/taobao-cashflow-rules
+    business_date: Mapped[Optional[date]] = mapped_column(
+        Date,
+        nullable=True,
+    )
 
     wallet: Mapped[Wallet] = relationship(back_populates="transactions")
 
@@ -140,11 +148,17 @@ def credit(
     amount: Decimal | int | float | str,
     remark: str | None = None,
     mature_at: Optional[datetime] = None,
+    business_date: Optional[date] = None,
 ) -> WalletTransaction:
     """Increase a wallet balance and create an inbound transaction record.
 
     可选 ``mature_at`` 表示该笔入账的"成熟时间"（例如聚合支付冻结期满
     可提现的时间点），仅写入 ``WalletTransaction.mature_at``，不影响余额逻辑。
+
+    可选 ``business_date`` 标记该笔入账的"业务日期"（用于按业务日期聚合）：
+    - 聚合释放写入 available IN：业务日期 = mature_at 那天
+    - 其他场景留 None，daily-summary 端点会自动回退用 order 业务日期或 created_at
+    见 ``.claude/skills/taobao-cashflow-rules``。
     """
     value = _to_decimal(amount)
     wallet = get_wallet(session, wallet_id)
@@ -156,6 +170,7 @@ def credit(
         direction=TransactionDirection.IN,
         remark=remark,
         mature_at=mature_at,
+        business_date=business_date,
     )
     session.add(transaction)
     session.flush()

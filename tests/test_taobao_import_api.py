@@ -17,7 +17,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from io import BytesIO
 
@@ -1024,6 +1024,85 @@ def test_auto_release_idempotent_second_import_no_double_release(client):
     # 余额不变
     assert _wallet_balance(shop.aggregator_frozen_wallet_id) == Decimal("0.000000")
     assert _wallet_balance(shop.aggregator_available_wallet_id) == Decimal("88.000000")
+
+
+def test_auto_release_groups_by_mature_date_writes_business_date(client):
+    """聚合释放按 mature_at 日期分组,available IN 写 business_date。
+
+    场景：3 笔到期流水,2 笔 mature_at 在 5/7,1 笔在 5/8。
+    释放后 available 钱包应有 2 笔 IN（不是合并成 1 笔）,各自 business_date 是分组日。
+    """
+    from src.models.wallet import WalletTransaction
+    from sqlalchemy import select
+
+    shop = _shop_by_name("丙火网络")
+    # 用过去时间的 mature_at（已成熟）
+    base = datetime(2026, 5, 7, 0, 0, 0)  # 5/7 这天 0 点（已过的某天）
+    _seed_aggregator_frozen_tx(shop, Decimal("100"), base.replace(hour=10), order_number="GR_507_1")
+    _seed_aggregator_frozen_tx(shop, Decimal("50"), base.replace(hour=15), order_number="GR_507_2")
+    _seed_aggregator_frozen_tx(
+        shop, Decimal("80"),
+        datetime(2026, 5, 8, 14, 0, 0),  # 5/8 这天的另一笔
+        order_number="GR_508_1",
+    )
+
+    response = _post_import(client, shop.id, _build_xlsx([]))
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["autoReleasedCount"] == 3
+    assert Decimal(payload["autoReleasedAmount"]) == Decimal("230")
+
+    # 验证：available 钱包应有 2 笔 IN（按 5/7、5/8 分组）,不是合并的 1 笔
+    db = database.SessionLocal()
+    try:
+        avail_in_txs = list(db.scalars(
+            select(WalletTransaction)
+            .where(
+                WalletTransaction.wallet_id == shop.aggregator_available_wallet_id,
+                WalletTransaction.direction == "in",
+            )
+            .order_by(WalletTransaction.id)
+        ))
+    finally:
+        db.close()
+
+    assert len(avail_in_txs) == 2
+    # 第一笔 5/7（100 + 50 = 150）
+    assert Decimal(avail_in_txs[0].amount) == Decimal("150")
+    assert avail_in_txs[0].business_date == date(2026, 5, 7)
+    # 第二笔 5/8（80）
+    assert Decimal(avail_in_txs[1].amount) == Decimal("80")
+    assert avail_in_txs[1].business_date == date(2026, 5, 8)
+
+
+def test_daily_summary_available_uses_business_date(client):
+    """聚合可提现日汇总按 business_date(=mature_at 那天) 散开,不再挤在 release 操作日。"""
+    shop = _shop_by_name("丙火网络")
+    base_507 = datetime(2026, 5, 7, 0, 0, 0)
+    _seed_aggregator_frozen_tx(shop, Decimal("100"), base_507.replace(hour=10), order_number="DS_507_1")
+    _seed_aggregator_frozen_tx(shop, Decimal("50"), base_507.replace(hour=18), order_number="DS_507_2")
+    _seed_aggregator_frozen_tx(
+        shop, Decimal("80"),
+        datetime(2026, 5, 8, 12, 0, 0),
+        order_number="DS_508_1",
+    )
+
+    # 触发自动 release（导入空 Excel）
+    response = _post_import(client, shop.id, _build_xlsx([]))
+    assert response.status_code == 200
+
+    # 查 available 钱包的日汇总
+    available_id = shop.aggregator_available_wallet_id
+    response = client.get(f"/taobao/shops/{shop.id}/wallets/{available_id}/daily-summary")
+    assert response.status_code == 200
+    rows = response.json()
+
+    # 应该看到 5/7 和 5/8 两行（按业务日期 = mature_at 那天）
+    by_date = {r["date"]: r for r in rows}
+    assert "2026-05-07" in by_date
+    assert "2026-05-08" in by_date
+    assert Decimal(by_date["2026-05-07"]["inAmount"]) == Decimal("150")  # 100+50
+    assert Decimal(by_date["2026-05-08"]["inAmount"]) == Decimal("80")
 
 
 # ---------------------------------------------------------------------------
