@@ -4,14 +4,19 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDownLeft,
   ArrowUpRight,
+  CheckCircle2,
   Gamepad2,
   History,
   KeyRound,
+  Layers,
   ListOrdered,
   Pencil,
   Plus,
+  Receipt,
   RefreshCcw,
-  ShieldAlert
+  Settings2,
+  ShieldAlert,
+  Users
 } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -23,10 +28,18 @@ import {
   changeXboxAccountStatus,
   consumeXbox,
   createXboxAccount,
+  createXboxOrder,
+  getAssetWallets,
   getXboxAccountAuditLogs,
   getXboxAccounts,
+  getXboxOrders,
+  getXboxSaleRecords,
   getXboxSummary,
   getXboxTransactions,
+  getXboxWalletSettings,
+  patchXboxOrder,
+  patchXboxSaleRecord,
+  pushXboxWalletSettings,
   rechargeXbox,
   updateXboxAccount
 } from "@/lib/api";
@@ -34,10 +47,15 @@ import { formatMoney } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import type {
   Currency,
+  WalletBalance,
   XboxAccount,
   XboxAccountAuditLog,
   XboxAccountStatus,
-  XboxCountry
+  XboxCountry,
+  XboxOrder,
+  XboxSaleCurrency,
+  XboxSaleRecord,
+  XboxWalletMethod
 } from "@/types";
 
 const COUNTRY_META: Record<XboxCountry, { label: string; currency: Currency; accentBorder: string; accentText: string }> = {
@@ -919,7 +937,1054 @@ function AccountsTable({
   );
 }
 
-export function XboxPage() {
+
+// ===================================================================
+// PR P0.2 - 订单 Tab
+// ===================================================================
+
+const SALE_CURRENCY_OPTIONS: XboxSaleCurrency[] = ["CNY", "USD", "USDT", "TWD"];
+
+function CreateOrderModal({
+  accounts,
+  onClose
+}: {
+  accounts: XboxAccount[];
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
+  const [orderNo, setOrderNo] = useState("");
+  const [amountLocal, setAmountLocal] = useState("");
+  const [currencyLocal, setCurrencyLocal] = useState<"USD" | "GBP">("USD");
+  const [orderAtDate, setOrderAtDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [orderAtTime, setOrderAtTime] = useState("12:00");
+  const [exchangeRate, setExchangeRate] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!accountId) throw new Error("请选账号");
+      if (!orderNo.trim()) throw new Error("订单号不能为空");
+      if (!amountLocal.trim()) throw new Error("本币金额不能为空");
+      return createXboxOrder({
+        accountId,
+        orderNo: orderNo.trim(),
+        amountLocal: amountLocal.trim(),
+        currencyLocal,
+        orderAt: `${orderAtDate}T${orderAtTime}:00`,
+        exchangeRate: exchangeRate.trim() === "" ? undefined : exchangeRate.trim()
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["xbox-orders"] });
+      onClose();
+    },
+    onError: (err) => setError(err instanceof Error ? err.message : "创建失败")
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto">
+        <CardHeader>
+          <CardTitle>新建 XBOX 订单</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">所属账号 *</div>
+            <select
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={accountId}
+              onChange={(event) => setAccountId(event.target.value)}
+            >
+              {accounts.map((acc) => (
+                <option key={acc.id} value={acc.id}>
+                  {acc.accountNo ?? acc.name} · {acc.country}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">订单号 *</div>
+            <input
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={orderNo}
+              onChange={(event) => setOrderNo(event.target.value)}
+              placeholder="如 MS-20260508-001"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <div className="text-sm text-muted-foreground">本币金额 *</div>
+              <input
+                className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+                value={amountLocal}
+                onChange={(event) => setAmountLocal(event.target.value)}
+                placeholder="100.00"
+                inputMode="decimal"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-sm text-muted-foreground">币种 *</div>
+              <div className="grid grid-cols-2 rounded-md border border-border p-1">
+                {(["USD", "GBP"] as const).map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    className={cn(
+                      "flex h-8 items-center justify-center rounded text-sm font-medium text-muted-foreground",
+                      currencyLocal === c && "bg-muted text-foreground"
+                    )}
+                    onClick={() => setCurrencyLocal(c)}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <div className="text-sm text-muted-foreground">订单日期 *</div>
+              <input
+                type="date"
+                className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+                value={orderAtDate}
+                onChange={(event) => setOrderAtDate(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-sm text-muted-foreground">时间</div>
+              <input
+                type="time"
+                className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+                value={orderAtTime}
+                onChange={(event) => setOrderAtTime(event.target.value)}
+              />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">汇率（选填,默认用账号汇率）</div>
+            <input
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={exchangeRate}
+              onChange={(event) => setExchangeRate(event.target.value)}
+              placeholder="如 7.20"
+              inputMode="decimal"
+            />
+          </div>
+          <div className="rounded-md bg-muted/40 p-2 text-xs text-muted-foreground">
+            RMB 成本 = 本币金额 × 汇率,创建后可在订单列表点「补齐」填业务字段
+          </div>
+          {error ? (
+            <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
+              {error}
+            </div>
+          ) : null}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>
+              取消
+            </Button>
+            <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+              {mutation.isPending ? "创建中..." : "创建订单"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function CompleteOrderModal({
+  order,
+  accounts,
+  walletMethods,
+  onClose
+}: {
+  order: XboxOrder;
+  accounts: XboxAccount[];
+  walletMethods: XboxWalletMethod[];
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [saleDate, setSaleDate] = useState(
+    order.saleDate ?? new Date().toISOString().slice(0, 10)
+  );
+  const [productName, setProductName] = useState(order.productName ?? "");
+  const [operatorName, setOperatorName] = useState(order.operatorName ?? "");
+  const [salePrice, setSalePrice] = useState("");
+  const [saleCurrency, setSaleCurrency] = useState<XboxSaleCurrency>(
+    order.saleCurrency ?? "CNY"
+  );
+  const [walletMethodId, setWalletMethodId] = useState(order.walletMethodId ?? "");
+  const [walletItemId, setWalletItemId] = useState(order.walletItemId ?? "");
+  const [error, setError] = useState<string | null>(null);
+
+  const account = accounts.find((a) => a.id === order.accountId);
+  const selectedMethod = walletMethods.find((m) => m.id === walletMethodId);
+  const itemOptions = selectedMethod?.items ?? [];
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!productName.trim()) throw new Error("商品名不能为空");
+      if (!operatorName.trim()) throw new Error("经办人不能为空");
+      if (!salePrice.trim()) throw new Error("售价不能为空");
+      if (!walletMethodId) throw new Error("请选收款方式");
+      if (!walletItemId) throw new Error("请选备注模板");
+      return patchXboxOrder(order.id, {
+        saleDate,
+        productName: productName.trim(),
+        operatorName: operatorName.trim(),
+        salePrice: salePrice.trim(),
+        saleCurrency,
+        walletMethodId,
+        walletItemId
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["xbox-orders"] });
+      await queryClient.invalidateQueries({ queryKey: ["xbox-sale-records"] });
+      await queryClient.invalidateQueries({ queryKey: ["asset-wallets"] });
+      onClose();
+    },
+    onError: (err) => setError(err instanceof Error ? err.message : "保存失败")
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto">
+        <CardHeader>
+          <CardTitle>补齐订单 · {order.orderNo}</CardTitle>
+          <div className="mt-1 text-xs text-muted-foreground">
+            账号：{account?.accountNo ?? account?.name ?? "-"} ·
+            本币 {formatMoney(order.amountLocal, order.currencyLocal as Currency)} ·
+            RMB 成本 {formatMoney(order.rmbCost, "CNY")}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">销售日期 *</div>
+            <input
+              type="date"
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={saleDate}
+              onChange={(event) => setSaleDate(event.target.value)}
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">商品名 *</div>
+            <input
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={productName}
+              onChange={(event) => setProductName(event.target.value)}
+              placeholder="例：5350 档"
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">经办人 *</div>
+            <input
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={operatorName}
+              onChange={(event) => setOperatorName(event.target.value)}
+              placeholder="经办人姓名"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <div className="text-sm text-muted-foreground">售价 *</div>
+              <input
+                className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+                value={salePrice}
+                onChange={(event) => setSalePrice(event.target.value)}
+                placeholder="0 表示叠加档"
+                inputMode="decimal"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-sm text-muted-foreground">售价币种 *</div>
+              <select
+                className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+                value={saleCurrency}
+                onChange={(event) => setSaleCurrency(event.target.value as XboxSaleCurrency)}
+              >
+                {SALE_CURRENCY_OPTIONS.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">收款方式 *</div>
+            <select
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={walletMethodId}
+              onChange={(event) => {
+                setWalletMethodId(event.target.value);
+                setWalletItemId("");
+              }}
+            >
+              <option value="">-- 请选 --</option>
+              {walletMethods.filter((m) => m.isActive).map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">备注模板 *</div>
+            <select
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={walletItemId}
+              onChange={(event) => setWalletItemId(event.target.value)}
+              disabled={!selectedMethod}
+            >
+              <option value="">-- 请选 --</option>
+              {itemOptions.filter((it) => it.isActive).map((it) => (
+                <option key={it.id} value={it.id}>{it.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="rounded-md bg-emerald-50 border border-emerald-200 p-2 text-xs text-emerald-700">
+            填齐后保存,系统自动生成销售记录 + 售价进对应资金池
+          </div>
+          {error ? (
+            <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
+              {error}
+            </div>
+          ) : null}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>
+              取消
+            </Button>
+            <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+              {mutation.isPending ? "保存中..." : "保存并转销售"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function OrdersTab() {
+  const queryClient = useQueryClient();
+  const [showCreate, setShowCreate] = useState(false);
+  const [completeTarget, setCompleteTarget] = useState<XboxOrder | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"all" | "pending_complete" | "converted">("all");
+
+  const { data: accounts = [] } = useQuery({
+    queryKey: ["xbox-accounts"],
+    queryFn: () => getXboxAccounts()
+  });
+  const { data: orders = [], isFetching, refetch } = useQuery({
+    queryKey: ["xbox-orders", statusFilter],
+    queryFn: () =>
+      getXboxOrders(
+        statusFilter === "all" ? undefined : { status: statusFilter }
+      )
+  });
+  const { data: walletMethods = [] } = useQuery({
+    queryKey: ["xbox-wallet-settings"],
+    queryFn: () => getXboxWalletSettings(true)
+  });
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="inline-flex rounded-md border border-border p-1">
+          {(["all", "pending_complete", "converted"] as const).map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={cn(
+                "h-8 px-3 rounded text-sm font-medium text-muted-foreground transition-colors",
+                statusFilter === s && "bg-muted text-foreground"
+              )}
+              onClick={() => setStatusFilter(s)}
+            >
+              {s === "all" ? "全部" : s === "pending_complete" ? "待补齐" : "已转销售"}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+            <RefreshCcw className={cn("h-4 w-4", isFetching && "animate-spin")} />
+            刷新
+          </Button>
+          <Button size="sm" onClick={() => setShowCreate(true)}>
+            <Plus className="h-4 w-4" />
+            新建订单
+          </Button>
+        </div>
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>订单号</TableHead>
+                <TableHead>账号</TableHead>
+                <TableHead className="text-right">本币金额</TableHead>
+                <TableHead className="text-right">RMB 成本</TableHead>
+                <TableHead>订单时间</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead>商品</TableHead>
+                <TableHead className="text-right">操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {orders.map((order) => {
+                const account = accounts.find((a) => a.id === order.accountId);
+                return (
+                  <TableRow key={order.id}>
+                    <TableCell className="font-medium tabular-nums">{order.orderNo}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {account?.accountNo ?? account?.name ?? "-"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatMoney(order.amountLocal, order.currencyLocal as Currency)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-red-600">
+                      {formatMoney(order.rmbCost, "CNY")}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground tabular-nums">
+                      {formatDateTime(order.orderAt)}
+                    </TableCell>
+                    <TableCell>
+                      <Badge tone={order.status === "converted" ? "success" : "warning"}>
+                        {order.status === "converted" ? "已转销售" : "待补齐"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground truncate max-w-[160px]">
+                      {order.productName ?? "-"}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {order.status === "pending_complete" ? (
+                        <Button size="sm" variant="outline" onClick={() => setCompleteTarget(order)}>
+                          <Pencil className="h-3.5 w-3.5" />
+                          补齐
+                        </Button>
+                      ) : (
+                        <Badge tone="success">
+                          <CheckCircle2 className="h-3 w-3 mr-1" />
+                          已转销售
+                        </Badge>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {orders.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
+                    暂无订单,点击右上角「+ 新建订单」开始
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {showCreate ? (
+        <CreateOrderModal accounts={accounts} onClose={() => setShowCreate(false)} />
+      ) : null}
+      {completeTarget ? (
+        <CompleteOrderModal
+          order={completeTarget}
+          accounts={accounts}
+          walletMethods={walletMethods}
+          onClose={() => setCompleteTarget(null)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+
+// ===================================================================
+// PR P0.2 - 销售记录 Tab
+// ===================================================================
+
+function EditSaleRecordModal({
+  record,
+  walletMethods,
+  onClose
+}: {
+  record: XboxSaleRecord;
+  walletMethods: XboxWalletMethod[];
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [salePrice, setSalePrice] = useState("");  // 留空表示不改
+  const [saleCurrency, setSaleCurrency] = useState<XboxSaleCurrency>(record.saleCurrency);
+  const [walletMethodId, setWalletMethodId] = useState(record.walletMethodId);
+  const [walletItemId, setWalletItemId] = useState(record.walletItemId);
+  const [productName, setProductName] = useState(record.productName);
+  const [operatorName, setOperatorName] = useState(record.operatorName);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedMethod = walletMethods.find((m) => m.id === walletMethodId);
+  const itemOptions = selectedMethod?.items ?? [];
+  const selectedItem = itemOptions.find((it) => it.id === walletItemId);
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const payload: Record<string, string> = {
+        productName: productName.trim(),
+        operatorName: operatorName.trim()
+      };
+      if (salePrice.trim() !== "") payload.salePrice = salePrice.trim();
+      if (saleCurrency !== record.saleCurrency) payload.saleCurrency = saleCurrency;
+      if (walletMethodId !== record.walletMethodId) {
+        payload.walletMethodId = walletMethodId;
+      }
+      if (walletItemId !== record.walletItemId && selectedItem) {
+        payload.walletItemId = walletItemId;
+        payload.walletItemLabel = selectedItem.label;
+        payload.walletPoolId = selectedItem.walletPoolId;
+      }
+      return patchXboxSaleRecord(record.id, payload as Parameters<typeof patchXboxSaleRecord>[1]);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["xbox-sale-records"] });
+      await queryClient.invalidateQueries({ queryKey: ["asset-wallets"] });
+      onClose();
+    },
+    onError: (err) => setError(err instanceof Error ? err.message : "保存失败")
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto">
+        <CardHeader>
+          <CardTitle>修改销售记录 #{record.id}</CardTitle>
+          <div className="mt-1 text-xs text-muted-foreground">
+            当前售价 {formatMoney(record.salePrice, record.saleCurrency as Currency)}{" "}·{" "}
+            合并 {record.orderIds.length} 单
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">商品名</div>
+            <input
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={productName}
+              onChange={(event) => setProductName(event.target.value)}
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">经办人</div>
+            <input
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={operatorName}
+              onChange={(event) => setOperatorName(event.target.value)}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <div className="text-sm text-muted-foreground">新售价（留空不改）</div>
+              <input
+                className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+                value={salePrice}
+                onChange={(event) => setSalePrice(event.target.value)}
+                placeholder="留空 = 不变"
+                inputMode="decimal"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-sm text-muted-foreground">币种</div>
+              <select
+                className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+                value={saleCurrency}
+                onChange={(event) => setSaleCurrency(event.target.value as XboxSaleCurrency)}
+              >
+                {SALE_CURRENCY_OPTIONS.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">收款方式</div>
+            <select
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={walletMethodId}
+              onChange={(event) => {
+                setWalletMethodId(event.target.value);
+                setWalletItemId("");
+              }}
+            >
+              {walletMethods.filter((m) => m.isActive).map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">备注模板（改后钱会从旧池移到新池）</div>
+            <select
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={walletItemId}
+              onChange={(event) => setWalletItemId(event.target.value)}
+            >
+              {itemOptions.filter((it) => it.isActive).map((it) => (
+                <option key={it.id} value={it.id}>{it.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="rounded-md bg-amber-50 border border-amber-200 p-2 text-xs text-amber-700">
+            注意：改售价/资金池后,对应钱包余额自动调整
+          </div>
+          {error ? (
+            <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
+              {error}
+            </div>
+          ) : null}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>
+              取消
+            </Button>
+            <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+              {mutation.isPending ? "保存中..." : "保存"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function SaleRecordsTab() {
+  const [editTarget, setEditTarget] = useState<XboxSaleRecord | null>(null);
+
+  const { data: records = [], isFetching, refetch } = useQuery({
+    queryKey: ["xbox-sale-records"],
+    queryFn: () => getXboxSaleRecords()
+  });
+  const { data: accounts = [] } = useQuery({
+    queryKey: ["xbox-accounts"],
+    queryFn: () => getXboxAccounts()
+  });
+  const { data: walletMethods = [] } = useQuery({
+    queryKey: ["xbox-wallet-settings"],
+    queryFn: () => getXboxWalletSettings(true)
+  });
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-end">
+        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+          <RefreshCcw className={cn("h-4 w-4", isFetching && "animate-spin")} />
+          刷新
+        </Button>
+      </div>
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>日期</TableHead>
+                <TableHead>账号</TableHead>
+                <TableHead>商品</TableHead>
+                <TableHead>经办人</TableHead>
+                <TableHead className="text-right">售价</TableHead>
+                <TableHead>资金池</TableHead>
+                <TableHead className="text-right">含订单</TableHead>
+                <TableHead className="text-right">操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {records.map((record) => {
+                const account = accounts.find((a) => a.id === record.accountId);
+                return (
+                  <TableRow key={record.id}>
+                    <TableCell className="text-xs tabular-nums">{record.saleDate}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {account?.accountNo ?? account?.name ?? "-"}
+                    </TableCell>
+                    <TableCell className="truncate max-w-[200px]">{record.productName}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{record.operatorName}</TableCell>
+                    <TableCell className="text-right tabular-nums font-semibold text-emerald-600">
+                      {formatMoney(record.salePrice, record.saleCurrency as Currency)}
+                    </TableCell>
+                    <TableCell className="text-xs">{record.walletItemLabel}</TableCell>
+                    <TableCell className="text-right text-xs text-muted-foreground tabular-nums">
+                      {record.orderIds.length}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button size="sm" variant="ghost" onClick={() => setEditTarget(record)}>
+                        <Pencil className="h-3.5 w-3.5" />
+                        修改
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {records.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
+                    暂无销售记录。在订单 Tab 补齐订单后,会自动生成销售记录。
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {editTarget ? (
+        <EditSaleRecordModal
+          record={editTarget}
+          walletMethods={walletMethods}
+          onClose={() => setEditTarget(null)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+
+// ===================================================================
+// PR P0.2 - 钱包设置 Tab
+// ===================================================================
+
+function findWalletByIdRecursive(wallets: WalletBalance[], id: string): WalletBalance | null {
+  for (const w of wallets) {
+    if (w.id === id) return w;
+    if (w.children && w.children.length > 0) {
+      const found = findWalletByIdRecursive(w.children, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function flattenLeafWallets(wallets: WalletBalance[]): WalletBalance[] {
+  const out: WalletBalance[] = [];
+  const walk = (nodes: WalletBalance[]) => {
+    for (const n of nodes) {
+      if (!n.isGroup) out.push(n);
+      if (n.children && n.children.length > 0) walk(n.children);
+    }
+  };
+  walk(wallets);
+  return out;
+}
+
+type DraftItem = { id?: string; code: string; label: string; walletPoolId: string; isActive: boolean };
+type DraftMethod = { id?: string; code: string; label: string; isActive: boolean; items: DraftItem[] };
+
+function WalletSettingsEditModal({
+  initial,
+  walletPoolOptions,
+  onClose
+}: {
+  initial: XboxWalletMethod[];
+  walletPoolOptions: WalletBalance[];
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [methods, setMethods] = useState<DraftMethod[]>(() =>
+    initial.map((m) => ({
+      id: m.id,
+      code: m.code,
+      label: m.label,
+      isActive: m.isActive,
+      items: m.items.map((it) => ({
+        id: it.id,
+        code: it.code,
+        label: it.label,
+        walletPoolId: it.walletPoolId,
+        isActive: it.isActive
+      }))
+    }))
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  const addMethod = () =>
+    setMethods((prev) => [
+      ...prev,
+      { code: "", label: "", isActive: true, items: [] }
+    ]);
+  const removeMethod = (i: number) =>
+    setMethods((prev) => prev.filter((_, idx) => idx !== i));
+  const updateMethod = (i: number, field: keyof DraftMethod, value: string | boolean) =>
+    setMethods((prev) =>
+      prev.map((m, idx) => (idx === i ? { ...m, [field]: value } : m))
+    );
+  const addItem = (mIdx: number) =>
+    setMethods((prev) =>
+      prev.map((m, idx) =>
+        idx === mIdx
+          ? {
+              ...m,
+              items: [...m.items, { code: "", label: "", walletPoolId: "", isActive: true }]
+            }
+          : m
+      )
+    );
+  const removeItem = (mIdx: number, iIdx: number) =>
+    setMethods((prev) =>
+      prev.map((m, idx) =>
+        idx === mIdx ? { ...m, items: m.items.filter((_, j) => j !== iIdx) } : m
+      )
+    );
+  const updateItem = (mIdx: number, iIdx: number, field: keyof DraftItem, value: string | boolean) =>
+    setMethods((prev) =>
+      prev.map((m, idx) =>
+        idx === mIdx
+          ? {
+              ...m,
+              items: m.items.map((it, j) => (j === iIdx ? { ...it, [field]: value } : it))
+            }
+          : m
+      )
+    );
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      // 校验
+      for (const m of methods) {
+        if (!m.code.trim()) throw new Error("收款方式 code 不能为空");
+        if (!m.label.trim()) throw new Error("收款方式 label 不能为空");
+        for (const it of m.items) {
+          if (!it.code.trim()) throw new Error(`备注模板 code 不能为空(${m.label})`);
+          if (!it.label.trim()) throw new Error(`备注模板 label 不能为空(${m.label})`);
+          if (!it.walletPoolId) throw new Error(`备注模板 ${it.label} 必须选资金池`);
+        }
+      }
+      return pushXboxWalletSettings(
+        methods.map((m) => ({
+          code: m.code.trim(),
+          label: m.label.trim(),
+          items: m.items.map((it) => ({
+            code: it.code.trim(),
+            label: it.label.trim(),
+            walletPoolId: it.walletPoolId,
+            isActive: it.isActive
+          }))
+        }))
+      );
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["xbox-wallet-settings"] });
+      onClose();
+    },
+    onError: (err) => setError(err instanceof Error ? err.message : "保存失败")
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Card className="w-full max-w-3xl max-h-[90vh] flex flex-col">
+        <CardHeader>
+          <CardTitle>编辑钱包设置</CardTitle>
+          <div className="mt-1 text-xs text-muted-foreground">
+            收款方式 → 备注模板 → 资金池(具体钱包)。保存即全量同步。
+          </div>
+        </CardHeader>
+        <CardContent className="flex-1 overflow-y-auto space-y-4">
+          {methods.map((m, mIdx) => (
+            <Card key={mIdx} className="border-2">
+              <CardContent className="p-3 space-y-2">
+                <div className="grid grid-cols-3 gap-2">
+                  <input
+                    className="h-9 rounded-md border border-border bg-card px-3 text-sm outline-none"
+                    value={m.code}
+                    onChange={(e) => updateMethod(mIdx, "code", e.target.value)}
+                    placeholder="code 如 agent"
+                  />
+                  <input
+                    className="h-9 rounded-md border border-border bg-card px-3 text-sm outline-none col-span-1"
+                    value={m.label}
+                    onChange={(e) => updateMethod(mIdx, "label", e.target.value)}
+                    placeholder="label 如 代理"
+                  />
+                  <Button variant="ghost" size="sm" onClick={() => removeMethod(mIdx)} className="text-red-600">
+                    删除收款方式
+                  </Button>
+                </div>
+                <div className="ml-4 space-y-1">
+                  <div className="text-xs text-muted-foreground">备注模板</div>
+                  {m.items.map((it, iIdx) => {
+                    const pool = walletPoolOptions.find((w) => w.id === it.walletPoolId);
+                    return (
+                      <div key={iIdx} className="grid grid-cols-12 gap-1 items-center">
+                        <input
+                          className="col-span-2 h-8 rounded-md border border-border bg-card px-2 text-xs"
+                          value={it.code}
+                          onChange={(e) => updateItem(mIdx, iIdx, "code", e.target.value)}
+                          placeholder="code"
+                        />
+                        <input
+                          className="col-span-3 h-8 rounded-md border border-border bg-card px-2 text-xs"
+                          value={it.label}
+                          onChange={(e) => updateItem(mIdx, iIdx, "label", e.target.value)}
+                          placeholder="label"
+                        />
+                        <select
+                          className="col-span-5 h-8 rounded-md border border-border bg-card px-2 text-xs"
+                          value={it.walletPoolId}
+                          onChange={(e) => updateItem(mIdx, iIdx, "walletPoolId", e.target.value)}
+                        >
+                          <option value="">-- 资金池 --</option>
+                          {walletPoolOptions.map((w) => (
+                            <option key={w.id} value={w.id}>
+                              {w.name} ({w.currency})
+                            </option>
+                          ))}
+                        </select>
+                        <span className="col-span-1 text-xs text-muted-foreground truncate">
+                          {pool?.currency ?? ""}
+                        </span>
+                        <Button variant="ghost" size="sm" onClick={() => removeItem(mIdx, iIdx)} className="col-span-1 text-red-600">
+                          删
+                        </Button>
+                      </div>
+                    );
+                  })}
+                  <Button variant="outline" size="sm" onClick={() => addItem(mIdx)}>
+                    <Plus className="h-3 w-3" />
+                    加备注模板
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+          <Button variant="outline" onClick={addMethod}>
+            <Plus className="h-4 w-4" />
+            加收款方式
+          </Button>
+
+          {error ? (
+            <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
+              {error}
+            </div>
+          ) : null}
+        </CardContent>
+        <div className="border-t border-border p-3 flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>
+            取消
+          </Button>
+          <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+            {mutation.isPending ? "保存中..." : "全量同步"}
+          </Button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function WalletSettingsTab() {
+  const [showEdit, setShowEdit] = useState(false);
+
+  const { data: methods = [], isFetching, refetch } = useQuery({
+    queryKey: ["xbox-wallet-settings"],
+    queryFn: () => getXboxWalletSettings(false)
+  });
+  const { data: assets = [] } = useQuery({
+    queryKey: ["asset-wallets"],
+    queryFn: () => getAssetWallets()
+  });
+
+  const walletPoolOptions = flattenLeafWallets(assets);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="text-xs text-muted-foreground">
+          财务系统钱包设置:收款方式 → 备注模板 → 资金池(具体钱包 ID)
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+            <RefreshCcw className={cn("h-4 w-4", isFetching && "animate-spin")} />
+            刷新
+          </Button>
+          <Button size="sm" onClick={() => setShowEdit(true)}>
+            <Pencil className="h-4 w-4" />
+            编辑
+          </Button>
+        </div>
+      </div>
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>收款方式</TableHead>
+                <TableHead>备注模板</TableHead>
+                <TableHead>资金池</TableHead>
+                <TableHead>状态</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {methods.flatMap((m) =>
+                m.items.length === 0
+                  ? [
+                      <TableRow key={m.id}>
+                        <TableCell className="font-medium">{m.label}</TableCell>
+                        <TableCell colSpan={3} className="text-xs text-muted-foreground">
+                          (无备注模板)
+                        </TableCell>
+                      </TableRow>
+                    ]
+                  : m.items.map((it, idx) => {
+                      const pool = findWalletByIdRecursive(assets, it.walletPoolId);
+                      return (
+                        <TableRow key={`${m.id}-${it.id}`}>
+                          <TableCell className={cn("font-medium", idx > 0 && "text-transparent")}>
+                            {m.label}
+                          </TableCell>
+                          <TableCell>
+                            {it.label}
+                            <span className="ml-2 text-xs text-muted-foreground tabular-nums">
+                              ({it.code})
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            {pool ? `${pool.name} (${pool.currency})` : `wallet#${it.walletPoolId}`}
+                          </TableCell>
+                          <TableCell>
+                            <Badge tone={it.isActive ? "success" : "neutral"}>
+                              {it.isActive ? "启用" : "停用"}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+              )}
+              {methods.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+                    还没设钱包设置。点右上角「编辑」开始配置。
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {showEdit ? (
+        <WalletSettingsEditModal
+          initial={methods}
+          walletPoolOptions={walletPoolOptions}
+          onClose={() => setShowEdit(false)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+
+type XboxTab = "accounts" | "orders" | "sale-records" | "wallet-settings";
+
+const TAB_META: { id: XboxTab; label: string; icon: React.ReactNode }[] = [
+  { id: "accounts", label: "账号管理", icon: <Users className="h-4 w-4" /> },
+  { id: "orders", label: "订单", icon: <Receipt className="h-4 w-4" /> },
+  { id: "sale-records", label: "销售记录", icon: <Layers className="h-4 w-4" /> },
+  { id: "wallet-settings", label: "钱包设置", icon: <Settings2 className="h-4 w-4" /> }
+];
+
+function AccountsManagementTab() {
   const [country, setCountry] = useState<XboxCountry>("US");
   const [showCreate, setShowCreate] = useState(false);
   const [transactionsTarget, setTransactionsTarget] = useState<XboxAccount | null>(null);
@@ -936,34 +2001,27 @@ export function XboxPage() {
   const meta = COUNTRY_META[country];
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col justify-between gap-3 md:flex-row md:items-end">
-        <div>
-          <h2 className="text-2xl font-semibold tracking-normal">XBOX 账号</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            按国家管理 XBOX 账号，记录 RMB 成本与本地余额，支持充值/消费/查流水。
-          </p>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="inline-flex rounded-md border border-border p-1">
+          {(["US", "UK"] as XboxCountry[]).map((item) => (
+            <button
+              key={item}
+              type="button"
+              className={cn(
+                "h-9 px-4 rounded text-sm font-medium text-muted-foreground transition-colors",
+                country === item && "bg-muted text-foreground"
+              )}
+              onClick={() => setCountry(item)}
+            >
+              {COUNTRY_META[item].label}
+            </button>
+          ))}
         </div>
-        <Button variant="outline" onClick={() => refetch()} disabled={isFetching}>
-          <RefreshCcw className="h-4 w-4" aria-hidden="true" />
+        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+          <RefreshCcw className={cn("h-4 w-4", isFetching && "animate-spin")} />
           刷新账号
         </Button>
-      </div>
-
-      <div className="inline-flex rounded-md border border-border p-1">
-        {(["US", "UK"] as XboxCountry[]).map((item) => (
-          <button
-            key={item}
-            type="button"
-            className={cn(
-              "h-9 px-4 rounded text-sm font-medium text-muted-foreground transition-colors",
-              country === item && "bg-muted text-foreground"
-            )}
-            onClick={() => setCountry(item)}
-          >
-            {COUNTRY_META[item].label}
-          </button>
-        ))}
       </div>
 
       <SummaryCards country={country} />
@@ -1009,6 +2067,43 @@ export function XboxPage() {
       {auditTarget ? (
         <AuditLogsModal account={auditTarget} onClose={() => setAuditTarget(null)} />
       ) : null}
+    </div>
+  );
+}
+
+export function XboxPage() {
+  const [tab, setTab] = useState<XboxTab>("accounts");
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-2xl font-semibold tracking-normal">XBOX</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          XBOX 账号库存 / 同步订单 / 销售记录 / 钱包设置 — 完整业务链路
+        </p>
+      </div>
+
+      <div className="inline-flex rounded-md border border-border p-1">
+        {TAB_META.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={cn(
+              "h-9 px-4 rounded text-sm font-medium text-muted-foreground transition-colors flex items-center gap-1.5",
+              tab === t.id && "bg-muted text-foreground"
+            )}
+            onClick={() => setTab(t.id)}
+          >
+            {t.icon}
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "accounts" ? <AccountsManagementTab /> : null}
+      {tab === "orders" ? <OrdersTab /> : null}
+      {tab === "sale-records" ? <SaleRecordsTab /> : null}
+      {tab === "wallet-settings" ? <WalletSettingsTab /> : null}
     </div>
   );
 }

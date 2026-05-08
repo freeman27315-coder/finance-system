@@ -40,9 +40,14 @@ import type {
   XboxAccountAuditLog,
   XboxAccountStatus,
   XboxCountry,
+  XboxOrder,
+  XboxOrderStatus,
+  XboxSaleCurrency,
+  XboxSaleRecord,
   XboxSummary,
   XboxTransaction,
-  XboxTransactionType
+  XboxTransactionType,
+  XboxWalletMethod
 } from "@/types";
 
 type AssetWalletResponse = {
@@ -182,7 +187,7 @@ export function createAssetSubWallet(walletId: string, name: string) {
   return postJson(`/api/wallets/assets/${walletId}/sub`, { name, is_group: false });
 }
 
-async function sendJson(path: string, method: "PATCH" | "DELETE", body?: unknown) {
+async function sendJson(path: string, method: "PATCH" | "DELETE" | "PUT", body?: unknown) {
   const response = await fetch(path, {
     method,
     headers: {
@@ -583,6 +588,320 @@ export async function getXboxSummary(): Promise<XboxSummary> {
     return mockXboxSummary;
   }
 }
+
+// ===================================================================
+// PR #110/#112 P0.2 — XBOX 订单 / 销售记录 / 钱包设置
+// ===================================================================
+
+type XboxOrderResponse = {
+  id: string | number;
+  accountId?: string | number;
+  account_id?: string | number;
+  orderNo?: string;
+  order_no?: string;
+  amountLocal?: string | number;
+  amount_local?: string | number;
+  currencyLocal?: string;
+  currency_local?: string;
+  exchangeRate?: string | number | null;
+  exchange_rate?: string | number | null;
+  rmbCost?: string | number;
+  rmb_cost?: string | number;
+  orderAt?: string;
+  order_at?: string;
+  status: string;
+  saleDate?: string | null;
+  sale_date?: string | null;
+  productName?: string | null;
+  product_name?: string | null;
+  operatorName?: string | null;
+  operator_name?: string | null;
+  salePrice?: string | number | null;
+  sale_price?: string | number | null;
+  saleCurrency?: string | null;
+  sale_currency?: string | null;
+  walletMethodId?: string | number | null;
+  wallet_method_id?: string | number | null;
+  walletItemId?: string | number | null;
+  wallet_item_id?: string | number | null;
+  saleRecordId?: string | number | null;
+  sale_record_id?: string | number | null;
+  createdAt?: string;
+  created_at?: string;
+  lastUpdatedAt?: string;
+  last_updated_at?: string;
+};
+
+type XboxSaleRecordResponse = {
+  id: string | number;
+  accountId?: string | number;
+  account_id?: string | number;
+  saleDate?: string;
+  sale_date?: string;
+  productName?: string;
+  product_name?: string;
+  operatorName?: string;
+  operator_name?: string;
+  salePrice?: string | number;
+  sale_price?: string | number;
+  saleCurrency?: string;
+  sale_currency?: string;
+  walletMethodId?: string | number;
+  wallet_method_id?: string | number;
+  walletItemId?: string | number;
+  wallet_item_id?: string | number;
+  walletItemLabel?: string;
+  wallet_item_label?: string;
+  walletPoolId?: string | number;
+  wallet_pool_id?: string | number;
+  bookkeepingTxId?: string | number | null;
+  bookkeeping_tx_id?: string | number | null;
+  orderIds?: (string | number)[];
+  order_ids?: (string | number)[];
+  createdAt?: string;
+  created_at?: string;
+  lastUpdatedAt?: string;
+  last_updated_at?: string;
+};
+
+type XboxWalletMethodResponse = {
+  id: string | number;
+  code: string;
+  label: string;
+  isActive?: boolean;
+  is_active?: boolean;
+  items: {
+    id: string | number;
+    code: string;
+    label: string;
+    walletPoolId?: string | number;
+    wallet_pool_id?: string | number;
+    isActive?: boolean;
+    is_active?: boolean;
+  }[];
+};
+
+function _normalizeOrder(o: XboxOrderResponse): XboxOrder {
+  const localCurrency = (o.currencyLocal ?? o.currency_local ?? "USD") as
+    | "USD"
+    | "GBP";
+  const saleCurrency = (o.saleCurrency ?? o.sale_currency ?? null) as
+    | XboxSaleCurrency
+    | null;
+  const exchangeRateRaw = o.exchangeRate ?? o.exchange_rate ?? null;
+  const salePriceRaw = o.salePrice ?? o.sale_price ?? null;
+  return {
+    id: String(o.id),
+    accountId: String(o.accountId ?? o.account_id ?? ""),
+    orderNo: o.orderNo ?? o.order_no ?? "",
+    amountLocal: decimalToMinor(o.amountLocal ?? o.amount_local ?? 0, localCurrency),
+    currencyLocal: localCurrency,
+    exchangeRate:
+      exchangeRateRaw == null || exchangeRateRaw === ""
+        ? null
+        : Number(exchangeRateRaw),
+    rmbCost: decimalToMinor(o.rmbCost ?? o.rmb_cost ?? 0, "CNY"),
+    orderAt: o.orderAt ?? o.order_at ?? "",
+    status: (o.status as XboxOrderStatus) ?? "pending_complete",
+    saleDate: o.saleDate ?? o.sale_date ?? null,
+    productName: o.productName ?? o.product_name ?? null,
+    operatorName: o.operatorName ?? o.operator_name ?? null,
+    salePrice:
+      salePriceRaw == null
+        ? null
+        : decimalToMinor(salePriceRaw, saleCurrency ?? "CNY"),
+    saleCurrency,
+    walletMethodId:
+      o.walletMethodId == null && o.wallet_method_id == null
+        ? null
+        : String(o.walletMethodId ?? o.wallet_method_id),
+    walletItemId:
+      o.walletItemId == null && o.wallet_item_id == null
+        ? null
+        : String(o.walletItemId ?? o.wallet_item_id),
+    saleRecordId:
+      o.saleRecordId == null && o.sale_record_id == null
+        ? null
+        : String(o.saleRecordId ?? o.sale_record_id),
+    createdAt: o.createdAt ?? o.created_at ?? "",
+    lastUpdatedAt: o.lastUpdatedAt ?? o.last_updated_at ?? ""
+  };
+}
+
+function _normalizeSaleRecord(r: XboxSaleRecordResponse): XboxSaleRecord {
+  const currency = (r.saleCurrency ?? r.sale_currency ?? "CNY") as XboxSaleCurrency;
+  return {
+    id: String(r.id),
+    accountId: String(r.accountId ?? r.account_id ?? ""),
+    saleDate: r.saleDate ?? r.sale_date ?? "",
+    productName: r.productName ?? r.product_name ?? "",
+    operatorName: r.operatorName ?? r.operator_name ?? "",
+    salePrice: decimalToMinor(r.salePrice ?? r.sale_price ?? 0, currency),
+    saleCurrency: currency,
+    walletMethodId: String(r.walletMethodId ?? r.wallet_method_id ?? ""),
+    walletItemId: String(r.walletItemId ?? r.wallet_item_id ?? ""),
+    walletItemLabel: r.walletItemLabel ?? r.wallet_item_label ?? "",
+    walletPoolId: String(r.walletPoolId ?? r.wallet_pool_id ?? ""),
+    bookkeepingTxId:
+      r.bookkeepingTxId == null && r.bookkeeping_tx_id == null
+        ? null
+        : String(r.bookkeepingTxId ?? r.bookkeeping_tx_id),
+    orderIds: (r.orderIds ?? r.order_ids ?? []).map((x) => String(x)),
+    createdAt: r.createdAt ?? r.created_at ?? "",
+    lastUpdatedAt: r.lastUpdatedAt ?? r.last_updated_at ?? ""
+  };
+}
+
+function _normalizeWalletMethod(m: XboxWalletMethodResponse): XboxWalletMethod {
+  return {
+    id: String(m.id),
+    code: m.code,
+    label: m.label,
+    isActive: Boolean(m.isActive ?? m.is_active ?? true),
+    items: (m.items ?? []).map((it) => ({
+      id: String(it.id),
+      code: it.code,
+      label: it.label,
+      walletPoolId: String(it.walletPoolId ?? it.wallet_pool_id ?? ""),
+      isActive: Boolean(it.isActive ?? it.is_active ?? true)
+    }))
+  };
+}
+
+export async function getXboxOrders(filter?: {
+  accountId?: string;
+  status?: XboxOrderStatus;
+}): Promise<XboxOrder[]> {
+  const qs = new URLSearchParams();
+  if (filter?.accountId) qs.set("accountId", filter.accountId);
+  if (filter?.status) qs.set("status", filter.status);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  try {
+    const data = await fetchJson<XboxOrderResponse[]>(`/api/xbox/orders${suffix}`);
+    return data.map(_normalizeOrder);
+  } catch {
+    return [];
+  }
+}
+
+export async function createXboxOrder(payload: {
+  accountId: string;
+  orderNo: string;
+  amountLocal: string;
+  currencyLocal: string;
+  orderAt: string;
+  exchangeRate?: string;
+}): Promise<XboxOrder> {
+  const body: Record<string, unknown> = {
+    accountId: payload.accountId,
+    orderNo: payload.orderNo,
+    amountLocal: payload.amountLocal,
+    currencyLocal: payload.currencyLocal,
+    orderAt: payload.orderAt
+  };
+  if (payload.exchangeRate) body.exchangeRate = payload.exchangeRate;
+  const data = (await postJson("/api/xbox/orders", body)) as XboxOrderResponse;
+  return _normalizeOrder(data);
+}
+
+export async function patchXboxOrder(
+  orderId: string,
+  payload: {
+    saleDate?: string;
+    productName?: string;
+    operatorName?: string;
+    salePrice?: string;
+    saleCurrency?: XboxSaleCurrency;
+    walletMethodId?: string;
+    walletItemId?: string;
+  }
+): Promise<XboxOrder> {
+  const body: Record<string, unknown> = {};
+  if (payload.saleDate !== undefined) body.saleDate = payload.saleDate;
+  if (payload.productName !== undefined) body.productName = payload.productName;
+  if (payload.operatorName !== undefined) body.operatorName = payload.operatorName;
+  if (payload.salePrice !== undefined) body.salePrice = payload.salePrice;
+  if (payload.saleCurrency !== undefined) body.saleCurrency = payload.saleCurrency;
+  if (payload.walletMethodId !== undefined) body.walletMethodId = payload.walletMethodId;
+  if (payload.walletItemId !== undefined) body.walletItemId = payload.walletItemId;
+  const data = (await sendJson(`/api/xbox/orders/${orderId}`, "PATCH", body)) as XboxOrderResponse;
+  return _normalizeOrder(data);
+}
+
+export async function getXboxSaleRecords(filter?: {
+  accountId?: string;
+}): Promise<XboxSaleRecord[]> {
+  const qs = new URLSearchParams();
+  if (filter?.accountId) qs.set("accountId", filter.accountId);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  try {
+    const data = await fetchJson<XboxSaleRecordResponse[]>(`/api/xbox/sale-records${suffix}`);
+    return data.map(_normalizeSaleRecord);
+  } catch {
+    return [];
+  }
+}
+
+export async function patchXboxSaleRecord(
+  recordId: string,
+  payload: {
+    saleDate?: string;
+    productName?: string;
+    operatorName?: string;
+    salePrice?: string;
+    saleCurrency?: XboxSaleCurrency;
+    walletMethodId?: string;
+    walletItemId?: string;
+    walletItemLabel?: string;
+    walletPoolId?: string;
+  }
+): Promise<XboxSaleRecord> {
+  const body: Record<string, unknown> = {};
+  for (const k of Object.keys(payload) as (keyof typeof payload)[]) {
+    const v = payload[k];
+    if (v !== undefined) body[k] = v;
+  }
+  const data = (await sendJson(
+    `/api/xbox/sale-records/${recordId}`,
+    "PATCH",
+    body
+  )) as XboxSaleRecordResponse;
+  return _normalizeSaleRecord(data);
+}
+
+export async function getXboxWalletSettings(onlyActive = true): Promise<XboxWalletMethod[]> {
+  try {
+    const data = await fetchJson<XboxWalletMethodResponse[]>(
+      `/api/xbox/wallet-settings?onlyActive=${onlyActive}`
+    );
+    return data.map(_normalizeWalletMethod);
+  } catch {
+    return [];
+  }
+}
+
+export async function pushXboxWalletSettings(
+  methods: {
+    code: string;
+    label: string;
+    items: { code: string; label: string; walletPoolId: string; isActive?: boolean }[];
+  }[]
+): Promise<{ methodsUpserted: number; itemsUpserted: number; itemsDisabled: number }> {
+  const data = (await sendJson(`/api/xbox/wallet-settings`, "PUT", methods)) as {
+    methods_upserted?: number;
+    items_upserted?: number;
+    items_disabled?: number;
+    methodsUpserted?: number;
+    itemsUpserted?: number;
+    itemsDisabled?: number;
+  };
+  return {
+    methodsUpserted: Number(data.methodsUpserted ?? data.methods_upserted ?? 0),
+    itemsUpserted: Number(data.itemsUpserted ?? data.items_upserted ?? 0),
+    itemsDisabled: Number(data.itemsDisabled ?? data.items_disabled ?? 0)
+  };
+}
+
 
 // ---------------------------------------------------------------------------
 // Taobao（PR #65/#67/#69/#73）—— 3 店铺 × 5 钱包 + storeAlipayWallet 必填带 type + Excel 导入
