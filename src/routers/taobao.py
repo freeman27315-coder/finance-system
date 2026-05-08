@@ -7,7 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import case, func, select, text
 from sqlalchemy.orm import Session
 
 from src.database import get_db
@@ -140,6 +140,22 @@ class WalletTransactionOut(BaseModel):
     remark: Optional[str] = None
     created_at: str
     mature_at: Optional[str] = None
+
+
+class WalletDailySummaryOut(BaseModel):
+    """钱包按日聚合：每天的入账总额、出账总额、净额、笔数。
+
+    ``date`` 取 ``WalletTransaction.created_at`` 的日期（中国时区,
+    系统时间已统一 UTC+8）。
+    """
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    date: str  # YYYY-MM-DD
+    in_amount: Decimal
+    out_amount: Decimal
+    net_amount: Decimal
+    count: int
 
 
 # ---------------------------------------------------------------------------
@@ -565,3 +581,78 @@ def list_wallet_transactions_for_shop(
         )
     )
     return [_serialize_transaction(tx) for tx in txs]
+
+
+@router.get(
+    "/shops/{shop_id}/wallets/{wallet_id}/daily-summary",
+    response_model=list[WalletDailySummaryOut],
+    response_model_by_alias=True,
+)
+def list_wallet_daily_summary_for_shop(
+    shop_id: int,
+    wallet_id: int,
+    from_: Optional[str] = Query(None, alias="from", description="起始日期 YYYY-MM-DD,闭区间"),
+    to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD,闭区间"),
+    db: Session = Depends(get_db),
+) -> list[WalletDailySummaryOut]:
+    """单钱包按日聚合：每天的入账/出账/净额/笔数,按日期降序。
+
+    业务用途：CEO 想看「5/4 支付宝在途 ¥X、5/5 ¥Y」这类按日明细。
+    数据量小（一天最多几百行）,不分页。可选 ``from``/``to`` 闭区间过滤。
+
+    ``created_at`` 已是中国本地时间（system tz 已统一 UTC+8）,
+    ``func.date()`` 直接取 YYYY-MM-DD 即中国日期,无需 +8h 转换。
+    """
+    shop = _get_shop_or_404(db, shop_id)
+
+    if wallet_id not in _shop_wallet_ids(shop):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="该钱包不属于本店铺",
+        )
+
+    date_col = func.date(WalletTransaction.created_at)
+    in_sum = func.sum(
+        case(
+            (WalletTransaction.direction == "in", WalletTransaction.amount),
+            else_=0,
+        )
+    )
+    out_sum = func.sum(
+        case(
+            (WalletTransaction.direction == "out", WalletTransaction.amount),
+            else_=0,
+        )
+    )
+
+    stmt = (
+        select(
+            date_col.label("d"),
+            in_sum.label("in_amt"),
+            out_sum.label("out_amt"),
+            func.count(WalletTransaction.id).label("cnt"),
+        )
+        .where(WalletTransaction.wallet_id == wallet_id)
+    )
+    if from_:
+        stmt = stmt.where(date_col >= from_)
+    if to:
+        stmt = stmt.where(date_col <= to)
+    stmt = stmt.group_by(date_col).order_by(text("d DESC"))
+
+    rows = db.execute(stmt).all()
+
+    out: list[WalletDailySummaryOut] = []
+    for row in rows:
+        in_amount = Decimal(row.in_amt or 0)
+        out_amount = Decimal(row.out_amt or 0)
+        out.append(
+            WalletDailySummaryOut(
+                date=str(row.d),
+                in_amount=in_amount,
+                out_amount=out_amount,
+                net_amount=in_amount - out_amount,
+                count=int(row.cnt),
+            )
+        )
+    return out

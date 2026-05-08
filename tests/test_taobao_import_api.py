@@ -386,10 +386,17 @@ def test_new_alipay_received_b_shop_to_store_alipay_wallet(client):
 
 
 def test_new_wechat_received_to_aggregator_frozen_with_mature_at_from_confirmed_at(client):
-    """wechat/received → aggregator_frozen，mature_at = confirmed_at + 7d。"""
+    """wechat/received → aggregator_frozen，mature_at = confirmed_at + 7d。
+
+    confirmed_at 用相对今天的未来日期,确保 mature_at 仍在未来（不会被自动解冻）。
+    """
     shop = _shop_by_name("丙火网络")
-    confirmed_at_str = "2026-04-30 14:30:00"
-    shipped_at_str = "2026-04-30 00:03:21"
+    # 用今天 + 2 天作为 confirmed_at,这样 mature_at = 今天 + 9 天,稳在未来
+    base_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=2)
+    confirmed_dt = base_day.replace(hour=14, minute=30)
+    shipped_dt = base_day.replace(hour=0, minute=3, second=21)
+    confirmed_at_str = confirmed_dt.strftime("%Y-%m-%d %H:%M:%S")
+    shipped_at_str = shipped_dt.strftime("%Y-%m-%d %H:%M:%S")
     rows = [_row(
         order_no="ORDER_W1",
         payment_no="PAY_W1",
@@ -411,7 +418,6 @@ def test_new_wechat_received_to_aggregator_frozen_with_mature_at_from_confirmed_
     assert tx is not None
     assert tx.mature_at is not None
     # mature_at 精确到分秒：与千牛后台一致 confirmed_at + 7 天
-    confirmed_dt = datetime.strptime(confirmed_at_str, "%Y-%m-%d %H:%M:%S")
     expected_mature = confirmed_dt + timedelta(days=7)
     assert tx.mature_at.replace(tzinfo=None) == expected_mature
 
@@ -419,7 +425,12 @@ def test_new_wechat_received_to_aggregator_frozen_with_mature_at_from_confirmed_
 def test_mature_at_falls_back_to_shipped_at_when_confirmed_at_missing(client):
     """confirmed_at 缺失时,mature_at 兜底用 shipped_at + 7d。"""
     shop = _shop_by_name("丙火网络")
-    shipped_at_str = "2026-04-30 00:03:21"
+    # 用今天 + 2 天的未来 shipped_at 防自动解冻
+    shipped_dt = (
+        datetime.now().replace(hour=0, minute=3, second=21, microsecond=0)
+        + timedelta(days=2)
+    )
+    shipped_at_str = shipped_dt.strftime("%Y-%m-%d %H:%M:%S")
     rows = [_row(
         order_no="ORDER_FB",
         payment_no="PAY_FB",
@@ -437,7 +448,6 @@ def test_mature_at_falls_back_to_shipped_at_when_confirmed_at_missing(client):
 
     tx = _last_tx(shop.aggregator_frozen_wallet_id)
     # mature_at 精确到分秒：与千牛后台一致 shipped_at + 7 天
-    shipped_dt = datetime.strptime(shipped_at_str, "%Y-%m-%d %H:%M:%S")
     expected = shipped_dt + timedelta(days=7)
     assert tx.mature_at.replace(tzinfo=None) == expected
 
@@ -445,6 +455,10 @@ def test_mature_at_falls_back_to_shipped_at_when_confirmed_at_missing(client):
 def test_new_wechat_received_b_shop_also_to_aggregator_frozen(client):
     """B 类（兔仔）的 wechat/received 仍然走聚合冻结。"""
     shop = _shop_by_name("兔仔电玩")
+    # 用今天 + 2 天作 confirmed_at,防止自动解冻
+    base_day = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=2)
+    confirmed_at_str = base_day.replace(hour=14).strftime("%Y-%m-%d %H:%M:%S")
+    shipped_at_str = base_day.replace(hour=0, minute=3, second=21).strftime("%Y-%m-%d %H:%M:%S")
     rows = [_row(
         order_no="ORDER_B_W1",
         payment_no="PAY_B_W1",
@@ -453,8 +467,8 @@ def test_new_wechat_received_b_shop_also_to_aggregator_frozen(client):
         status_zh="交易成功",
         paid_at="2026-04-29 23:57:43",
         shop_name="兔仔电玩",
-        shipped_at="2026-04-30 00:03:21",
-        confirmed_at="2026-04-30 14:00:00",
+        shipped_at=shipped_at_str,
+        confirmed_at=confirmed_at_str,
         confirmed_amount="60.00",
     )]
     response = _post_import(client, shop.id, _build_xlsx(rows))

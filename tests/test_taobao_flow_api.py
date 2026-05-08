@@ -779,3 +779,143 @@ def test_wallet_transactions_pagination_and_desc(client):
     assert len(txs) == 2
     # id desc：第一条是最新（最大 id）
     assert txs[0]["id"] > txs[1]["id"]
+
+
+# ---------------------------------------------------------------------------
+# /wallets/{wallet_id}/daily-summary
+# ---------------------------------------------------------------------------
+
+
+def _seed_tx_with_date(
+    wallet_id: int,
+    *,
+    amount: Decimal,
+    direction: str,
+    created_at: datetime,
+    remark: str = "测试",
+) -> int:
+    """直接 insert 一笔流水并强制设置 created_at（绕过 default=china_now）。"""
+    db = database.SessionLocal()
+    try:
+        tx = WalletTransaction(
+            wallet_id=wallet_id,
+            amount=amount,
+            direction=direction,
+            remark=remark,
+            created_at=created_at,
+        )
+        db.add(tx)
+        # 同时更新钱包余额,避免后续 debit 失败
+        wallet = db.get(Wallet, wallet_id)
+        if direction == "in":
+            wallet.balance = Decimal(wallet.balance) + amount
+        else:
+            wallet.balance = Decimal(wallet.balance) - amount
+        db.commit()
+        return tx.id
+    finally:
+        db.close()
+
+
+def test_daily_summary_aggregates_in_out_count_per_day(client):
+    """3 天的混合流水 → 按日聚合 IN/OUT/净/笔数,降序返回。"""
+    shop = _shop_by_name("丙火网络")
+    wid = shop.unconfirmed_alipay_wallet_id
+
+    # 5/4: in 100 + in 50, 共 150 IN
+    _seed_tx_with_date(wid, amount=Decimal("100"), direction="in",
+                       created_at=datetime(2026, 5, 4, 10, 0, 0))
+    _seed_tx_with_date(wid, amount=Decimal("50"), direction="in",
+                       created_at=datetime(2026, 5, 4, 14, 0, 0))
+    # 5/5: in 200, out 30
+    _seed_tx_with_date(wid, amount=Decimal("200"), direction="in",
+                       created_at=datetime(2026, 5, 5, 9, 0, 0))
+    _seed_tx_with_date(wid, amount=Decimal("30"), direction="out",
+                       created_at=datetime(2026, 5, 5, 18, 0, 0))
+    # 5/6: out 80
+    _seed_tx_with_date(wid, amount=Decimal("80"), direction="out",
+                       created_at=datetime(2026, 5, 6, 12, 0, 0))
+
+    response = client.get(f"/taobao/shops/{shop.id}/wallets/{wid}/daily-summary")
+    assert response.status_code == 200, response.text
+    rows = response.json()
+    assert len(rows) == 3
+
+    # 降序：5/6 > 5/5 > 5/4
+    assert rows[0]["date"] == "2026-05-06"
+    assert Decimal(rows[0]["inAmount"]) == Decimal("0")
+    assert Decimal(rows[0]["outAmount"]) == Decimal("80")
+    assert Decimal(rows[0]["netAmount"]) == Decimal("-80")
+    assert rows[0]["count"] == 1
+
+    assert rows[1]["date"] == "2026-05-05"
+    assert Decimal(rows[1]["inAmount"]) == Decimal("200")
+    assert Decimal(rows[1]["outAmount"]) == Decimal("30")
+    assert Decimal(rows[1]["netAmount"]) == Decimal("170")
+    assert rows[1]["count"] == 2
+
+    assert rows[2]["date"] == "2026-05-04"
+    assert Decimal(rows[2]["inAmount"]) == Decimal("150")
+    assert Decimal(rows[2]["outAmount"]) == Decimal("0")
+    assert Decimal(rows[2]["netAmount"]) == Decimal("150")
+    assert rows[2]["count"] == 2
+
+
+def test_daily_summary_empty_wallet_returns_empty(client):
+    """没有流水的钱包返回空列表。"""
+    shop = _shop_by_name("丙火网络")
+    response = client.get(
+        f"/taobao/shops/{shop.id}/wallets/{shop.bank_card_wallet_id}/daily-summary"
+    )
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_daily_summary_404_when_wallet_not_in_shop(client):
+    """跨店铺钱包 → 404。"""
+    shop = _shop_by_name("丙火网络")
+    other = _shop_by_name("小小电玩")
+    response = client.get(
+        f"/taobao/shops/{shop.id}/wallets/{other.bank_card_wallet_id}/daily-summary"
+    )
+    assert response.status_code == 404
+
+
+def test_daily_summary_filters_by_date_range(client):
+    """from / to 闭区间过滤。"""
+    shop = _shop_by_name("丙火网络")
+    wid = shop.aggregator_available_wallet_id
+
+    for day in (3, 4, 5, 6, 7):
+        _seed_tx_with_date(
+            wid,
+            amount=Decimal("10"),
+            direction="in",
+            created_at=datetime(2026, 5, day, 10, 0, 0),
+        )
+
+    # 只取 5/4 ~ 5/6 三天
+    response = client.get(
+        f"/taobao/shops/{shop.id}/wallets/{wid}/daily-summary",
+        params={"from": "2026-05-04", "to": "2026-05-06"},
+    )
+    assert response.status_code == 200
+    rows = response.json()
+    assert [r["date"] for r in rows] == ["2026-05-06", "2026-05-05", "2026-05-04"]
+    assert all(Decimal(r["inAmount"]) == Decimal("10") for r in rows)
+
+
+def test_daily_summary_store_alipay_wallet_allowed(client):
+    """店铺支付宝钱包（含 A/B 类）也支持日汇总。"""
+    shop = _shop_by_name("丙火网络")
+    wid = shop.store_alipay_wallet_id
+    _seed_tx_with_date(wid, amount=Decimal("99"), direction="in",
+                       created_at=datetime(2026, 5, 6, 15, 30, 0))
+
+    response = client.get(f"/taobao/shops/{shop.id}/wallets/{wid}/daily-summary")
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    assert rows[0]["date"] == "2026-05-06"
+    assert Decimal(rows[0]["inAmount"]) == Decimal("99")
+    assert rows[0]["count"] == 1
