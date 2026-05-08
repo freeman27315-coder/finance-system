@@ -818,7 +818,7 @@ def _seed_tx_with_date(
 
 
 def test_daily_summary_aggregates_in_out_count_per_day(client):
-    """3 天的混合流水 → 按日聚合 IN/OUT/净/笔数,降序返回。"""
+    """3 天的混合流水 → 按日聚合 IN/OUT/净/笔数,升序（旧→新）返回。"""
     shop = _shop_by_name("丙火网络")
     wid = shop.unconfirmed_alipay_wallet_id
 
@@ -841,12 +841,12 @@ def test_daily_summary_aggregates_in_out_count_per_day(client):
     rows = response.json()
     assert len(rows) == 3
 
-    # 降序：5/6 > 5/5 > 5/4
-    assert rows[0]["date"] == "2026-05-06"
-    assert Decimal(rows[0]["inAmount"]) == Decimal("0")
-    assert Decimal(rows[0]["outAmount"]) == Decimal("80")
-    assert Decimal(rows[0]["netAmount"]) == Decimal("-80")
-    assert rows[0]["count"] == 1
+    # 升序：5/4 → 5/5 → 5/6
+    assert rows[0]["date"] == "2026-05-04"
+    assert Decimal(rows[0]["inAmount"]) == Decimal("150")
+    assert Decimal(rows[0]["outAmount"]) == Decimal("0")
+    assert Decimal(rows[0]["netAmount"]) == Decimal("150")
+    assert rows[0]["count"] == 2
 
     assert rows[1]["date"] == "2026-05-05"
     assert Decimal(rows[1]["inAmount"]) == Decimal("200")
@@ -854,11 +854,11 @@ def test_daily_summary_aggregates_in_out_count_per_day(client):
     assert Decimal(rows[1]["netAmount"]) == Decimal("170")
     assert rows[1]["count"] == 2
 
-    assert rows[2]["date"] == "2026-05-04"
-    assert Decimal(rows[2]["inAmount"]) == Decimal("150")
-    assert Decimal(rows[2]["outAmount"]) == Decimal("0")
-    assert Decimal(rows[2]["netAmount"]) == Decimal("150")
-    assert rows[2]["count"] == 2
+    assert rows[2]["date"] == "2026-05-06"
+    assert Decimal(rows[2]["inAmount"]) == Decimal("0")
+    assert Decimal(rows[2]["outAmount"]) == Decimal("80")
+    assert Decimal(rows[2]["netAmount"]) == Decimal("-80")
+    assert rows[2]["count"] == 1
 
 
 def test_daily_summary_empty_wallet_returns_empty(client):
@@ -901,7 +901,7 @@ def test_daily_summary_filters_by_date_range(client):
     )
     assert response.status_code == 200
     rows = response.json()
-    assert [r["date"] for r in rows] == ["2026-05-06", "2026-05-05", "2026-05-04"]
+    assert [r["date"] for r in rows] == ["2026-05-04", "2026-05-05", "2026-05-06"]
     assert all(Decimal(r["inAmount"]) == Decimal("10") for r in rows)
 
 
