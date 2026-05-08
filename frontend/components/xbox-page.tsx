@@ -142,7 +142,6 @@ function CreateAccountModal({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [name, setName] = useState("");
   const [country, setCountry] = useState<XboxCountry>(defaultCountry);
   const [accountNo, setAccountNo] = useState("");
   const [loginEmail, setLoginEmail] = useState("");
@@ -153,13 +152,15 @@ function CreateAccountModal({
 
   const mutation = useMutation({
     mutationFn: async () => {
-      if (!name.trim()) {
-        throw new Error("账号名不能为空");
+      const trimmedAccountNo = accountNo.trim();
+      if (!trimmedAccountNo) {
+        throw new Error("账号编号不能为空");
       }
       return createXboxAccount({
-        name: name.trim(),
+        // 后端 name 字段必填,直接用账号编号当 name 传过去
+        name: trimmedAccountNo,
         country,
-        accountNo: accountNo.trim() === "" ? undefined : accountNo.trim(),
+        accountNo: trimmedAccountNo,
         loginEmail: loginEmail.trim() === "" ? undefined : loginEmail.trim(),
         password: password === "" ? undefined : password,
         exchangeRate: exchangeRate.trim() === "" ? undefined : exchangeRate.trim(),
@@ -184,12 +185,15 @@ function CreateAccountModal({
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">账号名</div>
+            <div className="text-sm text-muted-foreground">
+              账号编号 <span className="text-red-600">*</span>
+              <span className="ml-1 text-xs">（加卡系统对接 ID,作为账号唯一标识）</span>
+            </div>
             <input
               className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="账号名"
+              value={accountNo}
+              onChange={(event) => setAccountNo(event.target.value)}
+              placeholder="如 BH-US-001"
               autoFocus
             />
           </div>
@@ -210,15 +214,6 @@ function CreateAccountModal({
                 </button>
               ))}
             </div>
-          </div>
-          <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">账号编号（选填,加卡系统对接 ID）</div>
-            <input
-              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={accountNo}
-              onChange={(event) => setAccountNo(event.target.value)}
-              placeholder="如 BH-US-001"
-            />
           </div>
           <div className="space-y-1">
             <div className="text-sm text-muted-foreground">登录邮箱（选填）</div>
