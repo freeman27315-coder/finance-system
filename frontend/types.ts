@@ -174,6 +174,15 @@ export type TaobaoWalletTransaction = {
   matureAt: string | null;
 };
 
+// 钱包按日汇总（每天 IN / OUT / 净 / 笔数）—— 见 GET /taobao/shops/{id}/wallets/{wid}/daily-summary
+export type TaobaoWalletDailySummary = {
+  date: string; // YYYY-MM-DD（中国本地）
+  inAmountMinor: number;
+  outAmountMinor: number;
+  netAmountMinor: number;
+  count: number;
+};
+
 export type TaobaoImportReport = {
   shopName: string;
   totalRowsParsed: number;
