@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 from src.models.wallet import Currency, Wallet, WalletType, create_wallet
 
 
-ASSET_TYPES = {WalletType.ASSET_RMB.value, WalletType.ASSET_USDT.value}
+ASSET_TYPES = {
+    WalletType.ASSET_RMB.value,
+    WalletType.ASSET_USDT.value,
+    WalletType.ASSET_USD.value,  # PR #110 P0.2: XBOX USD 销售收入资金池
+}
 DEFAULT_ASSET_WALLETS = (
     {
         "name": "RMB钱包",
@@ -31,6 +35,12 @@ DEFAULT_ASSET_WALLETS = (
         "wallet_type": WalletType.ASSET_USDT,
         "currency": Currency.USDT,
         "children": ("FREEMAN币安", "张总币安"),
+    },
+    {
+        "name": "USD钱包",
+        "wallet_type": WalletType.ASSET_USD,
+        "currency": Currency.USD,
+        "children": (),  # 空,CEO 自行新建子钱包(资金池)
     },
 )
 
