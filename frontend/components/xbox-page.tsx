@@ -820,8 +820,6 @@ function StatusBadge({ status }: { status: XboxAccountStatus }) {
 function AccountsTable({
   accounts,
   country,
-  onRecharge,
-  onConsume,
   onTransactions,
   onEdit,
   onChangePassword,
@@ -830,8 +828,6 @@ function AccountsTable({
 }: {
   accounts: XboxAccount[];
   country: XboxCountry;
-  onRecharge: (account: XboxAccount) => void;
-  onConsume: (account: XboxAccount) => void;
   onTransactions: (account: XboxAccount) => void;
   onEdit: (account: XboxAccount) => void;
   onChangePassword: (account: XboxAccount) => void;
@@ -887,14 +883,6 @@ function AccountsTable({
             <TableCell className="text-muted-foreground text-xs">{account.remark ?? "-"}</TableCell>
             <TableCell className="text-right">
               <div className="flex flex-wrap justify-end gap-1">
-                <Button size="sm" variant="outline" onClick={() => onRecharge(account)}>
-                  <ArrowDownLeft className="h-3.5 w-3.5 text-green-600" aria-hidden="true" />
-                  充值
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => onConsume(account)}>
-                  <ArrowUpRight className="h-3.5 w-3.5 text-red-600" aria-hidden="true" />
-                  消费
-                </Button>
                 <Button size="sm" variant="ghost" onClick={() => onTransactions(account)}>
                   <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />
                   流水
@@ -934,8 +922,6 @@ function AccountsTable({
 export function XboxPage() {
   const [country, setCountry] = useState<XboxCountry>("US");
   const [showCreate, setShowCreate] = useState(false);
-  const [rechargeTarget, setRechargeTarget] = useState<XboxAccount | null>(null);
-  const [consumeTarget, setConsumeTarget] = useState<XboxAccount | null>(null);
   const [transactionsTarget, setTransactionsTarget] = useState<XboxAccount | null>(null);
   const [editTarget, setEditTarget] = useState<XboxAccount | null>(null);
   const [passwordTarget, setPasswordTarget] = useState<XboxAccount | null>(null);
@@ -996,8 +982,6 @@ export function XboxPage() {
           <AccountsTable
             accounts={accounts}
             country={country}
-            onRecharge={setRechargeTarget}
-            onConsume={setConsumeTarget}
             onTransactions={setTransactionsTarget}
             onEdit={setEditTarget}
             onChangePassword={setPasswordTarget}
@@ -1009,12 +993,6 @@ export function XboxPage() {
 
       {showCreate ? (
         <CreateAccountModal defaultCountry={country} onClose={() => setShowCreate(false)} />
-      ) : null}
-      {rechargeTarget ? (
-        <RechargeModal account={rechargeTarget} onClose={() => setRechargeTarget(null)} />
-      ) : null}
-      {consumeTarget ? (
-        <ConsumeModal account={consumeTarget} onClose={() => setConsumeTarget(null)} />
       ) : null}
       {transactionsTarget ? (
         <TransactionsModal account={transactionsTarget} onClose={() => setTransactionsTarget(null)} />
