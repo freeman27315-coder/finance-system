@@ -84,6 +84,73 @@ export type XboxAccountAuditLog = {
   createdAt: string;
 };
 
+// PR #110 P0.2 - 销售币种
+export type XboxSaleCurrency = "CNY" | "USD" | "USDT" | "TWD";
+
+// 订单状态
+export type XboxOrderStatus = "pending_complete" | "converted";
+
+// 同步订单（手动建或 Microsoft 抓取）
+export type XboxOrder = {
+  id: string;
+  accountId: string;
+  orderNo: string;
+  amountLocal: number; // 本币金额（minor unit, 大金额）
+  currencyLocal: string; // USD/GBP
+  exchangeRate: number | null;
+  rmbCost: number; // RMB 成本（minor unit）
+  orderAt: string;
+  status: XboxOrderStatus;
+  // 补齐字段
+  saleDate: string | null;
+  productName: string | null;
+  operatorName: string | null;
+  salePrice: number | null;
+  saleCurrency: XboxSaleCurrency | null;
+  walletMethodId: string | null;
+  walletItemId: string | null;
+  saleRecordId: string | null;
+  createdAt: string;
+  lastUpdatedAt: string;
+};
+
+// 销售记录
+export type XboxSaleRecord = {
+  id: string;
+  accountId: string;
+  saleDate: string;
+  productName: string;
+  operatorName: string;
+  salePrice: number; // minor unit
+  saleCurrency: XboxSaleCurrency;
+  walletMethodId: string;
+  walletItemId: string;
+  walletItemLabel: string;
+  walletPoolId: string;
+  bookkeepingTxId: string | null;
+  orderIds: string[];
+  createdAt: string;
+  lastUpdatedAt: string;
+};
+
+// 钱包设置 - 备注模板
+export type XboxWalletItem = {
+  id: string;
+  code: string;
+  label: string;
+  walletPoolId: string;
+  isActive: boolean;
+};
+
+// 钱包设置 - 收款方式
+export type XboxWalletMethod = {
+  id: string;
+  code: string;
+  label: string;
+  isActive: boolean;
+  items: XboxWalletItem[];
+};
+
 export type XboxTransaction = {
   id: string;
   accountId: string;
