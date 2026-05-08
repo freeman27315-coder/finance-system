@@ -29,13 +29,13 @@ import {
   consumeXbox,
   createXboxAccount,
   createXboxOrder,
-  getAssetWallets,
   getXboxAccountAuditLogs,
   getXboxAccounts,
   getXboxOrders,
   getXboxSaleRecords,
   getXboxSummary,
   getXboxTransactions,
+  getXboxWalletPoolOptions,
   getXboxWalletSettings,
   patchXboxOrder,
   patchXboxSaleRecord,
@@ -47,12 +47,12 @@ import { formatMoney } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import type {
   Currency,
-  WalletBalance,
   XboxAccount,
   XboxAccountAuditLog,
   XboxAccountStatus,
   XboxCountry,
   XboxOrder,
+  XboxPoolOptionGroup,
   XboxSaleCurrency,
   XboxSaleRecord,
   XboxWalletMethod
@@ -1647,27 +1647,22 @@ function SaleRecordsTab() {
 // PR P0.2 - 钱包设置 Tab
 // ===================================================================
 
-function findWalletByIdRecursive(wallets: WalletBalance[], id: string): WalletBalance | null {
-  for (const w of wallets) {
-    if (w.id === id) return w;
-    if (w.children && w.children.length > 0) {
-      const found = findWalletByIdRecursive(w.children, id);
-      if (found) return found;
+// 把所有分组里的钱包扁平索引,方便按 id 找
+function buildPoolWalletIndex(
+  groups: XboxPoolOptionGroup[]
+): Map<string, { name: string; currency: string; fullPath: string; groupLabel: string }> {
+  const idx = new Map<string, { name: string; currency: string; fullPath: string; groupLabel: string }>();
+  for (const g of groups) {
+    for (const w of g.wallets) {
+      idx.set(w.id, {
+        name: w.name,
+        currency: w.currency,
+        fullPath: w.fullPath,
+        groupLabel: g.groupLabel
+      });
     }
   }
-  return null;
-}
-
-function flattenLeafWallets(wallets: WalletBalance[]): WalletBalance[] {
-  const out: WalletBalance[] = [];
-  const walk = (nodes: WalletBalance[]) => {
-    for (const n of nodes) {
-      if (!n.isGroup) out.push(n);
-      if (n.children && n.children.length > 0) walk(n.children);
-    }
-  };
-  walk(wallets);
-  return out;
+  return idx;
 }
 
 type DraftItem = { id?: string; code: string; label: string; walletPoolId: string; isActive: boolean };
@@ -1675,11 +1670,11 @@ type DraftMethod = { id?: string; code: string; label: string; isActive: boolean
 
 function WalletSettingsEditModal({
   initial,
-  walletPoolOptions,
+  poolGroups,
   onClose
 }: {
   initial: XboxWalletMethod[];
-  walletPoolOptions: WalletBalance[];
+  poolGroups: XboxPoolOptionGroup[];
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -1805,7 +1800,8 @@ function WalletSettingsEditModal({
                 <div className="ml-4 space-y-1">
                   <div className="text-xs text-muted-foreground">备注模板</div>
                   {m.items.map((it, iIdx) => {
-                    const pool = walletPoolOptions.find((w) => w.id === it.walletPoolId);
+                    const idx = buildPoolWalletIndex(poolGroups);
+                    const pool = idx.get(it.walletPoolId);
                     return (
                       <div key={iIdx} className="grid grid-cols-12 gap-1 items-center">
                         <input
@@ -1826,10 +1822,14 @@ function WalletSettingsEditModal({
                           onChange={(e) => updateItem(mIdx, iIdx, "walletPoolId", e.target.value)}
                         >
                           <option value="">-- 资金池 --</option>
-                          {walletPoolOptions.map((w) => (
-                            <option key={w.id} value={w.id}>
-                              {w.name} ({w.currency})
-                            </option>
+                          {poolGroups.map((g) => (
+                            <optgroup key={g.groupCode} label={`── ${g.groupLabel} ──`}>
+                              {g.wallets.map((w) => (
+                                <option key={w.id} value={w.id}>
+                                  {w.fullPath} ({w.currency})
+                                </option>
+                              ))}
+                            </optgroup>
                           ))}
                         </select>
                         <span className="col-span-1 text-xs text-muted-foreground truncate">
@@ -1880,18 +1880,18 @@ function WalletSettingsTab() {
     queryKey: ["xbox-wallet-settings"],
     queryFn: () => getXboxWalletSettings(false)
   });
-  const { data: assets = [] } = useQuery({
-    queryKey: ["asset-wallets"],
-    queryFn: () => getAssetWallets()
+  const { data: poolGroups = [] } = useQuery({
+    queryKey: ["xbox-wallet-pool-options"],
+    queryFn: () => getXboxWalletPoolOptions()
   });
 
-  const walletPoolOptions = flattenLeafWallets(assets);
+  const poolIndex = buildPoolWalletIndex(poolGroups);
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div className="text-xs text-muted-foreground">
-          财务系统钱包设置:收款方式 → 备注模板 → 资金池(具体钱包 ID)
+          财务系统钱包设置:收款方式 → 备注模板 → 资金池(可挂任何钱包：资产/淘宝/台湾/...)
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
@@ -1911,6 +1911,7 @@ function WalletSettingsTab() {
               <TableRow>
                 <TableHead>收款方式</TableHead>
                 <TableHead>备注模板</TableHead>
+                <TableHead>资金池所属</TableHead>
                 <TableHead>资金池</TableHead>
                 <TableHead>状态</TableHead>
               </TableRow>
@@ -1921,13 +1922,13 @@ function WalletSettingsTab() {
                   ? [
                       <TableRow key={m.id}>
                         <TableCell className="font-medium">{m.label}</TableCell>
-                        <TableCell colSpan={3} className="text-xs text-muted-foreground">
+                        <TableCell colSpan={4} className="text-xs text-muted-foreground">
                           (无备注模板)
                         </TableCell>
                       </TableRow>
                     ]
                   : m.items.map((it, idx) => {
-                      const pool = findWalletByIdRecursive(assets, it.walletPoolId);
+                      const pool = poolIndex.get(it.walletPoolId);
                       return (
                         <TableRow key={`${m.id}-${it.id}`}>
                           <TableCell className={cn("font-medium", idx > 0 && "text-transparent")}>
@@ -1939,8 +1940,17 @@ function WalletSettingsTab() {
                               ({it.code})
                             </span>
                           </TableCell>
+                          <TableCell>
+                            {pool ? (
+                              <Badge tone="transfer">{pool.groupLabel}</Badge>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">未知</span>
+                            )}
+                          </TableCell>
                           <TableCell className="text-xs">
-                            {pool ? `${pool.name} (${pool.currency})` : `wallet#${it.walletPoolId}`}
+                            {pool
+                              ? `${pool.fullPath} (${pool.currency})`
+                              : `wallet#${it.walletPoolId}`}
                           </TableCell>
                           <TableCell>
                             <Badge tone={it.isActive ? "success" : "neutral"}>
@@ -1953,7 +1963,7 @@ function WalletSettingsTab() {
               )}
               {methods.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+                  <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
                     还没设钱包设置。点右上角「编辑」开始配置。
                   </TableCell>
                 </TableRow>
@@ -1966,7 +1976,7 @@ function WalletSettingsTab() {
       {showEdit ? (
         <WalletSettingsEditModal
           initial={methods}
-          walletPoolOptions={walletPoolOptions}
+          poolGroups={poolGroups}
           onClose={() => setShowEdit(false)}
         />
       ) : null}

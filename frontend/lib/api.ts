@@ -42,6 +42,7 @@ import type {
   XboxCountry,
   XboxOrder,
   XboxOrderStatus,
+  XboxPoolOptionGroup,
   XboxSaleCurrency,
   XboxSaleRecord,
   XboxSummary,
@@ -875,6 +876,40 @@ export async function getXboxWalletSettings(onlyActive = true): Promise<XboxWall
       `/api/xbox/wallet-settings?onlyActive=${onlyActive}`
     );
     return data.map(_normalizeWalletMethod);
+  } catch {
+    return [];
+  }
+}
+
+type XboxPoolOptionGroupResponse = {
+  groupCode?: string;
+  group_code?: string;
+  groupLabel?: string;
+  group_label?: string;
+  wallets: {
+    id: string | number;
+    name: string;
+    currency: string;
+    fullPath?: string;
+    full_path?: string;
+  }[];
+};
+
+export async function getXboxWalletPoolOptions(): Promise<XboxPoolOptionGroup[]> {
+  try {
+    const data = await fetchJson<XboxPoolOptionGroupResponse[]>(
+      "/api/xbox/wallet-pool-options"
+    );
+    return data.map((g) => ({
+      groupCode: g.groupCode ?? g.group_code ?? "",
+      groupLabel: g.groupLabel ?? g.group_label ?? "",
+      wallets: (g.wallets ?? []).map((w) => ({
+        id: String(w.id),
+        name: w.name,
+        currency: w.currency,
+        fullPath: w.fullPath ?? w.full_path ?? w.name
+      }))
+    }));
   } catch {
     return [];
   }
