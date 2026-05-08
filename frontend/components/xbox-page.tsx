@@ -839,7 +839,6 @@ function AccountsTable({
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>账号名</TableHead>
           <TableHead>账号编号</TableHead>
           <TableHead>登录邮箱</TableHead>
           <TableHead>状态</TableHead>
@@ -852,9 +851,8 @@ function AccountsTable({
       <TableBody>
         {accounts.map((account) => (
           <TableRow key={account.id}>
-            <TableCell className="font-medium">{account.name}</TableCell>
-            <TableCell className="text-xs tabular-nums text-muted-foreground">
-              {account.accountNo ?? "-"}
+            <TableCell className="font-medium">
+              {account.accountNo ?? account.name}
             </TableCell>
             <TableCell className="text-xs text-muted-foreground">
               <div className="flex items-center gap-1">
@@ -909,7 +907,7 @@ function AccountsTable({
         ))}
         {accounts.length === 0 ? (
           <TableRow>
-            <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
+            <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
               当前 Tab 暂无账号，点击右上角「+ 新建账号」开始
             </TableCell>
           </TableRow>
