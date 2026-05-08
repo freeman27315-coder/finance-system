@@ -52,6 +52,9 @@ export type XboxCountry = "US" | "UK";
 
 export type XboxTransactionType = "recharge" | "consume";
 
+// PR #103 (issue #102) 加的账号状态
+export type XboxAccountStatus = "active" | "disabled" | "error" | "need_verification";
+
 export type XboxAccount = {
   id: string;
   name: string;
@@ -60,6 +63,24 @@ export type XboxAccount = {
   rmbCostMinor: number;
   localBalanceMinor: number;
   remark: string | null;
+  createdAt: string;
+  // PR #103 新字段
+  accountNo: string | null;
+  loginEmail: string | null;
+  hasPassword: boolean;
+  exchangeRate: number | null; // 账号固定汇率（取后端 string,前端转 number）
+  status: XboxAccountStatus;
+  statusMessage: string | null;
+  lastSyncedAt: string | null;
+};
+
+// 账号变更审计日志
+export type XboxAccountAuditLog = {
+  id: string;
+  accountId: string;
+  action: "created" | "updated" | "password_changed" | "status_changed";
+  detail: string | null;
+  operator: string | null;
   createdAt: string;
 };
 

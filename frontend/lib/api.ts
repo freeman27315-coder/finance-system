@@ -37,6 +37,8 @@ import type {
   WalletBalance,
   WalletType,
   XboxAccount,
+  XboxAccountAuditLog,
+  XboxAccountStatus,
   XboxCountry,
   XboxSummary,
   XboxTransaction,
@@ -323,6 +325,31 @@ type XboxAccountResponse = {
   remark?: string | null;
   created_at?: string;
   createdAt?: string;
+  // PR #103 新字段
+  account_no?: string | null;
+  accountNo?: string | null;
+  login_email?: string | null;
+  loginEmail?: string | null;
+  has_password?: boolean;
+  hasPassword?: boolean;
+  exchange_rate?: string | number | null;
+  exchangeRate?: string | number | null;
+  status?: string;
+  status_message?: string | null;
+  statusMessage?: string | null;
+  last_synced_at?: string | null;
+  lastSyncedAt?: string | null;
+};
+
+type XboxAccountAuditLogResponse = {
+  id: string | number;
+  account_id?: string | number;
+  accountId?: string | number;
+  action: string;
+  detail?: string | null;
+  operator?: string | null;
+  created_at?: string;
+  createdAt?: string;
 };
 
 type XboxTransactionResponse = {
@@ -347,6 +374,7 @@ type XboxSummaryResponse = {
 function normalizeXboxAccount(account: XboxAccountResponse): XboxAccount {
   const country = (account.country === "UK" ? "UK" : "US") as XboxCountry;
   const currency: Currency = country === "US" ? "USD" : "GBP";
+  const exchangeRateRaw = account.exchange_rate ?? account.exchangeRate ?? null;
   return {
     id: String(account.id),
     name: account.name,
@@ -355,7 +383,28 @@ function normalizeXboxAccount(account: XboxAccountResponse): XboxAccount {
     rmbCostMinor: decimalToMinor(account.rmb_cost ?? account.rmbCost ?? 0, "CNY"),
     localBalanceMinor: decimalToMinor(account.local_balance ?? account.localBalance ?? 0, currency),
     remark: account.remark ?? null,
-    createdAt: account.created_at ?? account.createdAt ?? ""
+    createdAt: account.created_at ?? account.createdAt ?? "",
+    accountNo: account.account_no ?? account.accountNo ?? null,
+    loginEmail: account.login_email ?? account.loginEmail ?? null,
+    hasPassword: Boolean(account.has_password ?? account.hasPassword ?? false),
+    exchangeRate:
+      exchangeRateRaw == null || exchangeRateRaw === ""
+        ? null
+        : Number(exchangeRateRaw),
+    status: ((account.status as XboxAccount["status"]) ?? "active"),
+    statusMessage: account.status_message ?? account.statusMessage ?? null,
+    lastSyncedAt: account.last_synced_at ?? account.lastSyncedAt ?? null
+  };
+}
+
+function normalizeXboxAuditLog(log: XboxAccountAuditLogResponse): XboxAccountAuditLog {
+  return {
+    id: String(log.id),
+    accountId: String(log.account_id ?? log.accountId ?? ""),
+    action: (log.action as XboxAccountAuditLog["action"]) ?? "updated",
+    detail: log.detail ?? null,
+    operator: log.operator ?? null,
+    createdAt: log.created_at ?? log.createdAt ?? ""
   };
 }
 
@@ -386,16 +435,82 @@ export async function createXboxAccount(payload: {
   name: string;
   country: XboxCountry;
   remark?: string;
+  accountNo?: string;
+  loginEmail?: string;
+  password?: string;
+  exchangeRate?: string;
+  status?: XboxAccountStatus;
+  statusMessage?: string;
 }): Promise<XboxAccount> {
   const body: Record<string, unknown> = {
     name: payload.name,
     country: payload.country
   };
-  if (payload.remark) {
-    body.remark = payload.remark;
-  }
+  if (payload.remark) body.remark = payload.remark;
+  if (payload.accountNo) body.accountNo = payload.accountNo;
+  if (payload.loginEmail) body.loginEmail = payload.loginEmail;
+  if (payload.password) body.password = payload.password;
+  if (payload.exchangeRate) body.exchangeRate = payload.exchangeRate;
+  if (payload.status) body.status = payload.status;
+  if (payload.statusMessage) body.statusMessage = payload.statusMessage;
   const data = (await postJson("/api/xbox/accounts", body)) as XboxAccountResponse;
   return normalizeXboxAccount(data);
+}
+
+export async function updateXboxAccount(
+  accountId: string,
+  payload: {
+    name?: string;
+    loginEmail?: string;
+    exchangeRate?: string;
+    rmbCost?: string;
+    localBalance?: string;
+    remark?: string;
+  }
+): Promise<XboxAccount> {
+  const body: Record<string, unknown> = {};
+  if (payload.name !== undefined) body.name = payload.name;
+  if (payload.loginEmail !== undefined) body.loginEmail = payload.loginEmail;
+  if (payload.exchangeRate !== undefined) body.exchangeRate = payload.exchangeRate;
+  if (payload.rmbCost !== undefined) body.rmbCost = payload.rmbCost;
+  if (payload.localBalance !== undefined) body.localBalance = payload.localBalance;
+  if (payload.remark !== undefined) body.remark = payload.remark;
+  const data = (await sendJson(`/api/xbox/accounts/${accountId}`, "PATCH", body)) as XboxAccountResponse;
+  return normalizeXboxAccount(data);
+}
+
+export async function changeXboxAccountPassword(
+  accountId: string,
+  password: string
+): Promise<XboxAccount> {
+  const data = (await sendJson(`/api/xbox/accounts/${accountId}/password`, "PATCH", {
+    password
+  })) as XboxAccountResponse;
+  return normalizeXboxAccount(data);
+}
+
+export async function changeXboxAccountStatus(
+  accountId: string,
+  status: XboxAccountStatus,
+  statusMessage?: string
+): Promise<XboxAccount> {
+  const body: Record<string, unknown> = { status };
+  if (statusMessage !== undefined) body.statusMessage = statusMessage;
+  const data = (await sendJson(`/api/xbox/accounts/${accountId}/status`, "PATCH", body)) as XboxAccountResponse;
+  return normalizeXboxAccount(data);
+}
+
+export async function getXboxAccountAuditLogs(
+  accountId: string
+): Promise<XboxAccountAuditLog[]> {
+  try {
+    const data = await fetchJson<XboxAccountAuditLogResponse[]>(
+      `/api/xbox/accounts/${accountId}/audit-logs`
+    );
+    return data.map(normalizeXboxAuditLog);
+  } catch {
+    return [];
+  }
 }
 
 export async function rechargeXbox(
