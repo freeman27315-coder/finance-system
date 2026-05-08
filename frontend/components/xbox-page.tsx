@@ -277,7 +277,6 @@ function CreateAccountModal({
 // PR P0.1 编辑账号普通字段
 function EditAccountModal({ account, onClose }: { account: XboxAccount; onClose: () => void }) {
   const queryClient = useQueryClient();
-  const [name, setName] = useState(account.name);
   const [loginEmail, setLoginEmail] = useState(account.loginEmail ?? "");
   const [exchangeRate, setExchangeRate] = useState(
     account.exchangeRate != null ? String(account.exchangeRate) : ""
@@ -286,15 +285,13 @@ function EditAccountModal({ account, onClose }: { account: XboxAccount; onClose:
   const [error, setError] = useState<string | null>(null);
 
   const mutation = useMutation({
-    mutationFn: async () => {
-      if (!name.trim()) throw new Error("账号名不能为空");
-      return updateXboxAccount(account.id, {
-        name: name.trim(),
+    mutationFn: async () =>
+      // 不传 name 字段（后端不变更）。账号编号是不可变主标识,目前也不在此处编辑
+      updateXboxAccount(account.id, {
         loginEmail: loginEmail.trim(),
         exchangeRate: exchangeRate.trim() === "" ? "" : exchangeRate.trim(),
         remark: remark
-      });
-    },
+      }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["xbox-accounts"] });
       await queryClient.invalidateQueries({ queryKey: ["xbox-summary"] });
@@ -303,21 +300,16 @@ function EditAccountModal({ account, onClose }: { account: XboxAccount; onClose:
     onError: (err) => setError(err instanceof Error ? err.message : "保存失败")
   });
 
+  // 显示头部用账号编号(若无,fallback 到老 name 字段)
+  const heading = account.accountNo ?? account.name;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>编辑账号 · {account.name}</CardTitle>
+          <CardTitle>编辑账号 · {heading}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">账号名</div>
-            <input
-              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
-          </div>
           <div className="space-y-1">
             <div className="text-sm text-muted-foreground">登录邮箱</div>
             <input
