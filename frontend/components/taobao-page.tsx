@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRightLeft,
   Banknote,
+  CalendarDays,
   CheckCircle2,
   FileSpreadsheet,
   ListOrdered,
@@ -19,6 +20,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   getAssetWallets,
   getTaobaoShops,
+  getTaobaoWalletDailySummary,
   getTaobaoWalletTransactions,
   importTaobaoExcel,
   transferTaobaoToStoreAlipay,
@@ -192,6 +194,99 @@ function TransactionsModal({
                   </div>
                 );
               })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 日汇总弹窗（按日期聚合该钱包的 IN / OUT / 净 / 笔数）
+// ---------------------------------------------------------------------------
+
+function DailySummaryModal({
+  shop,
+  wallet,
+  walletLabel,
+  onClose
+}: {
+  shop: TaobaoShop;
+  wallet: TaobaoShopWallet;
+  walletLabel: string;
+  onClose: () => void;
+}) {
+  const { data: rows = [], isFetching } = useQuery({
+    queryKey: ["taobao-wallet-daily-summary", shop.id, wallet.id],
+    queryFn: () => getTaobaoWalletDailySummary(shop.id, wallet.id)
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Card className="flex max-h-[80vh] w-full max-w-3xl flex-col">
+        <CardHeader>
+          <div className="flex items-center justify-between gap-3">
+            <CardTitle>
+              {shop.name} · {walletLabel} · 日汇总
+            </CardTitle>
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              <X className="h-4 w-4" aria-hidden="true" />
+              关闭
+            </Button>
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            当前余额 <span className="tabular-nums">{formatMoney(wallet.balanceMinor, "CNY")}</span>
+            <span className="mx-2">·</span>
+            按日期降序展示每日入账/出账/净额/笔数
+          </div>
+        </CardHeader>
+        <CardContent className="flex-1 overflow-y-auto">
+          {rows.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border px-3 py-10 text-center text-sm text-muted-foreground">
+              {isFetching ? "加载中..." : "暂无流水"}
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-md border border-border">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/40 text-xs text-muted-foreground">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">日期</th>
+                    <th className="px-3 py-2 text-right font-medium">入账</th>
+                    <th className="px-3 py-2 text-right font-medium">出账</th>
+                    <th className="px-3 py-2 text-right font-medium">净额</th>
+                    <th className="px-3 py-2 text-right font-medium">笔数</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {rows.map((row) => {
+                    const netColor =
+                      row.netAmountMinor > 0
+                        ? "text-green-600"
+                        : row.netAmountMinor < 0
+                          ? "text-red-600"
+                          : "text-muted-foreground";
+                    return (
+                      <tr key={row.date} className="hover:bg-muted/30">
+                        <td className="px-3 py-2 font-medium tabular-nums">{row.date}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-green-600">
+                          {row.inAmountMinor > 0 ? formatMoney(row.inAmountMinor, "CNY") : "-"}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-red-600">
+                          {row.outAmountMinor > 0 ? formatMoney(row.outAmountMinor, "CNY") : "-"}
+                        </td>
+                        <td className={cn("px-3 py-2 text-right font-semibold tabular-nums", netColor)}>
+                          {row.netAmountMinor > 0 ? "+" : ""}
+                          {formatMoney(row.netAmountMinor, "CNY")}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+                          {row.count}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </CardContent>
@@ -635,12 +730,14 @@ function ReportRow({
 function WalletRow({
   row,
   onShowTransactions,
+  onShowDailySummary,
   onWithdraw,
   onTransferToStoreAlipay,
   maturityInfo
 }: {
   row: WalletRowDef;
   onShowTransactions: (wallet: TaobaoShopWallet, label: string) => void;
+  onShowDailySummary: (wallet: TaobaoShopWallet, label: string) => void;
   onWithdraw: () => void;
   onTransferToStoreAlipay: () => void;
   // PR #85：聚合冻结行的"待解冻"信息条，从 GET shops 实时聚合数据来
@@ -695,6 +792,14 @@ function WalletRow({
               <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />
               流水
             </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onShowDailySummary(row.wallet, row.label)}
+            >
+              <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+              日汇总
+            </Button>
           </div>
         </div>
         {showMaturityBar ? (
@@ -714,12 +819,14 @@ function WalletRow({
 function ShopCard({
   shop,
   onShowTransactions,
+  onShowDailySummary,
   onWithdraw,
   onTransferToStoreAlipay,
   onImport
 }: {
   shop: TaobaoShop;
   onShowTransactions: (wallet: TaobaoShopWallet, label: string) => void;
+  onShowDailySummary: (wallet: TaobaoShopWallet, label: string) => void;
   onWithdraw: () => void;
   onTransferToStoreAlipay: () => void;
   onImport: () => void;
@@ -794,6 +901,16 @@ function ShopCard({
               <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />
               流水
             </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                onShowDailySummary(shop.storeAlipayWallet, "店铺支付宝")
+              }
+            >
+              <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+              日汇总
+            </Button>
           </div>
         </div>
         <div className="divide-y divide-border rounded-md border border-border">
@@ -802,6 +919,7 @@ function ShopCard({
               key={row.kind}
               row={row}
               onShowTransactions={onShowTransactions}
+              onShowDailySummary={onShowDailySummary}
               onWithdraw={onWithdraw}
               onTransferToStoreAlipay={onTransferToStoreAlipay}
               maturityInfo={
@@ -834,6 +952,11 @@ export function TaobaoPage() {
   const [transferShop, setTransferShop] = useState<TaobaoShop | null>(null);
   const [importShop, setImportShop] = useState<TaobaoShop | null>(null);
   const [transactionsTarget, setTransactionsTarget] = useState<{
+    shop: TaobaoShop;
+    wallet: TaobaoShopWallet;
+    label: string;
+  } | null>(null);
+  const [dailySummaryTarget, setDailySummaryTarget] = useState<{
     shop: TaobaoShop;
     wallet: TaobaoShopWallet;
     label: string;
@@ -878,6 +1001,9 @@ export function TaobaoPage() {
               onShowTransactions={(wallet, label) =>
                 setTransactionsTarget({ shop, wallet, label })
               }
+              onShowDailySummary={(wallet, label) =>
+                setDailySummaryTarget({ shop, wallet, label })
+              }
               onWithdraw={() => setWithdrawShop(shop)}
               onTransferToStoreAlipay={() => setTransferShop(shop)}
               onImport={() => setImportShop(shop)}
@@ -905,6 +1031,14 @@ export function TaobaoPage() {
           wallet={transactionsTarget.wallet}
           walletLabel={transactionsTarget.label}
           onClose={() => setTransactionsTarget(null)}
+        />
+      ) : null}
+      {dailySummaryTarget ? (
+        <DailySummaryModal
+          shop={dailySummaryTarget.shop}
+          wallet={dailySummaryTarget.wallet}
+          walletLabel={dailySummaryTarget.label}
+          onClose={() => setDailySummaryTarget(null)}
         />
       ) : null}
 

@@ -30,6 +30,7 @@ import type {
   TaobaoShop,
   TaobaoShopWallet,
   TaobaoStoreAlipayWallet,
+  TaobaoWalletDailySummary,
   TaobaoWalletTransaction,
   Vendor,
   VendorTransaction,
@@ -668,6 +669,29 @@ function normalizeTaobaoWalletTransaction(tx: TaobaoWalletTransactionResponse): 
   };
 }
 
+type TaobaoWalletDailySummaryResponse = {
+  date: string;
+  inAmount?: string | number;
+  in_amount?: string | number;
+  outAmount?: string | number;
+  out_amount?: string | number;
+  netAmount?: string | number;
+  net_amount?: string | number;
+  count: number;
+};
+
+function normalizeTaobaoWalletDailySummary(
+  row: TaobaoWalletDailySummaryResponse
+): TaobaoWalletDailySummary {
+  return {
+    date: row.date,
+    inAmountMinor: decimalToMinor(row.inAmount ?? row.in_amount ?? "0", "CNY"),
+    outAmountMinor: decimalToMinor(row.outAmount ?? row.out_amount ?? "0", "CNY"),
+    netAmountMinor: decimalToMinor(row.netAmount ?? row.net_amount ?? "0", "CNY"),
+    count: Number(row.count ?? 0)
+  };
+}
+
 function normalizeImportReport(data: TaobaoImportReportResponse): TaobaoImportReport {
   return {
     shopName: data.shopName ?? data.shop_name ?? "",
@@ -832,6 +856,25 @@ export async function getTaobaoWalletTransactions(
     return data.map(normalizeTaobaoWalletTransaction);
   } catch {
     return mockTaobaoWalletTransactions[walletId] ?? [];
+  }
+}
+
+export async function getTaobaoWalletDailySummary(
+  shopId: string,
+  walletId: string,
+  options?: { from?: string; to?: string }
+): Promise<TaobaoWalletDailySummary[]> {
+  const qs = new URLSearchParams();
+  if (options?.from) qs.set("from", options.from);
+  if (options?.to) qs.set("to", options.to);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  try {
+    const data = await fetchJson<TaobaoWalletDailySummaryResponse[]>(
+      `/api/taobao/shops/${shopId}/wallets/${walletId}/daily-summary${suffix}`
+    );
+    return data.map(normalizeTaobaoWalletDailySummary);
+  } catch {
+    return [];
   }
 }
 
