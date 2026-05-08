@@ -823,3 +823,97 @@ def list_wallet_settings_endpoint(
 ) -> list[XboxWalletMethodOut]:
     methods = list_wallet_methods(db, only_active=only_active)
     return [serialize_method(m) for m in methods]
+
+
+# ----- 资金池可选钱包列表（CEO 2026-05-08 Q1A：全部钱包大类都能当资金池）-----
+
+
+class XboxPoolOptionWallet(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    id: int
+    name: str
+    currency: str
+    full_path: str  # 含父级路径,如 "支付宝钱包 / 丙火网络支付宝"
+
+
+class XboxPoolOptionGroup(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    group_code: str  # ASSET_RMB / ASSET_USDT / ASSET_USD / TAOBAO / TAIWAN / VENDOR / XBOX
+    group_label: str
+    wallets: list[XboxPoolOptionWallet]
+
+
+# 钱包大类显示标签 + 顺序
+_GROUP_META: list[tuple[str, str]] = [
+    ("ASSET_RMB", "资产 RMB"),
+    ("ASSET_USDT", "资产 USDT"),
+    ("ASSET_USD", "资产 USD"),
+    ("TAOBAO", "淘宝"),
+    ("TAIWAN", "台湾"),
+    ("VENDOR", "供应商"),
+    ("XBOX", "XBOX"),
+]
+
+
+@router.get(
+    "/wallet-pool-options",
+    response_model=list[XboxPoolOptionGroup],
+    response_model_by_alias=True,
+)
+def list_wallet_pool_options(db: Session = Depends(get_db)) -> list[XboxPoolOptionGroup]:
+    """返回所有可作"资金池"的钱包,按大类分组（CEO Q1A：全部钱包大类都行）。
+
+    校验规则: 销售记录创建/修改时,sale_currency 必须等于钱包 currency,
+    所以前端可在所有大类下挑,后端会按币种校验拒绝不匹配的组合。
+    """
+    from src.models.wallet import Wallet  # 局部 import 避免循环依赖问题
+
+    # 取所有非 group + 未删除的叶子钱包
+    wallets = list(
+        db.scalars(
+            select(Wallet)
+            .where(Wallet.is_group.is_(False), Wallet.deleted_at.is_(None))
+            .order_by(Wallet.id)
+        )
+    )
+
+    # 计算每个钱包的"完整路径"(从根到自己)
+    by_id = {w.id: w for w in db.scalars(select(Wallet))}
+
+    def full_path(w: Wallet) -> str:
+        parts: list[str] = []
+        cur: Wallet | None = w
+        while cur is not None:
+            parts.append(cur.name)
+            cur = by_id.get(cur.parent_id) if cur.parent_id is not None else None
+        return " / ".join(reversed(parts))
+
+    # 按 type 分组
+    by_type: dict[str, list[Wallet]] = {}
+    for w in wallets:
+        type_value = w.type.value if hasattr(w.type, "value") else str(w.type)
+        by_type.setdefault(type_value, []).append(w)
+
+    out: list[XboxPoolOptionGroup] = []
+    for type_code, label in _GROUP_META:
+        items = by_type.get(type_code, [])
+        if not items:
+            continue
+        out.append(
+            XboxPoolOptionGroup(
+                group_code=type_code,
+                group_label=label,
+                wallets=[
+                    XboxPoolOptionWallet(
+                        id=w.id,
+                        name=w.name,
+                        currency=w.currency.value if hasattr(w.currency, "value") else str(w.currency),
+                        full_path=full_path(w),
+                    )
+                    for w in items
+                ],
+            )
+        )
+    return out

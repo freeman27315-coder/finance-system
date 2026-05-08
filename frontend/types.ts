@@ -151,6 +151,20 @@ export type XboxWalletMethod = {
   items: XboxWalletItem[];
 };
 
+// 资金池下拉选项（按钱包大类分组）—— GET /xbox/wallet-pool-options
+export type XboxPoolOptionWallet = {
+  id: string;
+  name: string;
+  currency: string;
+  fullPath: string; // "RMB钱包 / 支付宝钱包 / 丙火网络支付宝"
+};
+
+export type XboxPoolOptionGroup = {
+  groupCode: string; // ASSET_RMB / TAOBAO / TAIWAN ...
+  groupLabel: string; // 资产 RMB / 淘宝 / 台湾
+  wallets: XboxPoolOptionWallet[];
+};
+
 export type XboxTransaction = {
   id: string;
   accountId: string;
