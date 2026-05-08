@@ -461,6 +461,7 @@ export async function updateXboxAccount(
   accountId: string,
   payload: {
     name?: string;
+    accountNo?: string;
     loginEmail?: string;
     exchangeRate?: string;
     rmbCost?: string;
@@ -470,6 +471,7 @@ export async function updateXboxAccount(
 ): Promise<XboxAccount> {
   const body: Record<string, unknown> = {};
   if (payload.name !== undefined) body.name = payload.name;
+  if (payload.accountNo !== undefined) body.accountNo = payload.accountNo;
   if (payload.loginEmail !== undefined) body.loginEmail = payload.loginEmail;
   if (payload.exchangeRate !== undefined) body.exchangeRate = payload.exchangeRate;
   if (payload.rmbCost !== undefined) body.rmbCost = payload.rmbCost;

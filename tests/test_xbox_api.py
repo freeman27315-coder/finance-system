@@ -241,3 +241,40 @@ def test_existing_xbox_data_compatible(client):
     assert body["hasPassword"] is False
     assert body["accountNo"] is None
     assert body["loginEmail"] is None
+
+
+def test_patch_account_can_change_account_no(client):
+    """编辑接口支持改 account_no,会同步 name + 写审计。"""
+    body = client.post(
+        "/xbox/accounts",
+        json={"name": "TMP", "country": "US", "accountNo": "OLD-001"},
+    ).json()
+    aid = body["id"]
+
+    r = client.patch(f"/xbox/accounts/{aid}", json={"accountNo": "NEW-002"})
+    assert r.status_code == 200, r.text
+    assert r.json()["accountNo"] == "NEW-002"
+    # name 也应同步成新 account_no(前端用 account_no 作主标识)
+    assert r.json()["name"] == "NEW-002"
+
+    logs = client.get(f"/xbox/accounts/{aid}/audit-logs").json()
+    detail = next(l["detail"] for l in logs if l["action"] == "updated")
+    assert "account_no" in detail
+    assert "OLD-001" in detail
+    assert "NEW-002" in detail
+
+
+def test_patch_account_no_conflict_returns_400(client):
+    """改 account_no 时新编号已被占用 → 400。"""
+    client.post(
+        "/xbox/accounts",
+        json={"name": "A1", "country": "US", "accountNo": "TAKEN"},
+    )
+    body2 = client.post(
+        "/xbox/accounts",
+        json={"name": "A2", "country": "US", "accountNo": "FREE"},
+    ).json()
+
+    r = client.patch(f"/xbox/accounts/{body2['id']}", json={"accountNo": "TAKEN"})
+    assert r.status_code == 400
+    assert "已被其他账号占用" in r.json()["detail"]
