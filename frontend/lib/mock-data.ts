@@ -294,6 +294,16 @@ export const mockVendorTransactions: Record<string, VendorTransaction[]> = {
   ]
 };
 
+const _xboxStubExtra = {
+  accountNo: null,
+  loginEmail: null,
+  hasPassword: false,
+  exchangeRate: null,
+  status: "active" as const,
+  statusMessage: null,
+  lastSyncedAt: null
+};
+
 export const mockXboxAccounts: XboxAccount[] = [
   {
     id: "xbox-us-1",
@@ -303,7 +313,8 @@ export const mockXboxAccounts: XboxAccount[] = [
     rmbCostMinor: 28_000_00,
     localBalanceMinor: 3_840_00,
     remark: "主号",
-    createdAt: "2026-03-12T08:00:00.000Z"
+    createdAt: "2026-03-12T08:00:00.000Z",
+    ..._xboxStubExtra
   },
   {
     id: "xbox-us-2",
@@ -313,7 +324,8 @@ export const mockXboxAccounts: XboxAccount[] = [
     rmbCostMinor: 12_500_00,
     localBalanceMinor: 1_720_00,
     remark: null,
-    createdAt: "2026-03-30T03:20:00.000Z"
+    createdAt: "2026-03-30T03:20:00.000Z",
+    ..._xboxStubExtra
   },
   {
     id: "xbox-uk-1",
@@ -323,7 +335,8 @@ export const mockXboxAccounts: XboxAccount[] = [
     rmbCostMinor: 18_400_00,
     localBalanceMinor: 2_100_00,
     remark: "英区主力",
-    createdAt: "2026-04-02T05:00:00.000Z"
+    createdAt: "2026-04-02T05:00:00.000Z",
+    ..._xboxStubExtra
   }
 ];
 
