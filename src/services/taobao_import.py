@@ -433,14 +433,29 @@ def _auto_release_aggregator(
         remark = f"导入自动解冻 {group_count} 笔（{date_label} 到期批次）"
 
         debit(session, shop.aggregator_frozen_wallet_id, group_amount, remark=remark)
-        # available IN 写 business_date = 这批的 mature 那天,用于日汇总聚合
-        credit(
-            session,
-            shop.aggregator_available_wallet_id,
-            group_amount,
-            remark=remark,
-            business_date=day_start.date(),
+
+        # available IN：若该 business_date 已有 IN 流水（之前 release 过同日期）,
+        # 累加 amount 而不是新建,避免流水抽屉里同一天出现多条 release IN
+        existing = session.scalar(
+            select(WalletTransaction).where(
+                WalletTransaction.wallet_id == shop.aggregator_available_wallet_id,
+                WalletTransaction.direction == TransactionDirection.IN.value,
+                WalletTransaction.business_date == day_start.date(),
+            )
         )
+        if existing is not None:
+            existing.amount = Decimal(existing.amount) + group_amount
+            existing.remark = f"导入自动解冻（{date_label} 累计追加,新增 {group_count} 笔）"
+            avail_wallet = session.get(Wallet, shop.aggregator_available_wallet_id)
+            avail_wallet.balance = Decimal(avail_wallet.balance) + group_amount
+        else:
+            credit(
+                session,
+                shop.aggregator_available_wallet_id,
+                group_amount,
+                remark=remark,
+                business_date=day_start.date(),
+            )
 
         # 幂等保护：清这批 frozen IN 的 mature_at
         for tx in txs_in_group:

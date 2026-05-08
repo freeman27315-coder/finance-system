@@ -1075,6 +1075,59 @@ def test_auto_release_groups_by_mature_date_writes_business_date(client):
     assert avail_in_txs[1].business_date == date(2026, 5, 8)
 
 
+def test_auto_release_merges_same_business_date_when_existing(client):
+    """同 business_date 的 release 应该累加 amount 而不是新建,避免流水重复。
+
+    场景：5/9 第一次导入 release ¥100（business_date=5/2）。
+          5/9 晚上又导一次,新成熟的 ¥50（business_date 还是 5/2）应该
+          累加到第一笔（变 ¥150）,不是新建第二笔。
+    """
+    from src.models.wallet import WalletTransaction
+    from sqlalchemy import select
+
+    shop = _shop_by_name("丙火网络")
+
+    # 第 1 批：mature_at = 5/2,¥100
+    _seed_aggregator_frozen_tx(
+        shop, Decimal("100"),
+        datetime(2026, 5, 2, 10, 0, 0),
+        order_number="MERGE_502_A",
+    )
+    r1 = _post_import(client, shop.id, _build_xlsx([]))
+    assert r1.status_code == 200
+    assert Decimal(r1.json()["autoReleasedAmount"]) == Decimal("100")
+
+    # 第 2 批：mature_at 也在 5/2,¥50（模拟稍后又有同一天到期的订单进来）
+    _seed_aggregator_frozen_tx(
+        shop, Decimal("50"),
+        datetime(2026, 5, 2, 18, 0, 0),
+        order_number="MERGE_502_B",
+    )
+    r2 = _post_import(client, shop.id, _build_xlsx([]))
+    assert r2.status_code == 200
+    assert Decimal(r2.json()["autoReleasedAmount"]) == Decimal("50")
+
+    # 关键：available 钱包应该只有 1 笔 IN（合并）,不是 2 笔
+    db = database.SessionLocal()
+    try:
+        avail_in_502 = list(db.scalars(
+            select(WalletTransaction)
+            .where(
+                WalletTransaction.wallet_id == shop.aggregator_available_wallet_id,
+                WalletTransaction.direction == "in",
+                WalletTransaction.business_date == date(2026, 5, 2),
+            )
+        ))
+    finally:
+        db.close()
+
+    assert len(avail_in_502) == 1
+    assert Decimal(avail_in_502[0].amount) == Decimal("150")  # 100 + 50
+
+    # 余额对账
+    assert _wallet_balance(shop.aggregator_available_wallet_id) == Decimal("150.000000")
+
+
 def test_daily_summary_available_uses_business_date(client):
     """聚合可提现日汇总按 business_date(=mature_at 那天) 散开,不再挤在 release 操作日。"""
     shop = _shop_by_name("丙火网络")
