@@ -905,6 +905,7 @@ _GROUP_META: list[tuple[str, str]] = [
 )
 def list_wallet_pool_options(
     xbox_only: bool = Query(True, alias="xboxOnly"),
+    include_groups: bool = Query(False, alias="includeGroups"),
     db: Session = Depends(get_db),
 ) -> list[XboxPoolOptionGroup]:
     """返回可作"资金池"的钱包,按大类分组。
@@ -912,19 +913,20 @@ def list_wallet_pool_options(
     CEO 2026-05-08 Q2:A - 默认 ``xboxOnly=true``,只返回 XBOX 销售归口理论值钱包,
     防止客服误选实际值钱包。前端可显式传 ``?xboxOnly=false`` 取全部钱包(高级模式)。
 
+    ``includeGroups`` (默认 false):
+    - true 时也返回 group 钱包(用于对账映射,允许选店铺总钱包)
+    - false 时只返回叶子钱包(给销售记录资金池下拉用,group 不能存余额)
+
     校验规则: 销售记录创建/修改时, sale_currency 必须等于钱包 currency,
     后端按币种校验拒绝不匹配的组合。
     """
     from src.models.wallet import Wallet  # 局部 import 避免循环依赖问题
 
-    # 取所有非 group + 未删除的叶子钱包
-    wallets = list(
-        db.scalars(
-            select(Wallet)
-            .where(Wallet.is_group.is_(False), Wallet.deleted_at.is_(None))
-            .order_by(Wallet.id)
-        )
-    )
+    # 取所有未删除的钱包
+    stmt = select(Wallet).where(Wallet.deleted_at.is_(None))
+    if not include_groups:
+        stmt = stmt.where(Wallet.is_group.is_(False))
+    wallets = list(db.scalars(stmt.order_by(Wallet.id)))
 
     # 计算每个钱包的"完整路径"(从根到自己)
     by_id = {w.id: w for w in db.scalars(select(Wallet))}

@@ -226,6 +226,93 @@ def ensure_xbox_default_wallet_settings(
     session.flush()
 
 
+def ensure_xbox_default_reconcile_mappings(session: Session) -> int:
+    """CEO 2026-05-08: 启动时自动建对账映射预设。
+
+    映射规则：
+    - 理论"丙火网络" → 实际"丙火网络（淘宝总,group)" + "丙火网络支付宝（资产 RMB)"
+    - 理论"兔仔电玩" → 实际"兔仔电玩（淘宝总,group,已含店铺支付宝)"
+    - 理论"小小电玩" → 实际"小小电玩（淘宝总,group)" + "小小电玩支付宝（资产 RMB)"
+    - 理论"TOM支付宝" → 实际"TOM支付宝（资产 RMB)"
+    - 台湾 5 个理论钱包 → 暂无实际值钱包,CEO 后续自己配
+
+    幂等：已存在的映射不重复建。返回新建的映射条数。
+    """
+    from src.models.xbox import XboxReconcileMapping
+
+    # 找理论值钱包(XBOX_SALES_LEDGER 大类下叶子)
+    theoretical_by_name: dict[str, int] = {}
+    for w in session.scalars(
+        select(Wallet).where(
+            Wallet.type == WalletType.XBOX_SALES_LEDGER.value,
+            Wallet.is_group.is_(False),
+        )
+    ):
+        theoretical_by_name[w.name] = w.id
+
+    # 找实际值钱包
+    def _find_wallet(name: str, wallet_type: str, is_group: Optional[bool] = None) -> Optional[int]:
+        stmt = select(Wallet).where(
+            Wallet.type == wallet_type,
+            Wallet.name == name,
+            Wallet.deleted_at.is_(None),
+        )
+        if is_group is not None:
+            stmt = stmt.where(Wallet.is_group.is_(is_group))
+        wallet = session.scalar(stmt)
+        return wallet.id if wallet else None
+
+    # 准备映射列表
+    plan: list[tuple[str, list[int]]] = []
+
+    # 丙火网络: 总钱包(TAOBAO group) + 丙火网络支付宝(ASSET_RMB)
+    binghuo_total = _find_wallet("丙火网络", WalletType.TAOBAO.value, is_group=True)
+    binghuo_alipay = _find_wallet("丙火网络支付宝", WalletType.ASSET_RMB.value)
+    binghuo_actual = [w for w in [binghuo_total, binghuo_alipay] if w]
+    if "丙火网络" in theoretical_by_name and binghuo_actual:
+        plan.append(("丙火网络", binghuo_actual))
+
+    # 兔仔电玩: 总钱包(已含店铺支付宝)
+    tuzai_total = _find_wallet("兔仔电玩", WalletType.TAOBAO.value, is_group=True)
+    if "兔仔电玩" in theoretical_by_name and tuzai_total:
+        plan.append(("兔仔电玩", [tuzai_total]))
+
+    # 小小电玩
+    xiaoxiao_total = _find_wallet("小小电玩", WalletType.TAOBAO.value, is_group=True)
+    xiaoxiao_alipay = _find_wallet("小小电玩支付宝", WalletType.ASSET_RMB.value)
+    xiaoxiao_actual = [w for w in [xiaoxiao_total, xiaoxiao_alipay] if w]
+    if "小小电玩" in theoretical_by_name and xiaoxiao_actual:
+        plan.append(("小小电玩", xiaoxiao_actual))
+
+    # TOM 支付宝
+    tom = _find_wallet("TOM支付宝", WalletType.ASSET_RMB.value)
+    if "TOM支付宝" in theoretical_by_name and tom:
+        plan.append(("TOM支付宝", [tom]))
+
+    # 应用映射(幂等)
+    created = 0
+    for theoretical_name, actual_ids in plan:
+        th_id = theoretical_by_name[theoretical_name]
+        for ac_id in actual_ids:
+            existing = session.scalar(
+                select(XboxReconcileMapping).where(
+                    XboxReconcileMapping.theoretical_wallet_id == th_id,
+                    XboxReconcileMapping.actual_wallet_id == ac_id,
+                )
+            )
+            if existing is not None:
+                continue
+            session.add(
+                XboxReconcileMapping(
+                    theoretical_wallet_id=th_id,
+                    actual_wallet_id=ac_id,
+                )
+            )
+            created += 1
+    session.flush()
+    return created
+
+
 def soft_delete_old_taiwan_wallets(session: Session) -> list[str]:
     """CEO 2026-05-08 Q3:B - 台湾现有 3 个空钱包(8591余额/银行卡/超商代收金流余额)删除。
 

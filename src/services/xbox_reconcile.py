@@ -46,8 +46,9 @@ def create_mapping(
 ) -> XboxReconcileMapping:
     """新建对账映射。校验：
     - 两个钱包都存在
-    - 理论值必须是 XBOX_SALES_LEDGER 大类
+    - 理论值必须是 XBOX_SALES_LEDGER 大类 + 非 group(叶子)
     - 实际值不能是 XBOX_SALES_LEDGER 大类（自己映射自己没意义）
+    - 实际值可以是 group 钱包(对账时会递归汇总子钱包流水)
     - 币种必须一致
     - 不重复
     """
@@ -62,6 +63,8 @@ def create_mapping(
     ac_type = actual.type.value if hasattr(actual.type, "value") else actual.type
     if th_type != WalletType.XBOX_SALES_LEDGER.value:
         raise ValueError("理论值钱包必须属于 XBOX_SALES_LEDGER 大类")
+    if theoretical.is_group:
+        raise ValueError("理论值钱包必须是叶子,不能是 group")
     if ac_type == WalletType.XBOX_SALES_LEDGER.value:
         raise ValueError("实际值钱包不能也是 XBOX_SALES_LEDGER 大类")
 
@@ -128,6 +131,28 @@ def _theoretical_total_for_day(
     return Decimal(str(total or 0))
 
 
+def _collect_leaf_descendants(session: Session, wallet_id: int) -> list[int]:
+    """递归取该钱包下所有非 group 的子孙钱包 id。
+
+    若 wallet 是叶子,返回 [wallet_id]。
+    若 wallet 是 group,递归收集所有非 group 子孙。
+    """
+    wallet = session.get(Wallet, wallet_id)
+    if wallet is None:
+        return []
+    is_group = bool(wallet.is_group)
+    if not is_group:
+        return [wallet_id]
+    # 递归子孙
+    out: list[int] = []
+    children = list(
+        session.scalars(select(Wallet).where(Wallet.parent_id == wallet_id))
+    )
+    for child in children:
+        out.extend(_collect_leaf_descendants(session, child.id))
+    return out
+
+
 def _actual_total_for_day(
     session: Session,
     actual_wallet_id: int,
@@ -135,21 +160,24 @@ def _actual_total_for_day(
 ) -> Decimal:
     """实际值钱包在指定日期的"IN 流水总额"。
 
+    若 actual_wallet 是 group(店铺总钱包),递归汇总所有子孙叶子的当日 IN 流水。
+
     数据来源：``WalletTransaction``。
-    - wallet_id == actual_wallet_id
     - direction == "in"
-    - business_date == target_date（XBOX 销售归口配套字段）
-      或 created_at 落在当天（兜底,处理没 business_date 的流水）
+    - business_date == target_date 或 created_at 落在当天
 
     优先用 business_date,fallback created_at（与"日汇总"端点逻辑一致）。
     """
     from sqlalchemy import or_
 
+    leaf_ids = _collect_leaf_descendants(session, actual_wallet_id)
+    if not leaf_ids:
+        return Decimal("0")
+
     start, end = _day_range(target_date)
-    # 优先用 business_date,没有的话用 created_at 当天
     total = session.scalar(
         select(sa_func.coalesce(sa_func.sum(WalletTransaction.amount), 0)).where(
-            WalletTransaction.wallet_id == actual_wallet_id,
+            WalletTransaction.wallet_id.in_(leaf_ids),
             WalletTransaction.direction == TransactionDirection.IN.value,
             or_(
                 WalletTransaction.business_date == target_date,

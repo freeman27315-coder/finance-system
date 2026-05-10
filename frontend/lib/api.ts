@@ -997,12 +997,13 @@ type XboxPoolOptionGroupResponse = {
 };
 
 export async function getXboxWalletPoolOptions(
-  options?: { xboxOnly?: boolean }
+  options?: { xboxOnly?: boolean; includeGroups?: boolean }
 ): Promise<XboxPoolOptionGroup[]> {
   const xboxOnly = options?.xboxOnly ?? true;
+  const includeGroups = options?.includeGroups ?? false;
   try {
     const data = await fetchJson<XboxPoolOptionGroupResponse[]>(
-      `/api/xbox/wallet-pool-options?xboxOnly=${xboxOnly}`
+      `/api/xbox/wallet-pool-options?xboxOnly=${xboxOnly}&includeGroups=${includeGroups}`
     );
     return data.map((g) => ({
       groupCode: g.groupCode ?? g.group_code ?? "",

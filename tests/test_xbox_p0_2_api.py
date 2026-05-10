@@ -21,8 +21,9 @@ from src.main import app
 from src.models.wallet import Wallet, WalletType, create_wallet, Currency
 from src.services.assets import ensure_default_asset_wallets
 from src.services.taiwan import ensure_default_taiwan_wallets
-from src.services.taobao import ensure_default_taobao_wallets
+from src.services.taobao import ensure_default_taobao_wallets, ensure_shop_total_group_wallets
 from src.services.xbox_sales_ledger import (
+    ensure_xbox_default_reconcile_mappings,
     ensure_xbox_default_wallet_settings,
     ensure_xbox_sales_ledger_wallets,
     soft_delete_old_taiwan_wallets,
@@ -42,6 +43,9 @@ def client(tmp_path):
         soft_delete_old_taiwan_wallets(db)
         leaf_id_by_name = ensure_xbox_sales_ledger_wallets(db)
         ensure_xbox_default_wallet_settings(db, leaf_id_by_name)
+        # 店铺总钱包 + 自动对账映射（CEO 2026-05-08）
+        ensure_shop_total_group_wallets(db)
+        ensure_xbox_default_reconcile_mappings(db)
         db.commit()
     finally:
         db.close()
@@ -630,16 +634,37 @@ def test_orders_filtered_by_date_range(client):
 
 def test_reconcile_mapping_crud_with_currency_validation(client):
     """对账映射 CRUD + 币种一致性校验。"""
-    # 取理论值"丙火网络" (CNY) + 实际值"丙火网络支付宝" (CNY)
-    th_id = _get_pool_wallet_id("丙火网络")
-    ac_id = _get_pool_wallet_id("丙火网络支付宝")
+    # 用未自动建好的对：理论"TOM支付宝" + 实际"BOSS支付宝"(都 CNY,但没自动配对过)
+    th_id = _get_pool_wallet_id("TOM支付宝")  # 这是 ASSET_RMB,不是理论值! 需取另一个
+    # 实际上测试需要用 XBOX_SALES_LEDGER 的理论钱包
+    # 找"TOM支付宝"理论钱包(在 XBOX_SALES_LEDGER 大类下,name 也是 "TOM支付宝")
+    db = database.SessionLocal()
+    try:
+        from src.models.wallet import Wallet, WalletType
+        tom_th = db.scalar(
+            select(Wallet).where(
+                Wallet.type == WalletType.XBOX_SALES_LEDGER.value,
+                Wallet.name == "TOM支付宝",
+            )
+        )
+        tom_th_id = tom_th.id
+        boss_actual = db.scalar(
+            select(Wallet).where(
+                Wallet.type == WalletType.ASSET_RMB.value,
+                Wallet.name == "BOSS支付宝",
+            )
+        )
+        boss_actual_id = boss_actual.id
+    finally:
+        db.close()
 
-    # 创建
+    # 创建（TOM 理论 → BOSS 实际,没自动配过,可以新建）
     r = client.post("/xbox/reconcile-mappings", json={
-        "theoreticalWalletId": th_id, "actualWalletId": ac_id
+        "theoreticalWalletId": tom_th_id, "actualWalletId": boss_actual_id
     })
     assert r.status_code == 201, r.text
     mapping_id = r.json()["id"]
+    th_id, ac_id = tom_th_id, boss_actual_id
 
     # 列表
     rs = client.get("/xbox/reconcile-mappings").json()
@@ -677,6 +702,121 @@ def test_reconcile_mapping_theoretical_must_be_xbox_sales_ledger(client):
         "actualWalletId": actual,
     })
     assert r.status_code == 400
+
+
+def test_shop_total_group_wallet_aggregates_children_for_reconcile(client):
+    """店铺总钱包(group)是 5 个 TAOBAO 子钱包的父,对账时递归汇总它们的 IN 流水。"""
+    from datetime import date as _date, datetime as _datetime
+    from src.models.wallet import (
+        Wallet, WalletType, WalletTransaction, TransactionDirection
+    )
+
+    # 找丙火网络总钱包(应自动建好)
+    db = database.SessionLocal()
+    try:
+        binghuo_total = db.scalar(
+            select(Wallet).where(
+                Wallet.type == WalletType.TAOBAO.value,
+                Wallet.name == "丙火网络",
+                Wallet.is_group.is_(True),
+                Wallet.parent_id.is_(None),
+            )
+        )
+        assert binghuo_total is not None, "店铺总钱包未建"
+
+        # 找一个子钱包（如丙火网络 银行卡）
+        binghuo_bank = db.scalar(
+            select(Wallet).where(
+                Wallet.type == WalletType.TAOBAO.value,
+                Wallet.name == "丙火网络 银行卡",
+                Wallet.parent_id == binghuo_total.id,
+            )
+        )
+        assert binghuo_bank is not None, "丙火网络 银行卡 应挂在总钱包下"
+
+        # 注入一笔 IN 到子钱包
+        tx = WalletTransaction(
+            wallet_id=binghuo_bank.id,
+            amount=Decimal("500"),
+            direction=TransactionDirection.IN.value,
+            remark="测试入账",
+            created_at=_datetime(2026, 5, 9, 10, 0, 0),
+            business_date=_date(2026, 5, 9),
+        )
+        db.add(tx)
+        binghuo_bank.balance = Decimal(binghuo_bank.balance) + Decimal("500")
+        db.commit()
+        binghuo_total_id = binghuo_total.id
+    finally:
+        db.close()
+
+    # 自动对账映射应已经把"丙火网络"理论 → 总钱包 + 丙火支付宝
+    # 调对账报告
+    r = client.get("/xbox/reconcile?date=2026-05-09")
+    assert r.status_code == 200
+    report = r.json()
+
+    # 找丙火网络理论值那一行
+    binghuo_row = next(
+        row for row in report
+        if row["theoreticalWallet"]["name"] == "丙火网络"
+    )
+    # 实际金额 = 500（从子钱包递归汇总）
+    assert Decimal(binghuo_row["actualTotal"]) == Decimal("500")
+
+
+def test_default_reconcile_mappings_auto_created(client):
+    """启动自动建对账映射: 丙火/兔仔/小小 + TOM支付宝。"""
+    mappings = client.get("/xbox/reconcile-mappings").json()
+    # 至少有 4 条 (丙火 2 + 兔仔 1 + 小小 2 + TOM 1 = 6 条)
+    # 准确数: 6 条
+    assert len(mappings) >= 4
+
+    # 验证关键映射存在
+    db = database.SessionLocal()
+    try:
+        from src.models.wallet import Wallet, WalletType
+
+        binghuo_th = db.scalar(
+            select(Wallet).where(
+                Wallet.type == WalletType.XBOX_SALES_LEDGER.value,
+                Wallet.name == "丙火网络",
+                Wallet.is_group.is_(False),
+            )
+        )
+        binghuo_total = db.scalar(
+            select(Wallet).where(
+                Wallet.type == WalletType.TAOBAO.value,
+                Wallet.name == "丙火网络",
+                Wallet.is_group.is_(True),
+            )
+        )
+        assert binghuo_th is not None
+        assert binghuo_total is not None
+
+        # 应有映射: 丙火理论 → 丙火总钱包(group)
+        binghuo_mapping = next(
+            (m for m in mappings
+             if int(m["theoreticalWalletId"]) == binghuo_th.id
+             and int(m["actualWalletId"]) == binghuo_total.id),
+            None
+        )
+        assert binghuo_mapping is not None, "丙火网络理论 → 丙火总钱包 映射未自动建"
+    finally:
+        db.close()
+
+
+def test_wallet_pool_options_include_groups_query(client):
+    """对账映射用 includeGroups=true 取所有钱包(含 group)。"""
+    r = client.get("/xbox/wallet-pool-options?xboxOnly=false&includeGroups=true")
+    assert r.status_code == 200
+    groups = r.json()
+    # 应该能看到 TAOBAO 类下的丙火网络/兔仔电玩/小小电玩 group 钱包
+    taobao_group = next(g for g in groups if g["groupCode"] == "TAOBAO")
+    names = {w["name"] for w in taobao_group["wallets"]}
+    assert "丙火网络" in names
+    assert "兔仔电玩" in names
+    assert "小小电玩" in names
 
 
 def test_reconcile_report_shows_diff_per_theoretical_wallet(client):
