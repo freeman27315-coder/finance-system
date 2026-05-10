@@ -338,3 +338,27 @@ class XboxWalletItem(Base):
     )
 
     method: Mapped[XboxWalletMethod] = relationship(back_populates="items")
+
+
+class XboxChangeLog(Base):
+    """订单 / 销售记录改字段的变更审计（CEO 2026-05-08 Q3:A）。
+
+    通用日志表,entity_type 标识来自哪种实体（order / sale_record）。
+    每次改字段、改资金池、改售价等都记一条,便于事后追溯"谁什么时候改了什么"。
+    """
+
+    __tablename__ = "xbox_change_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    # entity_type 取值: "order" / "sale_record"
+    entity_id: Mapped[int] = mapped_column(nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    # action 取值: "created" / "updated" / "completed" / "merged" / "wallet_pool_changed"
+    detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    operator: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=china_now,
+    )

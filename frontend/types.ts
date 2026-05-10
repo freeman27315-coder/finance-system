@@ -160,9 +160,20 @@ export type XboxPoolOptionWallet = {
 };
 
 export type XboxPoolOptionGroup = {
-  groupCode: string; // ASSET_RMB / TAOBAO / TAIWAN ...
-  groupLabel: string; // 资产 RMB / 淘宝 / 台湾
+  groupCode: string; // XBOX_SALES_LEDGER / ASSET_RMB / TAOBAO / TAIWAN ...
+  groupLabel: string; // XBOX 销售归口 / 资产 RMB / 淘宝 / 台湾
   wallets: XboxPoolOptionWallet[];
+};
+
+// 订单 / 销售记录变更日志（GET /xbox/orders/{id}/change-logs 等）
+export type XboxChangeLog = {
+  id: string;
+  entityType: "order" | "sale_record";
+  entityId: string;
+  action: "created" | "updated" | "completed" | "merged" | "wallet_pool_changed";
+  detail: string | null;
+  operator: string | null;
+  createdAt: string;
 };
 
 export type XboxTransaction = {

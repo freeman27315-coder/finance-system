@@ -28,12 +28,33 @@ from src.models.wallet import (
 )
 from src.models.xbox import (
     XboxAccount,
+    XboxChangeLog,
     XboxOrder,
     XboxOrderStatus,
     XboxSaleRecord,
     XboxWalletItem,
 )
 from src.utils.time import china_now
+
+
+def _log_change(
+    session: Session,
+    entity_type: str,
+    entity_id: int,
+    action: str,
+    detail: str,
+    operator: str = "manual",
+) -> None:
+    """写一条变更日志（CEO Q3:A 订单/销售记录审计）。"""
+    log = XboxChangeLog(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        action=action,
+        detail=detail,
+        operator=operator,
+    )
+    session.add(log)
+    session.flush()
 
 
 # 币种 → 钱包应该的 currency
@@ -132,6 +153,14 @@ def create_or_merge_sale_record(
             )
             record.bookkeeping_tx_id = tx.id
 
+        _log_change(
+            session,
+            "sale_record",
+            record.id,
+            "created",
+            f"售价={sale_price} {sale_currency}, 资金池 wallet#{wallet_pool_id} ({wallet_item_label})",
+        )
+
     else:
         # 合单：累加 sale_price + credit 差额
         if existing.sale_currency != sale_currency:
@@ -166,6 +195,14 @@ def create_or_merge_sale_record(
             )
             # 注意：bookkeeping_tx_id 仅记最后一次（实际有多笔流水）
             existing.bookkeeping_tx_id = tx.id
+
+        _log_change(
+            session,
+            "sale_record",
+            existing.id,
+            "merged",
+            f"合单追加 +{diff} {sale_currency} ({product_name}), 新总额 {new_total}",
+        )
 
         record = existing
 
@@ -216,6 +253,8 @@ def update_sale_record_fields(
 
     # 1) 资金池变更（含 currency 变更）→ 旧池 debit 全额,新池 credit 全额
     if pool_changed or currency_changed:
+        old_pool_id = record.wallet_pool_id
+        old_currency = record.sale_currency
         old_amount = Decimal(record.sale_price)
         if old_amount > 0:
             debit(
@@ -235,9 +274,17 @@ def update_sale_record_fields(
         record.wallet_pool_id = new_pool_id
         record.sale_currency = new_currency
         record.sale_price = new_price
+        _log_change(
+            session,
+            "sale_record",
+            record.id,
+            "wallet_pool_changed",
+            f"资金池 wallet#{old_pool_id}({old_currency}) → wallet#{new_pool_id}({new_currency}), 售价 {old_amount} → {new_price}",
+        )
     elif price_changed:
         # 2) 仅价格变更 → diff 调整本池
-        diff = new_price - Decimal(record.sale_price)
+        old_price = Decimal(record.sale_price)
+        diff = new_price - old_price
         if diff > 0:
             tx = credit(
                 session,
@@ -254,6 +301,13 @@ def update_sale_record_fields(
                 remark=f"XBOX 销售 #{record.id} 售价调整 {diff}",
             )
         record.sale_price = new_price
+        _log_change(
+            session,
+            "sale_record",
+            record.id,
+            "updated",
+            f"售价 {old_price} → {new_price} ({record.sale_currency})",
+        )
 
     # 3) 更新其他普通字段
     if sale_date is not None:

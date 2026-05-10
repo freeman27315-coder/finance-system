@@ -18,9 +18,13 @@ class WalletType(str, Enum):
     ASSET_USDT = "ASSET_USDT"
     ASSET_USD = "ASSET_USD"  # PR #110 (P0.2): XBOX USD 销售收入资金池
     VENDOR = "VENDOR"
-    XBOX = "XBOX"
+    XBOX = "XBOX"  # XBOX 账号本身（旧逻辑,不是钱包）
     TAOBAO = "TAOBAO"
     TAIWAN = "TAIWAN"
+    # PR P0.2++ XBOX 销售归口"理论值"钱包大类
+    # 客服在 XBOX 模块录入销售时选择的"出售渠道"对应的钱包,
+    # 与"实际值"(千牛后台导入产生的真实钱包)物理隔离,便于对账
+    XBOX_SALES_LEDGER = "XBOX_SALES_LEDGER"
 
 
 class Currency(str, Enum):

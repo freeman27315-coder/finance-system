@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from src.models.xbox import (
     XboxAccount,
+    XboxChangeLog,
     XboxOrder,
     XboxOrderStatus,
     XboxWalletItem,
@@ -28,6 +29,24 @@ from src.models.xbox import (
 )
 from src.services.xbox_sale import create_or_merge_sale_record
 from src.utils.time import china_now
+
+
+def _log_order_change(
+    session: Session,
+    order_id: int,
+    action: str,
+    detail: str,
+    operator: str = "manual",
+) -> None:
+    log = XboxChangeLog(
+        entity_type="order",
+        entity_id=order_id,
+        action=action,
+        detail=detail,
+        operator=operator,
+    )
+    session.add(log)
+    session.flush()
 
 
 def create_order(
@@ -73,6 +92,12 @@ def create_order(
     )
     session.add(order)
     session.flush()
+    _log_order_change(
+        session,
+        order.id,
+        "created",
+        f"订单号 {order_no.strip()},{amount_local} {currency_local},RMB 成本 {rmb_cost}",
+    )
     return order
 
 
@@ -139,6 +164,12 @@ def update_order_completion(
             order=order,
         )
         sale_record_id = record.id
+        _log_order_change(
+            session,
+            order.id,
+            "completed",
+            f"补齐转销售 #{record.id} ({item.label},{order.sale_price} {order.sale_currency})",
+        )
 
     return order, sale_record_id
 
