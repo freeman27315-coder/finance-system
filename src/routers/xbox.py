@@ -21,6 +21,7 @@ from src.models.xbox import (
     XboxCurrency,
     XboxOrder,
     XboxOrderStatus,
+    XboxReconcileMapping,
     XboxSaleRecord,
     XboxTransaction,
     XboxTransactionType,
@@ -46,6 +47,12 @@ from src.services.xbox_sale import (
     get_sales_summary,
     list_sale_records,
     update_sale_record_fields,
+)
+from src.services.xbox_reconcile import (
+    create_mapping,
+    delete_mapping,
+    get_reconcile_report_for_day,
+    list_mappings,
 )
 from src.services.xbox_wallet_setting import (
     list_wallet_methods,
@@ -1107,3 +1114,90 @@ def get_sale_record_change_logs(
         )
     )
     return [_serialize_change_log(log) for log in logs]
+
+
+# ----- 对账（CEO 2026-05-08 Q1A+Q2A+Q3A+Q4A）-----
+
+
+class XboxReconcileMappingOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    id: int
+    theoretical_wallet_id: int
+    actual_wallet_id: int
+    created_at: str
+
+
+class XboxReconcileMappingCreate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    theoretical_wallet_id: int
+    actual_wallet_id: int
+
+
+def _serialize_mapping(m: XboxReconcileMapping) -> XboxReconcileMappingOut:
+    return XboxReconcileMappingOut(
+        id=m.id,
+        theoretical_wallet_id=m.theoretical_wallet_id,
+        actual_wallet_id=m.actual_wallet_id,
+        created_at=m.created_at.isoformat() if m.created_at else "",
+    )
+
+
+@router.get(
+    "/reconcile-mappings",
+    response_model=list[XboxReconcileMappingOut],
+    response_model_by_alias=True,
+)
+def list_reconcile_mappings_endpoint(db: Session = Depends(get_db)) -> list[XboxReconcileMappingOut]:
+    return [_serialize_mapping(m) for m in list_mappings(db)]
+
+
+@router.post(
+    "/reconcile-mappings",
+    response_model=XboxReconcileMappingOut,
+    response_model_by_alias=True,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_reconcile_mapping_endpoint(
+    request: XboxReconcileMappingCreate,
+    db: Session = Depends(get_db),
+) -> XboxReconcileMappingOut:
+    try:
+        mapping = create_mapping(
+            db,
+            theoretical_wallet_id=request.theoretical_wallet_id,
+            actual_wallet_id=request.actual_wallet_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(mapping)
+    return _serialize_mapping(mapping)
+
+
+@router.delete(
+    "/reconcile-mappings/{mapping_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_reconcile_mapping_endpoint(
+    mapping_id: int,
+    db: Session = Depends(get_db),
+) -> Response:
+    ok = delete_mapping(db, mapping_id)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="映射不存在")
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/reconcile",
+    response_model=list[dict],
+)
+def reconcile_report_endpoint(
+    target_date: date = Query(..., alias="date"),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    """对账报告：每个理论值钱包当天的理论金额 vs 实际金额合计 vs 差异。"""
+    return get_reconcile_report_for_day(db, target_date)

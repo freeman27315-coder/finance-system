@@ -628,6 +628,132 @@ def test_orders_filtered_by_date_range(client):
     assert nos == {"D-5"}
 
 
+def test_reconcile_mapping_crud_with_currency_validation(client):
+    """对账映射 CRUD + 币种一致性校验。"""
+    # 取理论值"丙火网络" (CNY) + 实际值"丙火网络支付宝" (CNY)
+    th_id = _get_pool_wallet_id("丙火网络")
+    ac_id = _get_pool_wallet_id("丙火网络支付宝")
+
+    # 创建
+    r = client.post("/xbox/reconcile-mappings", json={
+        "theoreticalWalletId": th_id, "actualWalletId": ac_id
+    })
+    assert r.status_code == 201, r.text
+    mapping_id = r.json()["id"]
+
+    # 列表
+    rs = client.get("/xbox/reconcile-mappings").json()
+    assert any(m["id"] == mapping_id for m in rs)
+
+    # 重复创建 → 400
+    r2 = client.post("/xbox/reconcile-mappings", json={
+        "theoreticalWalletId": th_id, "actualWalletId": ac_id
+    })
+    assert r2.status_code == 400
+    assert "已存在" in r2.json()["detail"]
+
+    # 删除
+    rd = client.delete(f"/xbox/reconcile-mappings/{mapping_id}")
+    assert rd.status_code == 204
+
+
+def test_reconcile_mapping_currency_mismatch_400(client):
+    """理论 CNY 配实际 USDT → 400。"""
+    th_id = _get_pool_wallet_id("丙火网络")  # CNY
+    usdt = _get_pool_wallet_id("FREEMAN币安")  # USDT
+    r = client.post("/xbox/reconcile-mappings", json={
+        "theoreticalWalletId": th_id, "actualWalletId": usdt
+    })
+    assert r.status_code == 400
+    assert "币种" in r.json()["detail"]
+
+
+def test_reconcile_mapping_theoretical_must_be_xbox_sales_ledger(client):
+    """理论值必须是 XBOX_SALES_LEDGER 大类。"""
+    other = _get_pool_wallet_id("丙火网络支付宝")  # 资产 RMB
+    actual = _get_pool_wallet_id("丙火网络")  # XBOX_SALES_LEDGER
+    r = client.post("/xbox/reconcile-mappings", json={
+        "theoreticalWalletId": other,  # 不对
+        "actualWalletId": actual,
+    })
+    assert r.status_code == 400
+
+
+def test_reconcile_report_shows_diff_per_theoretical_wallet(client):
+    """对账报告：建映射 → 录入销售 → 对账显示理论 ≠ 实际差异。"""
+    from src.models.wallet import credit
+    from datetime import date as date_cls
+
+    pool_a_id = _get_pool_wallet_id("丙火网络支付宝")  # 实际值
+    th_id = _get_pool_wallet_id("丙火网络")  # 理论值
+
+    # 建映射
+    client.post("/xbox/reconcile-mappings", json={
+        "theoreticalWalletId": th_id, "actualWalletId": pool_a_id
+    })
+
+    # 在实际值钱包注入一笔 IN（5/8 ¥1000）
+    db = database.SessionLocal()
+    try:
+        from src.models.wallet import WalletTransaction, TransactionDirection
+        from datetime import datetime as datetime_cls
+
+        wallet = db.get(Wallet, pool_a_id)
+        tx = WalletTransaction(
+            wallet_id=pool_a_id,
+            amount=Decimal("1000"),
+            direction=TransactionDirection.IN.value,
+            remark="实际入账",
+            created_at=datetime_cls(2026, 5, 8, 10, 0, 0),
+            business_date=date_cls(2026, 5, 8),
+        )
+        db.add(tx)
+        wallet.balance = Decimal(wallet.balance) + Decimal("1000")
+        db.commit()
+    finally:
+        db.close()
+
+    # 录入一条 XBOX 销售记录到理论值（5/8 ¥800）
+    # 用 XboxSaleRecord 直接 insert 跳过补齐流程
+    from src.models.xbox import XboxSaleRecord
+    from datetime import date as _date
+
+    db = database.SessionLocal()
+    try:
+        # 找一个 method/item 配丙火网络
+        method_id = client.get("/xbox/wallet-settings").json()[0]["id"]
+        item_id = client.get("/xbox/wallet-settings").json()[0]["items"][0]["id"]
+
+        account = _create_account(client, "RECON-1")
+        record = XboxSaleRecord(
+            account_id=int(account["id"]),
+            sale_date=_date(2026, 5, 8),
+            product_name="测试商品",
+            operator_name="客服A",
+            sale_price=Decimal("800"),
+            sale_currency="CNY",
+            wallet_method_id=method_id,
+            wallet_item_id=item_id,
+            wallet_item_label="丙火网络",
+            wallet_pool_id=th_id,
+        )
+        db.add(record)
+        db.commit()
+    finally:
+        db.close()
+
+    # 调对账报告
+    r = client.get("/xbox/reconcile?date=2026-05-08")
+    assert r.status_code == 200, r.text
+    report = r.json()
+
+    # 找理论"丙火网络"那一行
+    binghuo = next(row for row in report if row["theoreticalWallet"]["id"] == th_id)
+    assert Decimal(binghuo["theoreticalTotal"]) == Decimal("800")
+    assert Decimal(binghuo["actualTotal"]) == Decimal("1000")
+    assert Decimal(binghuo["diff"]) == Decimal("-200")  # 理论 800 - 实际 1000
+
+
 def test_xbox_only_pool_options_excludes_other_categories(client):
     """xboxOnly=false 才返回所有大类。"""
     r1 = client.get("/xbox/wallet-pool-options")  # default true

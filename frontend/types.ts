@@ -176,6 +176,23 @@ export type XboxChangeLog = {
   createdAt: string;
 };
 
+// 对账映射（理论值钱包 ↔ 实际值钱包）
+export type XboxReconcileMapping = {
+  id: string;
+  theoreticalWalletId: string;
+  actualWalletId: string;
+  createdAt: string;
+};
+
+// 对账报告每行（一个理论值钱包 + 它配对的实际值钱包们）
+export type XboxReconcileReportRow = {
+  theoreticalWallet: { id: string; name: string; currency: string };
+  actualWallets: { id: string; name: string; currency: string; total: string }[];
+  theoreticalTotal: string;
+  actualTotal: string;
+  diff: string;
+};
+
 export type XboxTransaction = {
   id: string;
   accountId: string;
