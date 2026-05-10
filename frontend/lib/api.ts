@@ -772,10 +772,14 @@ function _normalizeWalletMethod(m: XboxWalletMethodResponse): XboxWalletMethod {
 export async function getXboxOrders(filter?: {
   accountId?: string;
   status?: XboxOrderStatus;
+  from?: string; // YYYY-MM-DD
+  to?: string;
 }): Promise<XboxOrder[]> {
   const qs = new URLSearchParams();
   if (filter?.accountId) qs.set("accountId", filter.accountId);
   if (filter?.status) qs.set("status", filter.status);
+  if (filter?.from) qs.set("from", filter.from);
+  if (filter?.to) qs.set("to", filter.to);
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   try {
     const data = await fetchJson<XboxOrderResponse[]>(`/api/xbox/orders${suffix}`);
@@ -831,9 +835,13 @@ export async function patchXboxOrder(
 
 export async function getXboxSaleRecords(filter?: {
   accountId?: string;
+  from?: string;
+  to?: string;
 }): Promise<XboxSaleRecord[]> {
   const qs = new URLSearchParams();
   if (filter?.accountId) qs.set("accountId", filter.accountId);
+  if (filter?.from) qs.set("from", filter.from);
+  if (filter?.to) qs.set("to", filter.to);
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   try {
     const data = await fetchJson<XboxSaleRecordResponse[]>(`/api/xbox/sale-records${suffix}`);
@@ -841,6 +849,44 @@ export async function getXboxSaleRecords(filter?: {
   } catch {
     return [];
   }
+}
+
+export type XboxSalesSummary = {
+  totalByCurrency: { currency: string; total: string; count: number }[];
+  totalByMethod: { methodLabel: string; currency: string; total: string; count: number }[];
+  totalByItem: { itemLabel: string; currency: string; total: string; count: number }[];
+  saleRecordCount: number;
+  orderCount: number;
+};
+
+export async function getXboxSalesSummary(filter?: {
+  from?: string;
+  to?: string;
+}): Promise<XboxSalesSummary> {
+  const qs = new URLSearchParams();
+  if (filter?.from) qs.set("from", filter.from);
+  if (filter?.to) qs.set("to", filter.to);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  try {
+    return await fetchJson<XboxSalesSummary>(`/api/xbox/sales-summary${suffix}`);
+  } catch {
+    return {
+      totalByCurrency: [],
+      totalByMethod: [],
+      totalByItem: [],
+      saleRecordCount: 0,
+      orderCount: 0
+    };
+  }
+}
+
+export function exportXboxSaleRecordsUrl(filter?: { from?: string; to?: string; accountId?: string }): string {
+  const qs = new URLSearchParams();
+  if (filter?.from) qs.set("from", filter.from);
+  if (filter?.to) qs.set("to", filter.to);
+  if (filter?.accountId) qs.set("accountId", filter.accountId);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return `/api/xbox/sale-records/export${suffix}`;
 }
 
 export async function patchXboxSaleRecord(

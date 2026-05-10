@@ -333,10 +333,134 @@ def list_sale_records(
     *,
     account_id: Optional[int] = None,
     wallet_pool_id: Optional[int] = None,
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
 ) -> list[XboxSaleRecord]:
+    """列销售记录。按 sale_date 闭区间过滤。"""
     stmt = select(XboxSaleRecord).order_by(XboxSaleRecord.id.desc())
     if account_id is not None:
         stmt = stmt.where(XboxSaleRecord.account_id == account_id)
     if wallet_pool_id is not None:
         stmt = stmt.where(XboxSaleRecord.wallet_pool_id == wallet_pool_id)
+    if from_date is not None:
+        stmt = stmt.where(XboxSaleRecord.sale_date >= from_date)
+    if to_date is not None:
+        stmt = stmt.where(XboxSaleRecord.sale_date <= to_date)
     return list(session.scalars(stmt))
+
+
+def get_sales_summary(
+    session: Session,
+    *,
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
+) -> dict:
+    """销售汇总（按币种 / 收款方式 / 备注模板）。
+
+    返回:
+      {
+        "totalByCurrency": [{currency: "CNY", total: ¥, count: N}],
+        "totalByMethod": [{methodLabel: "淘宝渠道", currency: "CNY", total: ¥, count: N}],
+        "totalByItem": [{itemLabel: "丙火网络", currency: "CNY", total: ¥, count: N}],
+        "saleRecordCount": N,
+        "orderCount": N (含订单数,关联订单总和),
+      }
+    """
+    from sqlalchemy import func as sa_func
+
+    from src.models.xbox import XboxOrder as _XboxOrder
+    from src.models.xbox import XboxWalletItem, XboxWalletMethod
+
+    # 销售记录基础筛选
+    base_filters = []
+    if from_date is not None:
+        base_filters.append(XboxSaleRecord.sale_date >= from_date)
+    if to_date is not None:
+        base_filters.append(XboxSaleRecord.sale_date <= to_date)
+
+    # 按币种汇总
+    by_currency_rows = list(
+        session.execute(
+            select(
+                XboxSaleRecord.sale_currency,
+                sa_func.sum(XboxSaleRecord.sale_price).label("total"),
+                sa_func.count(XboxSaleRecord.id).label("cnt"),
+            )
+            .where(*base_filters)
+            .group_by(XboxSaleRecord.sale_currency)
+        )
+    )
+    by_currency = [
+        {"currency": row.sale_currency, "total": str(Decimal(row.total or 0)), "count": int(row.cnt)}
+        for row in by_currency_rows
+    ]
+
+    # 按收款方式汇总（method 维度）
+    by_method_rows = list(
+        session.execute(
+            select(
+                XboxWalletMethod.label.label("method_label"),
+                XboxSaleRecord.sale_currency,
+                sa_func.sum(XboxSaleRecord.sale_price).label("total"),
+                sa_func.count(XboxSaleRecord.id).label("cnt"),
+            )
+            .select_from(XboxSaleRecord)
+            .join(XboxWalletMethod, XboxWalletMethod.id == XboxSaleRecord.wallet_method_id)
+            .where(*base_filters)
+            .group_by(XboxWalletMethod.label, XboxSaleRecord.sale_currency)
+            .order_by(XboxWalletMethod.label)
+        )
+    )
+    by_method = [
+        {
+            "methodLabel": row.method_label,
+            "currency": row.sale_currency,
+            "total": str(Decimal(row.total or 0)),
+            "count": int(row.cnt),
+        }
+        for row in by_method_rows
+    ]
+
+    # 按备注模板汇总（item 维度）
+    by_item_rows = list(
+        session.execute(
+            select(
+                XboxSaleRecord.wallet_item_label.label("item_label"),
+                XboxSaleRecord.sale_currency,
+                sa_func.sum(XboxSaleRecord.sale_price).label("total"),
+                sa_func.count(XboxSaleRecord.id).label("cnt"),
+            )
+            .where(*base_filters)
+            .group_by(XboxSaleRecord.wallet_item_label, XboxSaleRecord.sale_currency)
+            .order_by(XboxSaleRecord.wallet_item_label)
+        )
+    )
+    by_item = [
+        {
+            "itemLabel": row.item_label,
+            "currency": row.sale_currency,
+            "total": str(Decimal(row.total or 0)),
+            "count": int(row.cnt),
+        }
+        for row in by_item_rows
+    ]
+
+    # 销售记录数 + 订单数
+    sale_record_count = session.scalar(
+        select(sa_func.count(XboxSaleRecord.id)).where(*base_filters)
+    ) or 0
+    # 订单数 = 与匹配的销售记录关联的订单
+    order_count = session.scalar(
+        select(sa_func.count(_XboxOrder.id))
+        .select_from(_XboxOrder)
+        .join(XboxSaleRecord, XboxSaleRecord.id == _XboxOrder.sale_record_id)
+        .where(*base_filters)
+    ) or 0
+
+    return {
+        "totalByCurrency": by_currency,
+        "totalByMethod": by_method,
+        "totalByItem": by_item,
+        "saleRecordCount": int(sale_record_count),
+        "orderCount": int(order_count),
+    }
