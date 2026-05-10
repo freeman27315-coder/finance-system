@@ -889,6 +889,61 @@ export function exportXboxSaleRecordsUrl(filter?: { from?: string; to?: string; 
   return `/api/xbox/sale-records/export${suffix}`;
 }
 
+// 对账：映射 CRUD + 报告
+import type { XboxReconcileMapping, XboxReconcileReportRow } from "@/types";
+
+type XboxReconcileMappingResponse = {
+  id: string | number;
+  theoreticalWalletId?: string | number;
+  theoretical_wallet_id?: string | number;
+  actualWalletId?: string | number;
+  actual_wallet_id?: string | number;
+  createdAt?: string;
+  created_at?: string;
+};
+
+function _normalizeMapping(m: XboxReconcileMappingResponse): XboxReconcileMapping {
+  return {
+    id: String(m.id),
+    theoreticalWalletId: String(m.theoreticalWalletId ?? m.theoretical_wallet_id ?? ""),
+    actualWalletId: String(m.actualWalletId ?? m.actual_wallet_id ?? ""),
+    createdAt: m.createdAt ?? m.created_at ?? ""
+  };
+}
+
+export async function getXboxReconcileMappings(): Promise<XboxReconcileMapping[]> {
+  try {
+    const data = await fetchJson<XboxReconcileMappingResponse[]>(
+      "/api/xbox/reconcile-mappings"
+    );
+    return data.map(_normalizeMapping);
+  } catch {
+    return [];
+  }
+}
+
+export async function createXboxReconcileMapping(payload: {
+  theoreticalWalletId: string;
+  actualWalletId: string;
+}): Promise<XboxReconcileMapping> {
+  const data = (await postJson("/api/xbox/reconcile-mappings", payload)) as XboxReconcileMappingResponse;
+  return _normalizeMapping(data);
+}
+
+export async function deleteXboxReconcileMapping(mappingId: string): Promise<void> {
+  await sendJson(`/api/xbox/reconcile-mappings/${mappingId}`, "DELETE");
+}
+
+export async function getXboxReconcileReport(date: string): Promise<XboxReconcileReportRow[]> {
+  try {
+    return await fetchJson<XboxReconcileReportRow[]>(
+      `/api/xbox/reconcile?date=${date}`
+    );
+  } catch {
+    return [];
+  }
+}
+
 export async function patchXboxSaleRecord(
   recordId: string,
   payload: {

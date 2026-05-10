@@ -10,9 +10,11 @@ import {
   Download,
   ExternalLink,
   Gamepad2,
+  GitCompare,
   History,
   KeyRound,
   Layers,
+  Link2,
   ListOrdered,
   Pencil,
   Plus,
@@ -20,6 +22,7 @@ import {
   RefreshCcw,
   Settings2,
   ShieldAlert,
+  Trash2,
   Users
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -33,11 +36,16 @@ import {
   consumeXbox,
   createXboxAccount,
   createXboxOrder,
+  createXboxReconcileMapping,
+  deleteXboxReconcileMapping,
   exportXboxSaleRecordsUrl,
+  getAssetWallets,
   getXboxAccountAuditLogs,
   getXboxAccounts,
   getXboxOrderChangeLogs,
   getXboxOrders,
+  getXboxReconcileMappings,
+  getXboxReconcileReport,
   getXboxSaleRecordChangeLogs,
   getXboxSaleRecords,
   getXboxSalesSummary,
@@ -61,6 +69,7 @@ import type {
   XboxCountry,
   XboxOrder,
   XboxPoolOptionGroup,
+  XboxReconcileMapping,
   XboxSaleCurrency,
   XboxSaleRecord,
   XboxWalletMethod
@@ -2385,14 +2394,289 @@ function WalletSettingsTab() {
 }
 
 
-type XboxTab = "accounts" | "orders" | "sale-records" | "wallet-settings";
+type XboxTab = "accounts" | "orders" | "sale-records" | "wallet-settings" | "reconcile";
 
 const TAB_META: { id: XboxTab; label: string; icon: React.ReactNode }[] = [
   { id: "accounts", label: "账号管理", icon: <Users className="h-4 w-4" /> },
   { id: "orders", label: "订单", icon: <Receipt className="h-4 w-4" /> },
   { id: "sale-records", label: "销售记录", icon: <Layers className="h-4 w-4" /> },
-  { id: "wallet-settings", label: "钱包设置", icon: <Settings2 className="h-4 w-4" /> }
+  { id: "wallet-settings", label: "钱包设置", icon: <Settings2 className="h-4 w-4" /> },
+  { id: "reconcile", label: "对账", icon: <GitCompare className="h-4 w-4" /> }
 ];
+
+
+// ===================================================================
+// 对账 Tab（CEO 2026-05-08 Q1A+Q2A+Q3A+Q4A）
+// ===================================================================
+
+function ReconcileTab() {
+  const queryClient = useQueryClient();
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [showAddMapping, setShowAddMapping] = useState<{ theoreticalWalletId: string } | null>(null);
+
+  const { data: poolGroupsXbox = [] } = useQuery({
+    queryKey: ["xbox-pool-options-only"],
+    queryFn: () => getXboxWalletPoolOptions({ xboxOnly: true })
+  });
+  const { data: poolGroupsAll = [] } = useQuery({
+    queryKey: ["xbox-pool-options-all"],
+    queryFn: () => getXboxWalletPoolOptions({ xboxOnly: false })
+  });
+  const { data: mappings = [], refetch: refetchMappings } = useQuery({
+    queryKey: ["xbox-reconcile-mappings"],
+    queryFn: getXboxReconcileMappings
+  });
+  const { data: report = [], isFetching, refetch: refetchReport } = useQuery({
+    queryKey: ["xbox-reconcile-report", date],
+    queryFn: () => getXboxReconcileReport(date)
+  });
+
+  // 理论值钱包列表（XBOX_SALES_LEDGER 大类的叶子）
+  const theoreticalWallets = poolGroupsXbox.flatMap((g) => g.wallets);
+  // 实际值钱包列表（除 XBOX_SALES_LEDGER 大类之外）
+  const actualGroups = poolGroupsAll.filter((g) => g.groupCode !== "XBOX_SALES_LEDGER");
+
+  const idx = buildPoolWalletIndex(poolGroupsAll);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-muted-foreground">对账日期</span>
+          <input
+            type="date"
+            className="h-9 rounded border border-border bg-card px-2 text-sm"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+          />
+        </div>
+        <Button variant="outline" size="sm" onClick={() => refetchReport()} disabled={isFetching}>
+          <RefreshCcw className={cn("h-4 w-4", isFetching && "animate-spin")} />
+          刷新对账
+        </Button>
+      </div>
+
+      {/* 对账报告 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">{date} 对账</CardTitle>
+          <div className="text-xs text-muted-foreground">
+            理论值（XBOX 销售归口）当日流入 vs 实际值钱包当日 IN 流水。差异 ≠ 0 表示客服可能填错出售渠道,
+            可在订单 tab 用「改字段」拆单纠错。
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>理论值钱包</TableHead>
+                <TableHead>币种</TableHead>
+                <TableHead className="text-right">理论金额</TableHead>
+                <TableHead className="text-right">实际金额（合计）</TableHead>
+                <TableHead className="text-right">差异</TableHead>
+                <TableHead>映射的实际钱包</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {report.map((row) => {
+                const diff = Number(row.diff);
+                const diffColor =
+                  diff === 0 ? "text-muted-foreground" : diff > 0 ? "text-blue-600" : "text-red-600";
+                return (
+                  <TableRow key={row.theoreticalWallet.id}>
+                    <TableCell className="font-medium">{row.theoreticalWallet.name}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {row.theoreticalWallet.currency}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {Number(row.theoreticalTotal).toLocaleString("zh-CN", {
+                        minimumFractionDigits: 2, maximumFractionDigits: 2
+                      })}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {Number(row.actualTotal).toLocaleString("zh-CN", {
+                        minimumFractionDigits: 2, maximumFractionDigits: 2
+                      })}
+                    </TableCell>
+                    <TableCell className={cn("text-right tabular-nums font-semibold", diffColor)}>
+                      {diff > 0 ? "+" : ""}
+                      {Number(row.diff).toLocaleString("zh-CN", {
+                        minimumFractionDigits: 2, maximumFractionDigits: 2
+                      })}
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      {row.actualWallets.length === 0 ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setShowAddMapping({
+                            theoreticalWalletId: String(row.theoreticalWallet.id)
+                          })}
+                        >
+                          <Plus className="h-3 w-3" />
+                          加映射
+                        </Button>
+                      ) : (
+                        <div className="flex flex-wrap gap-1 items-center">
+                          {row.actualWallets.map((aw) => {
+                            const mapping = mappings.find(
+                              (m) =>
+                                m.theoreticalWalletId === String(row.theoreticalWallet.id) &&
+                                m.actualWalletId === String(aw.id)
+                            );
+                            return (
+                              <Badge key={aw.id} tone="transfer">
+                                <span>{aw.name}</span>
+                                <span className="ml-1 tabular-nums">
+                                  ({aw.currency} {Number(aw.total).toLocaleString("zh-CN")})
+                                </span>
+                                {mapping ? (
+                                  <button
+                                    type="button"
+                                    className="ml-1 hover:text-red-600"
+                                    onClick={async () => {
+                                      if (confirm(`删除映射 ${row.theoreticalWallet.name} ↔ ${aw.name}?`)) {
+                                        await deleteXboxReconcileMapping(mapping.id);
+                                        refetchMappings();
+                                        refetchReport();
+                                      }
+                                    }}
+                                  >
+                                    <Trash2 className="h-3 w-3 inline" />
+                                  </button>
+                                ) : null}
+                              </Badge>
+                            );
+                          })}
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setShowAddMapping({
+                              theoreticalWalletId: String(row.theoreticalWallet.id)
+                            })}
+                          >
+                            <Link2 className="h-3 w-3" />
+                            加
+                          </Button>
+                        </div>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {report.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                    暂无对账数据
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {showAddMapping ? (
+        <AddMappingModal
+          theoreticalWalletId={showAddMapping.theoreticalWalletId}
+          theoreticalWallets={theoreticalWallets}
+          actualGroups={actualGroups}
+          onClose={() => setShowAddMapping(null)}
+          onSuccess={() => {
+            queryClient.invalidateQueries({ queryKey: ["xbox-reconcile-mappings"] });
+            queryClient.invalidateQueries({ queryKey: ["xbox-reconcile-report"] });
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function AddMappingModal({
+  theoreticalWalletId,
+  theoreticalWallets,
+  actualGroups,
+  onClose,
+  onSuccess
+}: {
+  theoreticalWalletId: string;
+  theoreticalWallets: { id: string; name: string; currency: string }[];
+  actualGroups: XboxPoolOptionGroup[];
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [actualWalletId, setActualWalletId] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const theoretical = theoreticalWallets.find((w) => w.id === theoreticalWalletId);
+  // 只显示币种相同的实际钱包
+  const compatibleGroups = actualGroups
+    .map((g) => ({
+      ...g,
+      wallets: g.wallets.filter((w) => w.currency === theoretical?.currency)
+    }))
+    .filter((g) => g.wallets.length > 0);
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!actualWalletId) throw new Error("请选实际钱包");
+      return createXboxReconcileMapping({
+        theoreticalWalletId,
+        actualWalletId
+      });
+    },
+    onSuccess: () => {
+      onSuccess();
+      onClose();
+    },
+    onError: (err) => setError(err instanceof Error ? err.message : "创建失败")
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Card className="w-full max-w-md">
+        <CardHeader>
+          <CardTitle>添加对账映射</CardTitle>
+          <div className="mt-1 text-xs text-muted-foreground">
+            理论值钱包: {theoretical?.name} ({theoretical?.currency})
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">关联到实际钱包（仅显示同币种）</div>
+            <select
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={actualWalletId}
+              onChange={(e) => setActualWalletId(e.target.value)}
+            >
+              <option value="">-- 选实际钱包 --</option>
+              {compatibleGroups.map((g) => (
+                <optgroup key={g.groupCode} label={`── ${g.groupLabel} ──`}>
+                  {g.wallets.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.fullPath}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+          {error ? (
+            <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
+              {error}
+            </div>
+          ) : null}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>取消</Button>
+            <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+              {mutation.isPending ? "添加中..." : "添加"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
 function AccountsManagementTab() {
   const [country, setCountry] = useState<XboxCountry>("US");
@@ -2523,6 +2807,7 @@ export function XboxPage() {
       {tab === "orders" ? <OrdersTab onJumpToSaleRecord={jumpToSaleRecord} /> : null}
       {tab === "sale-records" ? <SaleRecordsTab highlightId={highlightSaleRecordId} /> : null}
       {tab === "wallet-settings" ? <WalletSettingsTab /> : null}
+      {tab === "reconcile" ? <ReconcileTab /> : null}
     </div>
   );
 }

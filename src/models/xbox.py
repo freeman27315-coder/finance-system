@@ -10,7 +10,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, ForeignKey, JSON, Numeric, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.database import Base
@@ -357,6 +357,41 @@ class XboxChangeLog(Base):
     # action 取值: "created" / "updated" / "completed" / "merged" / "wallet_pool_changed"
     detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     operator: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=china_now,
+    )
+
+
+class XboxReconcileMapping(Base):
+    """对账映射：理论值钱包 ↔ 实际值钱包（CEO 2026-05-08 Q1:A）。
+
+    一个理论值钱包可对应多个实际值钱包（如「丙火网络」理论 ↔
+    「丙火网络银行卡」+「丙火网络店铺支付宝」实际,1:N）。
+
+    业务规则：
+    - 同一对 (theoretical, actual) 唯一(数据库联合唯一索引)
+    - 币种校验在应用层(理论 CNY 必须配 CNY 实际)
+    - 对账时按 sale_date 对应到实际钱包当天 IN 流水总额
+    """
+
+    __tablename__ = "xbox_reconcile_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "theoretical_wallet_id",
+            "actual_wallet_id",
+            name="uq_xbox_reconcile_pair",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    theoretical_wallet_id: Mapped[int] = mapped_column(
+        ForeignKey("wallets.id"), nullable=False, index=True
+    )  # XBOX_SALES_LEDGER 大类下的钱包
+    actual_wallet_id: Mapped[int] = mapped_column(
+        ForeignKey("wallets.id"), nullable=False
+    )  # 任何实际值钱包(淘宝/台湾/资产...)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
