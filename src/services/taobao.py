@@ -145,3 +145,72 @@ def list_taobao_shops(session: Session) -> list[TaobaoShop]:
     return list(
         session.scalars(select(TaobaoShop).order_by(TaobaoShop.id))
     )
+
+
+def ensure_shop_total_group_wallets(session: Session) -> dict[str, int]:
+    """CEO 2026-05-08: 给每家淘宝店建 group 总钱包,统管它的 5 或 6 个 TAOBAO 钱包。
+
+    新建：
+    - 丙火网络（group, TAOBAO, CNY）  ← 统管丙火 5 个钱包
+    - 兔仔电玩（group, TAOBAO, CNY）  ← 统管兔仔 6 个（含店铺支付宝）
+    - 小小电玩（group, TAOBAO, CNY）  ← 统管小小 5 个钱包
+
+    把现有 TAOBAO 类型 + parent_id IS NULL 的钱包按名字前缀挂到对应总钱包下。
+
+    丙火网络支付宝/小小电玩支付宝在 ASSET_RMB 下,**不动**(跨大类不能挂)。
+    对账时通过 1:N 映射手动挂上即可（CEO Q1A 已确认）。
+
+    返回 ``{店铺名: group_wallet_id}``。幂等可重复运行。
+    """
+    SHOP_NAMES = ("丙火网络", "兔仔电玩", "小小电玩")
+    out: dict[str, int] = {}
+
+    for shop_name in SHOP_NAMES:
+        # 找/建总钱包(顶级 group, type=TAOBAO, name=店铺名)
+        existing = session.scalar(
+            select(Wallet).where(
+                Wallet.type == WalletType.TAOBAO.value,
+                Wallet.name == shop_name,
+                Wallet.parent_id.is_(None),
+                Wallet.is_group.is_(True),
+            )
+        )
+        if existing is None:
+            existing = create_wallet(
+                session,
+                name=shop_name,
+                wallet_type=WalletType.TAOBAO,
+                currency=Currency.CNY,
+                is_group=True,
+            )
+        out[shop_name] = existing.id
+
+        # 把现有以 "{shop_name} " 开头 + parent_id IS NULL 的 TAOBAO 钱包挂到该总钱包下
+        # 例：丙火网络 银行卡 / 丙火网络 支付宝支付在途 等
+        children = list(
+            session.scalars(
+                select(Wallet).where(
+                    Wallet.type == WalletType.TAOBAO.value,
+                    Wallet.parent_id.is_(None),
+                    Wallet.id != existing.id,  # 别挂自己到自己下面
+                    Wallet.name.like(f"{shop_name} %"),
+                )
+            )
+        )
+        for child in children:
+            child.parent_id = existing.id
+
+        # 兔仔电玩支付宝: 名字"兔仔电玩支付宝"也挂到 兔仔电玩总钱包 下
+        if shop_name == "兔仔电玩":
+            tuzai_alipay = session.scalar(
+                select(Wallet).where(
+                    Wallet.type == WalletType.TAOBAO.value,
+                    Wallet.name == "兔仔电玩支付宝",
+                    Wallet.parent_id.is_(None),
+                )
+            )
+            if tuzai_alipay is not None:
+                tuzai_alipay.parent_id = existing.id
+
+    session.flush()
+    return out

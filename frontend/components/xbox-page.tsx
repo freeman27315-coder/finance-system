@@ -2419,8 +2419,9 @@ function ReconcileTab() {
     queryFn: () => getXboxWalletPoolOptions({ xboxOnly: true })
   });
   const { data: poolGroupsAll = [] } = useQuery({
-    queryKey: ["xbox-pool-options-all"],
-    queryFn: () => getXboxWalletPoolOptions({ xboxOnly: false })
+    queryKey: ["xbox-pool-options-all-with-groups"],
+    // 含 group 钱包(店铺总钱包),让 CEO 能选总钱包当映射目标
+    queryFn: () => getXboxWalletPoolOptions({ xboxOnly: false, includeGroups: true })
   });
   const { data: mappings = [], refetch: refetchMappings } = useQuery({
     queryKey: ["xbox-reconcile-mappings"],
