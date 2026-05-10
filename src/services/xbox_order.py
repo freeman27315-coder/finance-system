@@ -12,7 +12,7 @@ P0.2 阶段：
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Optional
 
@@ -186,17 +186,161 @@ def _all_completion_fields_set(order: XboxOrder) -> bool:
     )
 
 
+def move_order_to_different_sale_record(
+    session: Session,
+    order: XboxOrder,
+    new_wallet_method_id: int,
+    new_wallet_item_id: int,
+) -> tuple[Optional[int], int]:
+    """拆单：把已转销售的订单从老销售记录移到新（按新 wallet_item_id）。
+
+    返回 ``(老销售记录 id 或 None, 新销售记录 id)``。
+
+    业务规则（CEO 2026-05-08 Q5:A 老销售记录变 0 时保留）：
+    1. 老销售记录 sale_price -= 本订单 sale_price + 旧池子 debit
+    2. 找到/新建新销售记录（同账号 + 新 wallet_item_id）
+       - 如果已存在 → 合并(累加 sale_price + 新池 credit)
+       - 不存在 → 新建 + 新池 credit
+    3. 更新订单的 sale_record_id / wallet_method_id / wallet_item_id
+    4. 旧记录变 0 时保留(状态变化不删)
+    5. 写审计日志
+    """
+    from src.models.xbox import XboxSaleRecord, XboxWalletItem
+    from src.models.wallet import credit, debit
+    from src.services.xbox_sale import (
+        _find_existing_sale_record,
+        _validate_pool_currency,
+        create_or_merge_sale_record,
+    )
+
+    if order.sale_record_id is None or order.status != XboxOrderStatus.CONVERTED.value:
+        raise ValueError("订单未转销售,不能执行拆单逻辑")
+
+    if order.sale_price is None or order.sale_price <= 0:
+        raise ValueError("订单售价为空或 0,无法拆单")
+
+    if order.wallet_item_id == new_wallet_item_id:
+        return order.sale_record_id, order.sale_record_id  # 没变,no-op
+
+    # 校验新 method/item 存在
+    new_item = session.get(XboxWalletItem, new_wallet_item_id)
+    if new_item is None:
+        raise ValueError(f"新备注模板 {new_wallet_item_id} 不存在")
+    new_method = session.get(XboxWalletMethod, new_wallet_method_id)
+    if new_method is None:
+        raise ValueError(f"新收款方式 {new_wallet_method_id} 不存在")
+
+    # 获取老销售记录
+    old_record = session.get(XboxSaleRecord, order.sale_record_id)
+    if old_record is None:
+        raise ValueError(f"老销售记录 {order.sale_record_id} 不存在")
+
+    # 校验新池币种
+    _validate_pool_currency(session, new_item.wallet_pool_id, order.sale_currency or old_record.sale_currency)
+
+    order_sale_price = Decimal(order.sale_price)
+
+    # 1) 老记录扣减 + 旧池 debit
+    old_record_id = old_record.id
+    new_total = Decimal(old_record.sale_price) - order_sale_price
+    if new_total < 0:
+        raise ValueError(f"老销售记录金额会变负({new_total}),数据可能已损坏")
+    old_record.sale_price = new_total
+    if order_sale_price > 0:
+        debit(
+            session,
+            old_record.wallet_pool_id,
+            order_sale_price,
+            remark=f"XBOX 拆单 订单#{order.id} 从销售#{old_record.id} 移出",
+        )
+
+    from src.services.xbox_sale import _log_change as log_change
+
+    log_change(
+        session,
+        "sale_record",
+        old_record.id,
+        "updated",
+        f"拆单: 订单 #{order.id} 移出, -{order_sale_price} {old_record.sale_currency}, 余额 {new_total}",
+    )
+
+    # 2) 找/建新销售记录
+    account = session.get(XboxAccount, order.account_id)
+    new_record = _find_existing_sale_record(session, account.id, new_wallet_item_id)
+    if new_record is not None:
+        # 合到现有
+        new_total_price = Decimal(new_record.sale_price) + order_sale_price
+        new_record.sale_price = new_total_price
+        new_record.last_updated_at = china_now()
+        if order_sale_price > 0:
+            tx = credit(
+                session,
+                new_record.wallet_pool_id,
+                order_sale_price,
+                remark=f"XBOX 拆单 订单#{order.id} 合入销售#{new_record.id}",
+            )
+            new_record.bookkeeping_tx_id = tx.id
+        log_change(
+            session,
+            "sale_record",
+            new_record.id,
+            "merged",
+            f"拆单接收: 订单 #{order.id}, +{order_sale_price} {order.sale_currency}, 总额 {new_total_price}",
+        )
+    else:
+        new_record = create_or_merge_sale_record(
+            session,
+            account=account,
+            sale_date=old_record.sale_date,
+            product_name=order.product_name or "(拆单)",
+            operator_name=order.operator_name or old_record.operator_name,
+            sale_price=order_sale_price,
+            sale_currency=order.sale_currency or old_record.sale_currency,
+            wallet_method_id=new_wallet_method_id,
+            wallet_item_id=new_wallet_item_id,
+            wallet_item_label=new_item.label,
+            wallet_pool_id=new_item.wallet_pool_id,
+            order=None,  # 不通过 order 参数（避免 status 重置）
+        )
+
+    # 3) 更新订单关联
+    order.sale_record_id = new_record.id
+    order.wallet_method_id = new_wallet_method_id
+    order.wallet_item_id = new_wallet_item_id
+    order.last_updated_at = china_now()
+
+    _log_order_change(
+        session,
+        order.id,
+        "wallet_pool_changed",
+        f"拆单: 销售#{old_record_id} → 销售#{new_record.id} (备注模板 → {new_item.label})",
+    )
+
+    session.flush()
+    return old_record_id, new_record.id
+
+
 def list_orders(
     session: Session,
     *,
     account_id: Optional[int] = None,
     status: Optional[str] = None,
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
 ) -> list[XboxOrder]:
+    """列出订单。可按账号/状态过滤。``from_date``/``to_date`` 按订单时间(order_at)闭区间过滤。"""
     stmt = select(XboxOrder).order_by(XboxOrder.id.desc())
     if account_id is not None:
         stmt = stmt.where(XboxOrder.account_id == account_id)
     if status is not None:
         stmt = stmt.where(XboxOrder.status == status)
+    if from_date is not None:
+        stmt = stmt.where(XboxOrder.order_at >= datetime.combine(from_date, datetime.min.time()))
+    if to_date is not None:
+        # 闭区间: 加一天再 <  → 等同 <= 当天 23:59:59
+        stmt = stmt.where(
+            XboxOrder.order_at < datetime.combine(to_date, datetime.min.time()) + timedelta(days=1)
+        )
     return list(session.scalars(stmt))
 
 

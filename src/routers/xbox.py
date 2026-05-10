@@ -6,7 +6,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -39,9 +39,11 @@ from src.services.xbox_order import (
     create_order as service_create_order,
     get_order_or_404,
     list_orders as service_list_orders,
+    move_order_to_different_sale_record,
     update_order_completion,
 )
 from src.services.xbox_sale import (
+    get_sales_summary,
     list_sale_records,
     update_sale_record_fields,
 )
@@ -685,12 +687,16 @@ def create_order_endpoint(request: XboxOrderCreate, db: Session = Depends(get_db
 def list_orders_endpoint(
     account_id: Optional[int] = Query(None, alias="accountId"),
     status_filter: Optional[XboxOrderStatus] = Query(None, alias="status"),
+    from_date: Optional[date] = Query(None, alias="from"),
+    to_date: Optional[date] = Query(None, alias="to"),
     db: Session = Depends(get_db),
 ) -> list[XboxOrderOut]:
     orders = service_list_orders(
         db,
         account_id=account_id,
         status=status_filter.value if status_filter else None,
+        from_date=from_date,
+        to_date=to_date,
     )
     return [serialize_order(o) for o in orders]
 
@@ -705,22 +711,39 @@ def patch_order_endpoint(
     request: XboxOrderCompletion,
     db: Session = Depends(get_db),
 ) -> XboxOrderOut:
-    """补齐订单字段。全部填齐自动转销售（CEO Q3A）。"""
+    """补齐订单字段。
+
+    - 待补齐订单（status=pending_complete）: 字段填齐自动转销售
+    - 已转销售订单（status=converted）: 改 wallet_method_id / wallet_item_id 触发"拆单"
+      老销售记录金额扣减,新销售记录金额累加(或新建),钱包余额联动。
+    """
     order = get_order_or_404(db, order_id)
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="订单不存在")
+
     try:
-        update_order_completion(
-            db,
-            order,
-            sale_date=request.sale_date,
-            product_name=request.product_name,
-            operator_name=request.operator_name,
-            sale_price=request.sale_price,
-            sale_currency=request.sale_currency,
-            wallet_method_id=request.wallet_method_id,
-            wallet_item_id=request.wallet_item_id,
-        )
+        # 已转销售 + 改 wallet_item_id → 拆单
+        if (
+            order.status == XboxOrderStatus.CONVERTED.value
+            and request.wallet_item_id is not None
+            and request.wallet_item_id != order.wallet_item_id
+        ):
+            new_method_id = request.wallet_method_id or order.wallet_method_id
+            move_order_to_different_sale_record(
+                db, order, new_method_id, request.wallet_item_id
+            )
+        else:
+            update_order_completion(
+                db,
+                order,
+                sale_date=request.sale_date,
+                product_name=request.product_name,
+                operator_name=request.operator_name,
+                sale_price=request.sale_price,
+                sale_currency=request.sale_currency,
+                wallet_method_id=request.wallet_method_id,
+                wallet_item_id=request.wallet_item_id,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     db.commit()
@@ -737,9 +760,17 @@ def patch_order_endpoint(
 def list_sale_records_endpoint(
     account_id: Optional[int] = Query(None, alias="accountId"),
     wallet_pool_id: Optional[int] = Query(None, alias="walletPoolId"),
+    from_date: Optional[date] = Query(None, alias="from"),
+    to_date: Optional[date] = Query(None, alias="to"),
     db: Session = Depends(get_db),
 ) -> list[XboxSaleRecordOut]:
-    records = list_sale_records(db, account_id=account_id, wallet_pool_id=wallet_pool_id)
+    records = list_sale_records(
+        db,
+        account_id=account_id,
+        wallet_pool_id=wallet_pool_id,
+        from_date=from_date,
+        to_date=to_date,
+    )
     out: list[XboxSaleRecordOut] = []
     for record in records:
         order_ids = [
@@ -955,6 +986,82 @@ def _serialize_change_log(log: XboxChangeLog) -> XboxChangeLogOut:
         detail=log.detail,
         operator=log.operator,
         created_at=log.created_at.isoformat() if log.created_at else "",
+    )
+
+
+@router.get(
+    "/sales-summary",
+    response_model=dict,
+)
+def sales_summary_endpoint(
+    from_date: Optional[date] = Query(None, alias="from"),
+    to_date: Optional[date] = Query(None, alias="to"),
+    db: Session = Depends(get_db),
+) -> dict:
+    """销售汇总: 按币种 / 收款方式 / 备注模板。"""
+    return get_sales_summary(db, from_date=from_date, to_date=to_date)
+
+
+@router.get(
+    "/sale-records/export",
+    response_class=Response,
+)
+def export_sale_records_endpoint(
+    from_date: Optional[date] = Query(None, alias="from"),
+    to_date: Optional[date] = Query(None, alias="to"),
+    account_id: Optional[int] = Query(None, alias="accountId"),
+    db: Session = Depends(get_db),
+) -> Response:
+    """导出销售记录为 Excel。字段：日期/账号编号/商品/经办人/售价/币种/收款方式/备注模板/资金池钱包名/关联订单号。"""
+    from io import BytesIO
+    from openpyxl import Workbook
+    from src.models.wallet import Wallet
+
+    records = list_sale_records(
+        db, account_id=account_id, from_date=from_date, to_date=to_date
+    )
+    # 预加载账号 + method + 钱包名
+    account_map = {a.id: a for a in db.scalars(select(XboxAccount))}
+    method_map = {m.id: m for m in db.scalars(select(XboxWalletMethod))}
+    wallet_map = {w.id: w for w in db.scalars(select(Wallet))}
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "XBOX 销售记录"
+    headers = [
+        "销售日期", "账号编号", "商品", "经办人", "售价", "币种",
+        "收款方式", "备注模板", "资金池钱包", "关联订单号",
+    ]
+    ws.append(headers)
+    for record in records:
+        account = account_map.get(record.account_id)
+        method = method_map.get(record.wallet_method_id)
+        wallet = wallet_map.get(record.wallet_pool_id)
+        order_ids = [
+            o.order_no
+            for o in db.scalars(select(XboxOrder).where(XboxOrder.sale_record_id == record.id))
+        ]
+        ws.append([
+            str(record.sale_date) if record.sale_date else "",
+            account.account_no or account.name if account else "",
+            record.product_name or "",
+            record.operator_name or "",
+            float(record.sale_price),
+            record.sale_currency or "",
+            method.label if method else "",
+            record.wallet_item_label or "",
+            wallet.name if wallet else "",
+            ", ".join(order_ids),
+        ])
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"xbox-sale-records-{from_date or 'all'}-{to_date or 'all'}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

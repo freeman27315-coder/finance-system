@@ -544,6 +544,90 @@ def test_old_taiwan_wallets_soft_deleted(client):
         db.close()
 
 
+def test_split_order_moves_to_new_sale_record(client):
+    """拆单：把已转销售订单从备注模板 A 改到 B,老记录扣减+新记录累加+钱包联动。"""
+    ctx = _setup_basic_sale(client)
+    # 先确认初始: 销售记录 sale_price = 800, pool_a 余额 800
+    record_id = ctx["sale_record_id"]
+    assert _wallet_balance(ctx["pool_a_id"]) == Decimal("800.000000")
+
+    # 找到原订单
+    db = database.SessionLocal()
+    try:
+        from src.models.xbox import XboxOrder
+        order = db.scalar(select(XboxOrder).where(XboxOrder.sale_record_id == record_id))
+        assert order is not None
+        order_id = order.id
+    finally:
+        db.close()
+
+    # 把订单改备注模板（pool A → pool B）= 拆单
+    r = client.patch(
+        f"/xbox/orders/{order_id}",
+        json={"walletMethodId": ctx["method_id"], "walletItemId": ctx["item_b_id"]},
+    )
+    assert r.status_code == 200, r.text
+
+    # 老池 0,新池 800
+    assert _wallet_balance(ctx["pool_a_id"]) == Decimal("0.000000")
+    assert _wallet_balance(ctx["pool_b_id"]) == Decimal("800.000000")
+
+    # 老销售记录 sale_price = 0 (保留, CEO Q5:A)
+    records = client.get("/xbox/sale-records").json()
+    old_record = next(r for r in records if r["id"] == record_id)
+    assert Decimal(old_record["salePrice"]) == Decimal("0")
+    # 新销售记录 sale_price = 800
+    new_record = next(r for r in records if r["walletItemId"] == ctx["item_b_id"])
+    assert Decimal(new_record["salePrice"]) == Decimal("800")
+
+    # 订单的 sale_record_id 指向新
+    order_after = client.get("/xbox/orders").json()
+    o = next(o for o in order_after if int(o["id"]) == order_id)
+    assert int(o["saleRecordId"]) == int(new_record["id"])
+
+
+def test_sales_summary_groups_by_currency_and_method(client):
+    """销售汇总: 按币种 + 按收款方式聚合金额。"""
+    ctx = _setup_basic_sale(client)  # 1 笔 ¥800 进 method_id
+
+    r = client.get("/xbox/sales-summary")
+    assert r.status_code == 200
+    summary = r.json()
+    assert summary["saleRecordCount"] >= 1
+    cny = next(s for s in summary["totalByCurrency"] if s["currency"] == "CNY")
+    assert Decimal(cny["total"]) >= Decimal("800")
+
+
+def test_export_sale_records_returns_xlsx(client):
+    """Excel 导出端点返回 xlsx 二进制 + 正确 header。"""
+    _setup_basic_sale(client)
+    r = client.get("/xbox/sale-records/export")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert "attachment" in r.headers.get("content-disposition", "")
+    # 简单检查: xlsx 文件以 PK 开头(zip)
+    assert r.content[:2] == b"PK"
+
+
+def test_orders_filtered_by_date_range(client):
+    """订单按 from/to 日期筛选。"""
+    account = _create_account(client)
+    # 建 3 个不同 order_at 的订单
+    for day in (3, 5, 7):
+        client.post("/xbox/orders", json={
+            "accountId": account["id"], "orderNo": f"D-{day}",
+            "amountLocal": "1", "currencyLocal": "USD",
+            "orderAt": f"2026-05-{day:02d}T10:00:00",
+        })
+    # 取 5/4 ~ 5/6 范围 → 只命中 5/5
+    r = client.get("/xbox/orders?from=2026-05-04&to=2026-05-06")
+    assert r.status_code == 200
+    nos = {o["orderNo"] for o in r.json()}
+    assert nos == {"D-5"}
+
+
 def test_xbox_only_pool_options_excludes_other_categories(client):
     """xboxOnly=false 才返回所有大类。"""
     r1 = client.get("/xbox/wallet-pool-options")  # default true

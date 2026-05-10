@@ -7,6 +7,8 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Download,
+  ExternalLink,
   Gamepad2,
   History,
   KeyRound,
@@ -20,7 +22,7 @@ import {
   ShieldAlert,
   Users
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,12 +33,14 @@ import {
   consumeXbox,
   createXboxAccount,
   createXboxOrder,
+  exportXboxSaleRecordsUrl,
   getXboxAccountAuditLogs,
   getXboxAccounts,
   getXboxOrderChangeLogs,
   getXboxOrders,
   getXboxSaleRecordChangeLogs,
   getXboxSaleRecords,
+  getXboxSalesSummary,
   getXboxSummary,
   getXboxTransactions,
   getXboxWalletPoolOptions,
@@ -141,6 +145,46 @@ function SummaryCards({ country }: { country: XboxCountry }) {
           </CardContent>
         </Card>
       </div>
+    </div>
+  );
+}
+
+// 默认筛选范围: 最近 30 天 (CEO 2026-05-08 Q1:A)
+function defaultDateRange(): { from: string; to: string } {
+  const today = new Date();
+  const from = new Date(today);
+  from.setDate(today.getDate() - 30);
+  return {
+    from: from.toISOString().slice(0, 10),
+    to: today.toISOString().slice(0, 10)
+  };
+}
+
+function DateRangeFilter({
+  from,
+  to,
+  onChange
+}: {
+  from: string;
+  to: string;
+  onChange: (next: { from: string; to: string }) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <span>日期:</span>
+      <input
+        type="date"
+        className="h-7 rounded border border-border bg-card px-2 text-xs"
+        value={from}
+        onChange={(event) => onChange({ from: event.target.value, to })}
+      />
+      <span>→</span>
+      <input
+        type="date"
+        className="h-7 rounded border border-border bg-card px-2 text-xs"
+        value={to}
+        onChange={(event) => onChange({ from, to: event.target.value })}
+      />
     </div>
   );
 }
@@ -1262,17 +1306,33 @@ function CompleteOrderModal({
   );
   const [productName, setProductName] = useState(order.productName ?? "");
   const [operatorName, setOperatorName] = useState(order.operatorName ?? "");
-  const [salePrice, setSalePrice] = useState("");
+  const [salePrice, setSalePrice] = useState(
+    order.salePrice != null && order.saleCurrency
+      ? (order.salePrice / 100).toFixed(2)
+      : ""
+  );
   const [saleCurrency, setSaleCurrency] = useState<XboxSaleCurrency>(
     order.saleCurrency ?? "CNY"
   );
   const [walletMethodId, setWalletMethodId] = useState(order.walletMethodId ?? "");
   const [walletItemId, setWalletItemId] = useState(order.walletItemId ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [autoCountdown, setAutoCountdown] = useState<number | null>(null);
 
   const account = accounts.find((a) => a.id === order.accountId);
   const selectedMethod = walletMethods.find((m) => m.id === walletMethodId);
   const itemOptions = selectedMethod?.items ?? [];
+
+  // 合单提示: 查同账号 + 同 walletItemId 的现有销售记录
+  const { data: allSaleRecords = [] } = useQuery({
+    queryKey: ["xbox-sale-records-all"],
+    queryFn: () => getXboxSaleRecords({ accountId: order.accountId })
+  });
+  const existingSaleRecord = walletItemId
+    ? allSaleRecords.find(
+        (r) => r.accountId === order.accountId && r.walletItemId === walletItemId
+      )
+    : null;
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -1294,11 +1354,45 @@ function CompleteOrderModal({
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["xbox-orders"] });
       await queryClient.invalidateQueries({ queryKey: ["xbox-sale-records"] });
+      await queryClient.invalidateQueries({ queryKey: ["xbox-sales-summary"] });
       await queryClient.invalidateQueries({ queryKey: ["asset-wallets"] });
       onClose();
     },
     onError: (err) => setError(err instanceof Error ? err.message : "保存失败")
   });
+
+  // CEO 2026-05-08 Q4:A - 3 秒自动保存(双保险,手动按钮也保留)
+  // 仅当所有必填字段都填齐 + 还没在保存中 + 没出错才触发
+  const allFieldsReady =
+    productName.trim() !== "" &&
+    operatorName.trim() !== "" &&
+    salePrice.trim() !== "" &&
+    !!walletMethodId &&
+    !!walletItemId;
+
+  useEffect(() => {
+    if (!allFieldsReady || mutation.isPending) {
+      setAutoCountdown(null);
+      return;
+    }
+    let counter = 3;
+    setAutoCountdown(counter);
+    const tick = setInterval(() => {
+      counter -= 1;
+      if (counter <= 0) {
+        clearInterval(tick);
+        setAutoCountdown(null);
+        mutation.mutate();
+      } else {
+        setAutoCountdown(counter);
+      }
+    }, 1000);
+    return () => {
+      clearInterval(tick);
+      setAutoCountdown(null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productName, operatorName, salePrice, saleCurrency, walletMethodId, walletItemId, allFieldsReady]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -1393,8 +1487,26 @@ function CompleteOrderModal({
               ))}
             </select>
           </div>
+          {/* 合单提示（CEO 2026-05-08 业务流程优化 2B）*/}
+          {existingSaleRecord && walletItemId ? (
+            <div className="rounded-md bg-amber-50 border border-amber-200 p-2 text-xs text-amber-800">
+              ℹ️ 该账号 + 备注模板 已有销售记录 #{existingSaleRecord.id}（当前 {existingSaleRecord.saleCurrency}{" "}
+              {(existingSaleRecord.salePrice / 100).toFixed(2)}）。本订单的 {salePrice || 0} {saleCurrency}{" "}
+              将累加合并到该记录。
+            </div>
+          ) : walletItemId ? (
+            <div className="rounded-md bg-emerald-50 border border-emerald-200 p-2 text-xs text-emerald-700">
+              ✓ 该账号 + 备注模板 尚无销售记录,将新建一条销售记录。
+            </div>
+          ) : null}
+
           <div className="rounded-md bg-emerald-50 border border-emerald-200 p-2 text-xs text-emerald-700">
             填齐后保存,系统自动生成销售记录 + 售价进对应资金池
+            {autoCountdown != null ? (
+              <span className="ml-2 font-semibold text-amber-700">
+                ⏱ {autoCountdown} 秒后自动保存（修改任意字段重置倒计时）
+              </span>
+            ) : null}
           </div>
           {error ? (
             <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
@@ -1415,23 +1527,26 @@ function CompleteOrderModal({
   );
 }
 
-function OrdersTab() {
+function OrdersTab({ onJumpToSaleRecord }: { onJumpToSaleRecord?: (saleRecordId: string) => void }) {
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [completeTarget, setCompleteTarget] = useState<XboxOrder | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "pending_complete" | "converted">("all");
   const [logsTarget, setLogsTarget] = useState<XboxOrder | null>(null);
+  const [dateRange, setDateRange] = useState(defaultDateRange);
 
   const { data: accounts = [] } = useQuery({
     queryKey: ["xbox-accounts"],
     queryFn: () => getXboxAccounts()
   });
   const { data: orders = [], isFetching, refetch } = useQuery({
-    queryKey: ["xbox-orders", statusFilter],
+    queryKey: ["xbox-orders", statusFilter, dateRange.from, dateRange.to],
     queryFn: () =>
-      getXboxOrders(
-        statusFilter === "all" ? undefined : { status: statusFilter }
-      )
+      getXboxOrders({
+        status: statusFilter === "all" ? undefined : statusFilter,
+        from: dateRange.from,
+        to: dateRange.to
+      })
   });
   const { data: walletMethods = [] } = useQuery({
     queryKey: ["xbox-wallet-settings"],
@@ -1440,21 +1555,24 @@ function OrdersTab() {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="inline-flex rounded-md border border-border p-1">
-          {(["all", "pending_complete", "converted"] as const).map((s) => (
-            <button
-              key={s}
-              type="button"
-              className={cn(
-                "h-8 px-3 rounded text-sm font-medium text-muted-foreground transition-colors",
-                statusFilter === s && "bg-muted text-foreground"
-              )}
-              onClick={() => setStatusFilter(s)}
-            >
-              {s === "all" ? "全部" : s === "pending_complete" ? "待补齐" : "已转销售"}
-            </button>
-          ))}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="inline-flex rounded-md border border-border p-1">
+            {(["all", "pending_complete", "converted"] as const).map((s) => (
+              <button
+                key={s}
+                type="button"
+                className={cn(
+                  "h-8 px-3 rounded text-sm font-medium text-muted-foreground transition-colors",
+                  statusFilter === s && "bg-muted text-foreground"
+                )}
+                onClick={() => setStatusFilter(s)}
+              >
+                {s === "all" ? "全部" : s === "pending_complete" ? "待补齐" : "已转销售"}
+              </button>
+            ))}
+          </div>
+          <DateRangeFilter from={dateRange.from} to={dateRange.to} onChange={setDateRange} />
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
@@ -1517,10 +1635,28 @@ function OrdersTab() {
                             补齐
                           </Button>
                         ) : (
-                          <Badge tone="success">
-                            <CheckCircle2 className="h-3 w-3 mr-1" />
-                            已转销售
-                          </Badge>
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setCompleteTarget(order)}
+                              title="改备注模板触发拆单"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                              改字段
+                            </Button>
+                            {order.saleRecordId && onJumpToSaleRecord ? (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => onJumpToSaleRecord(order.saleRecordId as string)}
+                                title="跳转到销售记录"
+                              >
+                                <ExternalLink className="h-3.5 w-3.5" />
+                                销售
+                              </Button>
+                            ) : null}
+                          </>
                         )}
                         <Button size="sm" variant="ghost" onClick={() => setLogsTarget(order)}>
                           <History className="h-3.5 w-3.5" />
@@ -1718,14 +1854,19 @@ function EditSaleRecordModal({
   );
 }
 
-function SaleRecordsTab() {
+function SaleRecordsTab({ highlightId }: { highlightId?: string | null }) {
   const [editTarget, setEditTarget] = useState<XboxSaleRecord | null>(null);
   const [expandTarget, setExpandTarget] = useState<XboxSaleRecord | null>(null);
   const [logsTarget, setLogsTarget] = useState<XboxSaleRecord | null>(null);
+  const [dateRange, setDateRange] = useState(defaultDateRange);
 
   const { data: records = [], isFetching, refetch } = useQuery({
-    queryKey: ["xbox-sale-records"],
-    queryFn: () => getXboxSaleRecords()
+    queryKey: ["xbox-sale-records", dateRange.from, dateRange.to],
+    queryFn: () => getXboxSaleRecords({ from: dateRange.from, to: dateRange.to })
+  });
+  const { data: summary } = useQuery({
+    queryKey: ["xbox-sales-summary", dateRange.from, dateRange.to],
+    queryFn: () => getXboxSalesSummary({ from: dateRange.from, to: dateRange.to })
   });
   const { data: accounts = [] } = useQuery({
     queryKey: ["xbox-accounts"],
@@ -1736,14 +1877,74 @@ function SaleRecordsTab() {
     queryFn: () => getXboxWalletSettings(true)
   });
 
+  const exportUrl = exportXboxSaleRecordsUrl({ from: dateRange.from, to: dateRange.to });
+
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-end">
-        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
-          <RefreshCcw className={cn("h-4 w-4", isFetching && "animate-spin")} />
-          刷新
-        </Button>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <DateRangeFilter from={dateRange.from} to={dateRange.to} onChange={setDateRange} />
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <a href={exportUrl} download>
+              <Download className="h-4 w-4" />
+              导出 Excel
+            </a>
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+            <RefreshCcw className={cn("h-4 w-4", isFetching && "animate-spin")} />
+            刷新
+          </Button>
+        </div>
       </div>
+
+      {/* 汇总卡 (CEO 2026-05-08 Q2:A) */}
+      {summary ? (
+        <div className="grid gap-3 md:grid-cols-3">
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-xs text-muted-foreground">销售记录数</div>
+              <div className="mt-1 tabular-nums text-2xl font-semibold">{summary.saleRecordCount}</div>
+              <div className="mt-1 text-xs text-muted-foreground">关联订单 {summary.orderCount}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-xs text-muted-foreground">按币种总额</div>
+              <div className="mt-1 space-y-0.5">
+                {summary.totalByCurrency.length === 0 ? (
+                  <div className="tabular-nums text-2xl font-semibold text-muted-foreground">¥0</div>
+                ) : (
+                  summary.totalByCurrency.map((c) => (
+                    <div key={c.currency} className="tabular-nums text-base font-semibold text-emerald-600">
+                      {c.currency} {Number(c.total).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      <span className="ml-2 text-xs text-muted-foreground">({c.count} 笔)</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4">
+              <div className="text-xs text-muted-foreground">按渠道占比（备注模板）</div>
+              <div className="mt-1 space-y-0.5 max-h-24 overflow-y-auto">
+                {summary.totalByItem.length === 0 ? (
+                  <div className="text-sm text-muted-foreground">暂无</div>
+                ) : (
+                  summary.totalByItem.slice(0, 6).map((it) => (
+                    <div key={`${it.itemLabel}-${it.currency}`} className="flex justify-between text-xs">
+                      <span className="text-muted-foreground truncate">{it.itemLabel}</span>
+                      <span className="tabular-nums font-medium">
+                        {it.currency} {Number(it.total).toLocaleString("zh-CN")}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
       <Card>
         <CardContent className="p-0">
           <Table>
@@ -1762,8 +1963,9 @@ function SaleRecordsTab() {
             <TableBody>
               {records.map((record) => {
                 const account = accounts.find((a) => a.id === record.accountId);
+                const isHighlighted = highlightId === record.id;
                 return (
-                  <TableRow key={record.id}>
+                  <TableRow key={record.id} className={cn(isHighlighted && "bg-emerald-50")}>
                     <TableCell className="text-xs tabular-nums">{record.saleDate}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {account?.accountNo ?? account?.name ?? "-"}
@@ -2281,6 +2483,15 @@ function AccountsManagementTab() {
 
 export function XboxPage() {
   const [tab, setTab] = useState<XboxTab>("accounts");
+  const [highlightSaleRecordId, setHighlightSaleRecordId] = useState<string | null>(null);
+
+  // 跳转到销售记录 tab 并高亮某条
+  const jumpToSaleRecord = (id: string) => {
+    setHighlightSaleRecordId(id);
+    setTab("sale-records");
+    // 5 秒后自动取消高亮
+    setTimeout(() => setHighlightSaleRecordId(null), 5000);
+  };
 
   return (
     <div className="space-y-5">
@@ -2309,8 +2520,8 @@ export function XboxPage() {
       </div>
 
       {tab === "accounts" ? <AccountsManagementTab /> : null}
-      {tab === "orders" ? <OrdersTab /> : null}
-      {tab === "sale-records" ? <SaleRecordsTab /> : null}
+      {tab === "orders" ? <OrdersTab onJumpToSaleRecord={jumpToSaleRecord} /> : null}
+      {tab === "sale-records" ? <SaleRecordsTab highlightId={highlightSaleRecordId} /> : null}
       {tab === "wallet-settings" ? <WalletSettingsTab /> : null}
     </div>
   );
