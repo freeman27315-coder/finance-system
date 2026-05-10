@@ -42,6 +42,11 @@ from src.services.assets import ensure_default_asset_wallets
 from src.services.taiwan import ensure_default_taiwan_wallets
 from src.services.taobao import ensure_default_taobao_wallets
 from src.services.vendors import ensure_vendor_wallets
+from src.services.xbox_sales_ledger import (
+    ensure_xbox_default_wallet_settings,
+    ensure_xbox_sales_ledger_wallets,
+    soft_delete_old_taiwan_wallets,
+)
 
 
 @asynccontextmanager
@@ -53,6 +58,10 @@ async def lifespan(_: FastAPI):
         ensure_default_taobao_wallets(db)
         ensure_default_taiwan_wallets(db)
         ensure_vendor_wallets(db)
+        # XBOX 销售归口"理论值"钱包（CEO 2026-05-08 确认结构）
+        soft_delete_old_taiwan_wallets(db)  # CEO Q3:B - 台湾旧 3 个空钱包软删除
+        leaf_id_by_name = ensure_xbox_sales_ledger_wallets(db)
+        ensure_xbox_default_wallet_settings(db, leaf_id_by_name)
         db.commit()
     finally:
         db.close()

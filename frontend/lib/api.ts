@@ -895,10 +895,13 @@ type XboxPoolOptionGroupResponse = {
   }[];
 };
 
-export async function getXboxWalletPoolOptions(): Promise<XboxPoolOptionGroup[]> {
+export async function getXboxWalletPoolOptions(
+  options?: { xboxOnly?: boolean }
+): Promise<XboxPoolOptionGroup[]> {
+  const xboxOnly = options?.xboxOnly ?? true;
   try {
     const data = await fetchJson<XboxPoolOptionGroupResponse[]>(
-      "/api/xbox/wallet-pool-options"
+      `/api/xbox/wallet-pool-options?xboxOnly=${xboxOnly}`
     );
     return data.map((g) => ({
       groupCode: g.groupCode ?? g.group_code ?? "",
@@ -910,6 +913,53 @@ export async function getXboxWalletPoolOptions(): Promise<XboxPoolOptionGroup[]>
         fullPath: w.fullPath ?? w.full_path ?? w.name
       }))
     }));
+  } catch {
+    return [];
+  }
+}
+
+type XboxChangeLogResponse = {
+  id: string | number;
+  entityType?: string;
+  entity_type?: string;
+  entityId?: string | number;
+  entity_id?: string | number;
+  action: string;
+  detail?: string | null;
+  operator?: string | null;
+  createdAt?: string;
+  created_at?: string;
+};
+
+function _normalizeChangeLog(log: XboxChangeLogResponse) {
+  return {
+    id: String(log.id),
+    entityType: ((log.entityType ?? log.entity_type) as "order" | "sale_record") ?? "order",
+    entityId: String(log.entityId ?? log.entity_id ?? ""),
+    action: log.action as "created" | "updated" | "completed" | "merged" | "wallet_pool_changed",
+    detail: log.detail ?? null,
+    operator: log.operator ?? null,
+    createdAt: log.createdAt ?? log.created_at ?? ""
+  };
+}
+
+export async function getXboxOrderChangeLogs(orderId: string) {
+  try {
+    const data = await fetchJson<XboxChangeLogResponse[]>(
+      `/api/xbox/orders/${orderId}/change-logs`
+    );
+    return data.map(_normalizeChangeLog);
+  } catch {
+    return [];
+  }
+}
+
+export async function getXboxSaleRecordChangeLogs(recordId: string) {
+  try {
+    const data = await fetchJson<XboxChangeLogResponse[]>(
+      `/api/xbox/sale-records/${recordId}/change-logs`
+    );
+    return data.map(_normalizeChangeLog);
   } catch {
     return [];
   }

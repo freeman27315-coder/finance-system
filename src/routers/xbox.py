@@ -16,6 +16,7 @@ from src.models.xbox import (
     XboxAccount,
     XboxAccountAuditLog,
     XboxAccountStatus,
+    XboxChangeLog,
     XboxCountry,
     XboxCurrency,
     XboxOrder,
@@ -845,8 +846,10 @@ class XboxPoolOptionGroup(BaseModel):
     wallets: list[XboxPoolOptionWallet]
 
 
-# 钱包大类显示标签 + 顺序
+# 钱包大类显示标签 + 顺序（XBOX 钱包设置只用 XBOX_SALES_LEDGER,
+# 但接口保留全部大类返回供其他业务复用）
 _GROUP_META: list[tuple[str, str]] = [
+    ("XBOX_SALES_LEDGER", "XBOX 销售归口"),  # 默认放最前,XBOX 钱包设置首选
     ("ASSET_RMB", "资产 RMB"),
     ("ASSET_USDT", "资产 USDT"),
     ("ASSET_USD", "资产 USD"),
@@ -862,11 +865,17 @@ _GROUP_META: list[tuple[str, str]] = [
     response_model=list[XboxPoolOptionGroup],
     response_model_by_alias=True,
 )
-def list_wallet_pool_options(db: Session = Depends(get_db)) -> list[XboxPoolOptionGroup]:
-    """返回所有可作"资金池"的钱包,按大类分组（CEO Q1A：全部钱包大类都行）。
+def list_wallet_pool_options(
+    xbox_only: bool = Query(True, alias="xboxOnly"),
+    db: Session = Depends(get_db),
+) -> list[XboxPoolOptionGroup]:
+    """返回可作"资金池"的钱包,按大类分组。
 
-    校验规则: 销售记录创建/修改时,sale_currency 必须等于钱包 currency,
-    所以前端可在所有大类下挑,后端会按币种校验拒绝不匹配的组合。
+    CEO 2026-05-08 Q2:A - 默认 ``xboxOnly=true``,只返回 XBOX 销售归口理论值钱包,
+    防止客服误选实际值钱包。前端可显式传 ``?xboxOnly=false`` 取全部钱包(高级模式)。
+
+    校验规则: 销售记录创建/修改时, sale_currency 必须等于钱包 currency,
+    后端按币种校验拒绝不匹配的组合。
     """
     from src.models.wallet import Wallet  # 局部 import 避免循环依赖问题
 
@@ -898,6 +907,9 @@ def list_wallet_pool_options(db: Session = Depends(get_db)) -> list[XboxPoolOpti
 
     out: list[XboxPoolOptionGroup] = []
     for type_code, label in _GROUP_META:
+        # xbox_only 模式只返回 XBOX_SALES_LEDGER 大类
+        if xbox_only and type_code != "XBOX_SALES_LEDGER":
+            continue
         items = by_type.get(type_code, [])
         if not items:
             continue
@@ -917,3 +929,74 @@ def list_wallet_pool_options(db: Session = Depends(get_db)) -> list[XboxPoolOpti
             )
         )
     return out
+
+
+# ----- 订单 / 销售记录变更日志（CEO Q3:A）-----
+
+
+class XboxChangeLogOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    id: int
+    entity_type: str
+    entity_id: int
+    action: str
+    detail: Optional[str] = None
+    operator: Optional[str] = None
+    created_at: str
+
+
+def _serialize_change_log(log: XboxChangeLog) -> XboxChangeLogOut:
+    return XboxChangeLogOut(
+        id=log.id,
+        entity_type=log.entity_type,
+        entity_id=log.entity_id,
+        action=log.action,
+        detail=log.detail,
+        operator=log.operator,
+        created_at=log.created_at.isoformat() if log.created_at else "",
+    )
+
+
+@router.get(
+    "/orders/{order_id}/change-logs",
+    response_model=list[XboxChangeLogOut],
+    response_model_by_alias=True,
+)
+def get_order_change_logs(
+    order_id: int,
+    limit: int = Query(50, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> list[XboxChangeLogOut]:
+    """查订单变更历史。"""
+    logs = list(
+        db.scalars(
+            select(XboxChangeLog)
+            .where(XboxChangeLog.entity_type == "order", XboxChangeLog.entity_id == order_id)
+            .order_by(XboxChangeLog.id.desc())
+            .limit(limit)
+        )
+    )
+    return [_serialize_change_log(log) for log in logs]
+
+
+@router.get(
+    "/sale-records/{record_id}/change-logs",
+    response_model=list[XboxChangeLogOut],
+    response_model_by_alias=True,
+)
+def get_sale_record_change_logs(
+    record_id: int,
+    limit: int = Query(50, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> list[XboxChangeLogOut]:
+    """查销售记录变更历史（含创建/合单/改售价/改资金池）。"""
+    logs = list(
+        db.scalars(
+            select(XboxChangeLog)
+            .where(XboxChangeLog.entity_type == "sale_record", XboxChangeLog.entity_id == record_id)
+            .order_by(XboxChangeLog.id.desc())
+            .limit(limit)
+        )
+    )
+    return [_serialize_change_log(log) for log in logs]

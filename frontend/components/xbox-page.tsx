@@ -5,6 +5,8 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Gamepad2,
   History,
   KeyRound,
@@ -31,7 +33,9 @@ import {
   createXboxOrder,
   getXboxAccountAuditLogs,
   getXboxAccounts,
+  getXboxOrderChangeLogs,
   getXboxOrders,
+  getXboxSaleRecordChangeLogs,
   getXboxSaleRecords,
   getXboxSummary,
   getXboxTransactions,
@@ -140,6 +144,153 @@ function SummaryCards({ country }: { country: XboxCountry }) {
     </div>
   );
 }
+
+// PR P0.2++ 销售记录/订单 变更日志 Modal（CEO Q3:A）
+function ChangeLogsModal({
+  title,
+  fetchLogs,
+  onClose
+}: {
+  title: string;
+  fetchLogs: () => Promise<{ id: string; action: string; detail: string | null; operator: string | null; createdAt: string }[]>;
+  onClose: () => void;
+}) {
+  const { data: logs = [], isFetching } = useQuery({
+    queryKey: ["xbox-change-logs", title],
+    queryFn: fetchLogs
+  });
+
+  const ACTION_LABELS: Record<string, string> = {
+    created: "新建",
+    updated: "更新",
+    completed: "补齐转销售",
+    merged: "合单追加",
+    wallet_pool_changed: "切换资金池"
+  };
+
+  const ACTION_TONES: Record<string, "success" | "warning" | "danger" | "neutral" | "transfer"> = {
+    created: "success",
+    updated: "transfer",
+    completed: "success",
+    merged: "warning",
+    wallet_pool_changed: "danger"
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Card className="flex max-h-[80vh] w-full max-w-2xl flex-col">
+        <CardHeader>
+          <CardTitle>变更历史 · {title}</CardTitle>
+        </CardHeader>
+        <CardContent className="flex-1 overflow-y-auto">
+          {logs.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border px-3 py-10 text-center text-sm text-muted-foreground">
+              {isFetching ? "加载中..." : "暂无变更记录"}
+            </div>
+          ) : (
+            <div className="divide-y divide-border rounded-md border border-border">
+              {logs.map((log) => (
+                <div key={log.id} className="flex items-start gap-3 px-3 py-2">
+                  <Badge tone={ACTION_TONES[log.action] ?? "neutral"}>
+                    {ACTION_LABELS[log.action] ?? log.action}
+                  </Badge>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm">{log.detail || "(无明细)"}</div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">
+                      {formatDateTime(log.createdAt)} · {log.operator ?? "manual"}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="mt-3 flex justify-end">
+            <Button variant="ghost" onClick={onClose}>关闭</Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// PR P0.2++ 销售记录展开看包含订单 Modal（CEO Q4:A）
+function ExpandedOrdersForSaleModal({
+  saleRecord,
+  onClose
+}: {
+  saleRecord: XboxSaleRecord;
+  onClose: () => void;
+}) {
+  const { data: allOrders = [], isFetching } = useQuery({
+    queryKey: ["xbox-orders"],
+    queryFn: () => getXboxOrders()
+  });
+  // 过滤出本销售记录关联的订单
+  const includedOrders = allOrders.filter((o) =>
+    saleRecord.orderIds.includes(o.id)
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Card className="flex max-h-[80vh] w-full max-w-3xl flex-col">
+        <CardHeader>
+          <CardTitle>包含订单 · 销售 #{saleRecord.id}</CardTitle>
+          <div className="mt-1 text-xs text-muted-foreground">
+            合并 {saleRecord.orderIds.length} 个订单 · 总售价{" "}
+            {formatMoney(saleRecord.salePrice, saleRecord.saleCurrency as Currency)} ·
+            资金池 {saleRecord.walletItemLabel}
+          </div>
+        </CardHeader>
+        <CardContent className="flex-1 overflow-y-auto">
+          {includedOrders.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border px-3 py-10 text-center text-sm text-muted-foreground">
+              {isFetching ? "加载中..." : "未找到关联订单"}
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>订单号</TableHead>
+                  <TableHead className="text-right">本币金额</TableHead>
+                  <TableHead className="text-right">RMB 成本</TableHead>
+                  <TableHead>商品</TableHead>
+                  <TableHead className="text-right">售价</TableHead>
+                  <TableHead>订单时间</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {includedOrders.map((o) => (
+                  <TableRow key={o.id}>
+                    <TableCell className="font-medium tabular-nums">{o.orderNo}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatMoney(o.amountLocal, o.currencyLocal as Currency)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-red-600">
+                      {formatMoney(o.rmbCost, "CNY")}
+                    </TableCell>
+                    <TableCell className="text-xs">{o.productName ?? "-"}</TableCell>
+                    <TableCell className="text-right tabular-nums text-emerald-600">
+                      {o.salePrice != null && o.saleCurrency
+                        ? formatMoney(o.salePrice, o.saleCurrency as Currency)
+                        : "-"}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground tabular-nums">
+                      {formatDateTime(o.orderAt)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+          <div className="mt-3 flex justify-end">
+            <Button variant="ghost" onClick={onClose}>关闭</Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 
 // PR P0.1 状态徽章颜色配置
 const STATUS_META: Record<
@@ -1269,6 +1420,7 @@ function OrdersTab() {
   const [showCreate, setShowCreate] = useState(false);
   const [completeTarget, setCompleteTarget] = useState<XboxOrder | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "pending_complete" | "converted">("all");
+  const [logsTarget, setLogsTarget] = useState<XboxOrder | null>(null);
 
   const { data: accounts = [] } = useQuery({
     queryKey: ["xbox-accounts"],
@@ -1358,17 +1510,23 @@ function OrdersTab() {
                       {order.productName ?? "-"}
                     </TableCell>
                     <TableCell className="text-right">
-                      {order.status === "pending_complete" ? (
-                        <Button size="sm" variant="outline" onClick={() => setCompleteTarget(order)}>
-                          <Pencil className="h-3.5 w-3.5" />
-                          补齐
+                      <div className="flex justify-end gap-1">
+                        {order.status === "pending_complete" ? (
+                          <Button size="sm" variant="outline" onClick={() => setCompleteTarget(order)}>
+                            <Pencil className="h-3.5 w-3.5" />
+                            补齐
+                          </Button>
+                        ) : (
+                          <Badge tone="success">
+                            <CheckCircle2 className="h-3 w-3 mr-1" />
+                            已转销售
+                          </Badge>
+                        )}
+                        <Button size="sm" variant="ghost" onClick={() => setLogsTarget(order)}>
+                          <History className="h-3.5 w-3.5" />
+                          历史
                         </Button>
-                      ) : (
-                        <Badge tone="success">
-                          <CheckCircle2 className="h-3 w-3 mr-1" />
-                          已转销售
-                        </Badge>
-                      )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
@@ -1394,6 +1552,13 @@ function OrdersTab() {
           accounts={accounts}
           walletMethods={walletMethods}
           onClose={() => setCompleteTarget(null)}
+        />
+      ) : null}
+      {logsTarget ? (
+        <ChangeLogsModal
+          title={`订单 ${logsTarget.orderNo}`}
+          fetchLogs={() => getXboxOrderChangeLogs(logsTarget.id)}
+          onClose={() => setLogsTarget(null)}
         />
       ) : null}
     </div>
@@ -1555,6 +1720,8 @@ function EditSaleRecordModal({
 
 function SaleRecordsTab() {
   const [editTarget, setEditTarget] = useState<XboxSaleRecord | null>(null);
+  const [expandTarget, setExpandTarget] = useState<XboxSaleRecord | null>(null);
+  const [logsTarget, setLogsTarget] = useState<XboxSaleRecord | null>(null);
 
   const { data: records = [], isFetching, refetch } = useQuery({
     queryKey: ["xbox-sale-records"],
@@ -1608,13 +1775,31 @@ function SaleRecordsTab() {
                     </TableCell>
                     <TableCell className="text-xs">{record.walletItemLabel}</TableCell>
                     <TableCell className="text-right text-xs text-muted-foreground tabular-nums">
-                      {record.orderIds.length}
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 hover:text-foreground"
+                        onClick={() => setExpandTarget(record)}
+                        title="查看包含订单"
+                      >
+                        <ChevronRight className="h-3 w-3" />
+                        {record.orderIds.length}
+                      </button>
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button size="sm" variant="ghost" onClick={() => setEditTarget(record)}>
-                        <Pencil className="h-3.5 w-3.5" />
-                        修改
-                      </Button>
+                      <div className="flex justify-end gap-1">
+                        <Button size="sm" variant="ghost" onClick={() => setExpandTarget(record)}>
+                          <ChevronDown className="h-3.5 w-3.5" />
+                          订单明细
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditTarget(record)}>
+                          <Pencil className="h-3.5 w-3.5" />
+                          修改
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setLogsTarget(record)}>
+                          <History className="h-3.5 w-3.5" />
+                          历史
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
@@ -1636,6 +1821,19 @@ function SaleRecordsTab() {
           record={editTarget}
           walletMethods={walletMethods}
           onClose={() => setEditTarget(null)}
+        />
+      ) : null}
+      {expandTarget ? (
+        <ExpandedOrdersForSaleModal
+          saleRecord={expandTarget}
+          onClose={() => setExpandTarget(null)}
+        />
+      ) : null}
+      {logsTarget ? (
+        <ChangeLogsModal
+          title={`销售 #${logsTarget.id} ${logsTarget.productName}`}
+          fetchLogs={() => getXboxSaleRecordChangeLogs(logsTarget.id)}
+          onClose={() => setLogsTarget(null)}
         />
       ) : null}
     </div>

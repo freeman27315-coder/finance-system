@@ -20,6 +20,13 @@ from src import database
 from src.main import app
 from src.models.wallet import Wallet, WalletType, create_wallet, Currency
 from src.services.assets import ensure_default_asset_wallets
+from src.services.taiwan import ensure_default_taiwan_wallets
+from src.services.taobao import ensure_default_taobao_wallets
+from src.services.xbox_sales_ledger import (
+    ensure_xbox_default_wallet_settings,
+    ensure_xbox_sales_ledger_wallets,
+    soft_delete_old_taiwan_wallets,
+)
 
 
 @pytest.fixture()
@@ -29,6 +36,12 @@ def client(tmp_path):
     db = database.SessionLocal()
     try:
         ensure_default_asset_wallets(db)
+        ensure_default_taobao_wallets(db)
+        # 测试这套测试需要台湾老 3 个钱包先存在再被软删除
+        ensure_default_taiwan_wallets(db)
+        soft_delete_old_taiwan_wallets(db)
+        leaf_id_by_name = ensure_xbox_sales_ledger_wallets(db)
+        ensure_xbox_default_wallet_settings(db, leaf_id_by_name)
         db.commit()
     finally:
         db.close()
@@ -126,8 +139,11 @@ def test_wallet_settings_full_sync_disables_dropped_items(client):
     )
     assert r2["items_disabled"] == 1
 
+    # 用 onlyActive=false 取全部,精确找 code="agent" 的 method
     r = client.get("/xbox/wallet-settings", params={"onlyActive": "false"})
-    items = r.json()[0]["items"]
+    methods = r.json()
+    agent_method = next(m for m in methods if m["code"] == "agent")
+    items = agent_method["items"]
     by_code = {it["code"]: it for it in items}
     assert by_code["001"]["isActive"] is True
     assert by_code["002"]["isActive"] is False
@@ -421,3 +437,120 @@ def test_change_wallet_pool_debits_old_credits_new(client):
 
     assert _wallet_balance(ctx["pool_a_id"]) == Decimal("0.000000")
     assert _wallet_balance(ctx["pool_b_id"]) == Decimal("800.000000")
+
+
+# ----------------------------------------------------------
+# CEO 2026-05-08 Q3:A - 订单/销售记录变更审计日志
+# ----------------------------------------------------------
+
+def test_order_creation_writes_change_log(client):
+    account = _create_account(client)
+    r = client.post(
+        "/xbox/orders",
+        json={
+            "accountId": account["id"],
+            "orderNo": "LOG-1",
+            "amountLocal": "100",
+            "currencyLocal": "USD",
+            "orderAt": "2026-05-08T10:00:00",
+        },
+    ).json()
+    logs = client.get(f"/xbox/orders/{r['id']}/change-logs").json()
+    assert len(logs) == 1
+    assert logs[0]["action"] == "created"
+    assert "LOG-1" in logs[0]["detail"]
+
+
+def test_sale_record_creation_and_pool_change_writes_logs(client):
+    """新建销售记录和改资金池都写日志。"""
+    ctx = _setup_basic_sale(client)
+    record_id = ctx["sale_record_id"]
+
+    # 创建时已有 1 条 created 日志
+    logs = client.get(f"/xbox/sale-records/{record_id}/change-logs").json()
+    assert len(logs) == 1
+    assert logs[0]["action"] == "created"
+
+    # 改资金池 → 加 1 条 wallet_pool_changed 日志
+    client.patch(
+        f"/xbox/sale-records/{record_id}",
+        json={
+            "walletItemId": ctx["item_b_id"],
+            "walletItemLabel": "代理 002",
+            "walletPoolId": ctx["pool_b_id"],
+        },
+    )
+    logs = client.get(f"/xbox/sale-records/{record_id}/change-logs").json()
+    assert len(logs) == 2
+    assert logs[0]["action"] == "wallet_pool_changed"  # 最新在前
+
+    # 改售价 → 加 1 条 updated 日志
+    client.patch(f"/xbox/sale-records/{record_id}", json={"salePrice": "999"})
+    logs = client.get(f"/xbox/sale-records/{record_id}/change-logs").json()
+    assert len(logs) == 3
+    assert logs[0]["action"] == "updated"
+
+
+def test_sales_ledger_default_init_creates_9_pool_wallets(client):
+    """启动后端时自动建 9 个理论值钱包（CEO 2026-05-08 业务结构）。"""
+    r = client.get("/xbox/wallet-pool-options")  # 默认 xboxOnly=true
+    assert r.status_code == 200
+    groups = r.json()
+    # 只返回 XBOX_SALES_LEDGER 大类
+    assert len(groups) == 1
+    assert groups[0]["groupCode"] == "XBOX_SALES_LEDGER"
+
+    leaf_names = {w["name"] for w in groups[0]["wallets"]}
+    expected = {
+        "丙火网络", "兔仔电玩", "小小电玩",
+        "银行卡A", "银行卡B", "袋鼠8591", "喵喵8591", "存余额",
+        "TOM支付宝",
+    }
+    assert leaf_names == expected
+
+
+def test_sales_ledger_default_method_settings_created(client):
+    """启动时自动建 3 个 method + 9 个 item。"""
+    r = client.get("/xbox/wallet-settings")
+    assert r.status_code == 200
+    methods = r.json()
+    by_code = {m["code"]: m for m in methods}
+    assert "taobao_channel" in by_code
+    assert "taiwan_channel" in by_code
+    assert "rmb_channel" in by_code
+    assert len(by_code["taobao_channel"]["items"]) == 3
+    assert len(by_code["taiwan_channel"]["items"]) == 5
+    assert len(by_code["rmb_channel"]["items"]) == 1
+
+
+def test_old_taiwan_wallets_soft_deleted(client):
+    """旧台湾 3 个钱包 (8591余额/银行卡/超商代收金流余额) 启动时软删除。"""
+    from src.models.wallet import Wallet, WalletType
+    db = database.SessionLocal()
+    try:
+        # 这些应该被软删除（deleted_at 不为空）
+        for name in ("8591余额", "银行卡", "超商代收金流余额"):
+            wallet = db.scalar(
+                select(Wallet).where(
+                    Wallet.type == WalletType.TAIWAN.value,
+                    Wallet.name == name,
+                    Wallet.parent_id.is_(None),
+                )
+            )
+            # 可能不存在(从未建过) 或 已软删除
+            if wallet is not None:
+                assert wallet.deleted_at is not None, f"老台湾钱包 {name} 应被软删除"
+    finally:
+        db.close()
+
+
+def test_xbox_only_pool_options_excludes_other_categories(client):
+    """xboxOnly=false 才返回所有大类。"""
+    r1 = client.get("/xbox/wallet-pool-options")  # default true
+    assert all(g["groupCode"] == "XBOX_SALES_LEDGER" for g in r1.json())
+
+    r2 = client.get("/xbox/wallet-pool-options?xboxOnly=false")
+    codes = {g["groupCode"] for g in r2.json()}
+    assert "XBOX_SALES_LEDGER" in codes
+    assert "ASSET_RMB" in codes
+    assert "TAOBAO" in codes
