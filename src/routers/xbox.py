@@ -16,6 +16,7 @@ from src.models.xbox import (
     XboxAccount,
     XboxAccountAuditLog,
     XboxAccountStatus,
+    XboxBalanceSnapshot,
     XboxChangeLog,
     XboxCountry,
     XboxCurrency,
@@ -23,6 +24,7 @@ from src.models.xbox import (
     XboxOrderStatus,
     XboxReconcileMapping,
     XboxSaleRecord,
+    XboxSyncBatch,
     XboxTransaction,
     XboxTransactionType,
     XboxWalletItem,
@@ -53,6 +55,12 @@ from src.services.xbox_reconcile import (
     delete_mapping,
     get_reconcile_report_for_day,
     list_mappings,
+)
+from src.services.xbox_sync import (
+    VALID_SYNC_COUNTS,
+    list_balance_snapshots,
+    list_sync_batches,
+    trigger_sync,
 )
 from src.services.xbox_wallet_setting import (
     list_wallet_methods,
@@ -1203,3 +1211,116 @@ def reconcile_report_endpoint(
 ) -> list[dict]:
     """对账报告：每个理论值钱包当天的理论金额 vs 实际金额合计 vs 差异。"""
     return get_reconcile_report_for_day(db, target_date)
+
+
+# ===================================================================
+# Microsoft 订单同步（FR-04 / IF-03,阶段 1 mock）
+# ===================================================================
+
+
+class XboxSyncRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    account_id: int
+    count: int = 20  # 10/20/30/50
+
+
+class XboxSyncBatchOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    id: int
+    account_id: int
+    started_at: str
+    finished_at: Optional[str] = None
+    requested_count: int
+    fetched_count: int
+    success: bool
+    failure_category: Optional[str] = None
+    failure_message: Optional[str] = None
+
+
+class XboxBalanceSnapshotOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    id: int
+    account_id: int
+    currency: str
+    balance: Decimal
+    captured_at: str
+
+
+def _serialize_sync_batch(b: XboxSyncBatch) -> XboxSyncBatchOut:
+    return XboxSyncBatchOut(
+        id=b.id,
+        account_id=b.account_id,
+        started_at=b.started_at.isoformat() if b.started_at else "",
+        finished_at=b.finished_at.isoformat() if b.finished_at else None,
+        requested_count=b.requested_count,
+        fetched_count=b.fetched_count,
+        success=b.success,
+        failure_category=b.failure_category,
+        failure_message=b.failure_message,
+    )
+
+
+def _serialize_balance_snapshot(s: XboxBalanceSnapshot) -> XboxBalanceSnapshotOut:
+    return XboxBalanceSnapshotOut(
+        id=s.id,
+        account_id=s.account_id,
+        currency=s.currency,
+        balance=s.balance,
+        captured_at=s.captured_at.isoformat() if s.captured_at else "",
+    )
+
+
+@router.post(
+    "/sync/orders",
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+)
+def sync_orders_endpoint(
+    request: XboxSyncRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """触发 Microsoft 订单同步（阶段 1: mock 数据）。
+
+    返回 ``{batchId, success, ordersAdded, ordersSkipped, balance, failure}``。
+    """
+    account = get_account_or_404(db, request.account_id)
+    try:
+        result = trigger_sync(db, account, count=request.count)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    return result
+
+
+@router.get(
+    "/sync/batches",
+    response_model=list[XboxSyncBatchOut],
+    response_model_by_alias=True,
+)
+def list_sync_batches_endpoint(
+    account_id: Optional[int] = Query(None, alias="accountId"),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> list[XboxSyncBatchOut]:
+    """查同步批次历史(最新在前)。"""
+    batches = list_sync_batches(db, account_id=account_id, limit=limit)
+    return [_serialize_sync_batch(b) for b in batches]
+
+
+@router.get(
+    "/accounts/{account_id}/balance-snapshots",
+    response_model=list[XboxBalanceSnapshotOut],
+    response_model_by_alias=True,
+)
+def list_balance_snapshots_endpoint(
+    account_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> list[XboxBalanceSnapshotOut]:
+    """查账号余额快照(最新在前)。"""
+    get_account_or_404(db, account_id)
+    snapshots = list_balance_snapshots(db, account_id, limit=limit)
+    return [_serialize_balance_snapshot(s) for s in snapshots]
