@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  CloudDownload,
   Download,
   ExternalLink,
   Gamepad2,
@@ -50,6 +51,7 @@ import {
   getXboxSaleRecords,
   getXboxSalesSummary,
   getXboxSummary,
+  getXboxSyncBatches,
   getXboxTransactions,
   getXboxWalletPoolOptions,
   getXboxWalletSettings,
@@ -57,6 +59,7 @@ import {
   patchXboxSaleRecord,
   pushXboxWalletSettings,
   rechargeXbox,
+  triggerXboxSync,
   updateXboxAccount
 } from "@/lib/api";
 import { formatMoney } from "@/lib/money";
@@ -1148,6 +1151,221 @@ function AccountsTable({
 
 const SALE_CURRENCY_OPTIONS: XboxSaleCurrency[] = ["CNY", "USD", "USDT", "TWD"];
 
+// Microsoft 订单同步 Modal（阶段 1: mock 数据）
+function SyncOrdersModal({
+  accounts,
+  onClose
+}: {
+  accounts: XboxAccount[];
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
+  const [count, setCount] = useState<10 | 20 | 30 | 50>(20);
+  const [result, setResult] = useState<{
+    success: boolean;
+    ordersAdded: number;
+    ordersSkipped: number;
+    balance: { currency: string; balance: string } | null;
+    failure: { category: string; message: string } | null;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const FAILURE_LABELS: Record<string, string> = {
+    password_error: "密码错误（账号锁定或改密）",
+    verification_required: "需要安全验证（请人工登录建立信任设备）",
+    login_page_changed: "Microsoft 登录页变化（需要更新脚本）",
+    order_page_failed: "订单页访问失败",
+    network_error: "网络错误",
+    unknown: "未知错误"
+  };
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!accountId) throw new Error("请选账号");
+      return triggerXboxSync(accountId, count);
+    },
+    onSuccess: async (data) => {
+      setResult({
+        success: data.success,
+        ordersAdded: data.ordersAdded,
+        ordersSkipped: data.ordersSkipped,
+        balance: data.balance,
+        failure: data.failure
+      });
+      await queryClient.invalidateQueries({ queryKey: ["xbox-orders"] });
+      await queryClient.invalidateQueries({ queryKey: ["xbox-accounts"] });
+      await queryClient.invalidateQueries({ queryKey: ["xbox-sync-batches"] });
+    },
+    onError: (err) => setError(err instanceof Error ? err.message : "同步失败")
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Card className="w-full max-w-md">
+        <CardHeader>
+          <CardTitle>同步 Microsoft 订单</CardTitle>
+          <div className="mt-1 text-xs text-muted-foreground">
+            从 Microsoft 账号自动抓取订单与余额。阶段 1 用 mock 数据,真实抓取将在阶段 2 上线。
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">所属账号</div>
+            <select
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={accountId}
+              onChange={(event) => setAccountId(event.target.value)}
+              disabled={mutation.isPending}
+            >
+              {accounts.map((acc) => (
+                <option key={acc.id} value={acc.id}>
+                  {acc.accountNo ?? acc.name} · {acc.country} · {acc.status}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">同步条数</div>
+            <div className="grid grid-cols-4 gap-1 rounded-md border border-border p-1">
+              {([10, 20, 30, 50] as const).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  className={cn(
+                    "h-9 rounded text-sm font-medium text-muted-foreground transition-colors",
+                    count === c && "bg-muted text-foreground"
+                  )}
+                  onClick={() => setCount(c)}
+                  disabled={mutation.isPending}
+                >
+                  最近 {c}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {result ? (
+            result.success ? (
+              <div className="rounded-md bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-800 space-y-1">
+                <div className="font-medium">✓ 同步成功</div>
+                <div>新增订单 {result.ordersAdded} 条 · 已存在跳过 {result.ordersSkipped} 条</div>
+                {result.balance ? (
+                  <div>账号余额：{result.balance.currency} {result.balance.balance}</div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="rounded-md bg-red-50 border border-red-200 p-3 text-sm text-red-700 space-y-1">
+                <div className="font-medium">✗ 同步失败</div>
+                <div>{FAILURE_LABELS[result.failure?.category ?? "unknown"] ?? result.failure?.category}</div>
+                {result.failure?.message ? (
+                  <div className="text-xs">{result.failure.message}</div>
+                ) : null}
+                <div className="text-xs mt-2 text-muted-foreground">
+                  账号状态已自动置为 error,你可在「账号管理」tab 解决问题后手动改回 active。
+                </div>
+              </div>
+            )
+          ) : null}
+
+          {error ? (
+            <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
+              {error}
+            </div>
+          ) : null}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>
+              {result ? "关闭" : "取消"}
+            </Button>
+            {result ? null : (
+              <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
+                {mutation.isPending ? "同步中..." : "开始同步"}
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// 同步批次历史 Modal（账号维度）
+function SyncBatchesModal({
+  accountId,
+  accountLabel,
+  onClose
+}: {
+  accountId: string;
+  accountLabel: string;
+  onClose: () => void;
+}) {
+  const { data: batches = [], isFetching } = useQuery({
+    queryKey: ["xbox-sync-batches", accountId],
+    queryFn: () => getXboxSyncBatches(accountId)
+  });
+
+  const FAILURE_LABELS: Record<string, string> = {
+    password_error: "密码错误",
+    verification_required: "需要验证",
+    login_page_changed: "登录页变化",
+    order_page_failed: "订单页失败",
+    network_error: "网络错误",
+    unknown: "未知错误"
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <Card className="flex max-h-[80vh] w-full max-w-3xl flex-col">
+        <CardHeader>
+          <CardTitle>同步历史 · {accountLabel}</CardTitle>
+        </CardHeader>
+        <CardContent className="flex-1 overflow-y-auto">
+          {batches.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border px-3 py-10 text-center text-sm text-muted-foreground">
+              {isFetching ? "加载中..." : "暂无同步记录"}
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>开始时间</TableHead>
+                  <TableHead>请求条数</TableHead>
+                  <TableHead>抓取条数</TableHead>
+                  <TableHead>结果</TableHead>
+                  <TableHead>失败原因</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {batches.map((b) => (
+                  <TableRow key={b.id}>
+                    <TableCell className="text-xs tabular-nums">{formatDateTime(b.startedAt)}</TableCell>
+                    <TableCell className="text-xs tabular-nums">{b.requestedCount}</TableCell>
+                    <TableCell className="text-xs tabular-nums">{b.fetchedCount}</TableCell>
+                    <TableCell>
+                      <Badge tone={b.success ? "success" : "danger"}>
+                        {b.success ? "成功" : "失败"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {b.success
+                        ? "-"
+                        : `${FAILURE_LABELS[b.failureCategory ?? "unknown"] ?? b.failureCategory} ${b.failureMessage ?? ""}`}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+          <div className="mt-3 flex justify-end">
+            <Button variant="ghost" onClick={onClose}>关闭</Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function CreateOrderModal({
   accounts,
   onClose
@@ -1539,6 +1757,8 @@ function CompleteOrderModal({
 function OrdersTab({ onJumpToSaleRecord }: { onJumpToSaleRecord?: (saleRecordId: string) => void }) {
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
+  const [showSync, setShowSync] = useState(false);
+  const [syncBatchesTarget, setSyncBatchesTarget] = useState<XboxAccount | null>(null);
   const [completeTarget, setCompleteTarget] = useState<XboxOrder | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "pending_complete" | "converted">("all");
   const [logsTarget, setLogsTarget] = useState<XboxOrder | null>(null);
@@ -1587,6 +1807,10 @@ function OrdersTab({ onJumpToSaleRecord }: { onJumpToSaleRecord?: (saleRecordId:
           <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
             <RefreshCcw className={cn("h-4 w-4", isFetching && "animate-spin")} />
             刷新
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setShowSync(true)}>
+            <CloudDownload className="h-4 w-4" />
+            同步 Microsoft 订单
           </Button>
           <Button size="sm" onClick={() => setShowCreate(true)}>
             <Plus className="h-4 w-4" />
@@ -1690,6 +1914,16 @@ function OrdersTab({ onJumpToSaleRecord }: { onJumpToSaleRecord?: (saleRecordId:
 
       {showCreate ? (
         <CreateOrderModal accounts={accounts} onClose={() => setShowCreate(false)} />
+      ) : null}
+      {showSync ? (
+        <SyncOrdersModal accounts={accounts} onClose={() => setShowSync(false)} />
+      ) : null}
+      {syncBatchesTarget ? (
+        <SyncBatchesModal
+          accountId={syncBatchesTarget.id}
+          accountLabel={syncBatchesTarget.accountNo ?? syncBatchesTarget.name}
+          onClose={() => setSyncBatchesTarget(null)}
+        />
       ) : null}
       {completeTarget ? (
         <CompleteOrderModal

@@ -944,6 +944,50 @@ export async function getXboxReconcileReport(date: string): Promise<XboxReconcil
   }
 }
 
+// Microsoft 订单同步（阶段 1: mock 数据）
+export type XboxSyncResult = {
+  batchId: number;
+  success: boolean;
+  ordersAdded: number;
+  ordersSkipped: number;
+  balance: { currency: string; balance: string } | null;
+  failure: { category: string; message: string } | null;
+};
+
+export async function triggerXboxSync(
+  accountId: string,
+  count: number
+): Promise<XboxSyncResult> {
+  const data = (await postJson("/api/xbox/sync/orders", {
+    accountId: Number(accountId),
+    count,
+  })) as XboxSyncResult;
+  return data;
+}
+
+export type XboxSyncBatch = {
+  id: number;
+  accountId: number;
+  startedAt: string;
+  finishedAt: string | null;
+  requestedCount: number;
+  fetchedCount: number;
+  success: boolean;
+  failureCategory: string | null;
+  failureMessage: string | null;
+};
+
+export async function getXboxSyncBatches(accountId?: string, limit = 50): Promise<XboxSyncBatch[]> {
+  const qs = new URLSearchParams();
+  if (accountId) qs.set("accountId", accountId);
+  qs.set("limit", String(limit));
+  try {
+    return await fetchJson<XboxSyncBatch[]>(`/api/xbox/sync/batches?${qs.toString()}`);
+  } catch {
+    return [];
+  }
+}
+
 export async function patchXboxSaleRecord(
   recordId: string,
   payload: {
