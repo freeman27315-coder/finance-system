@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ChevronRight,
   CheckCircle2,
   Gamepad2,
   Globe2,
@@ -167,6 +168,7 @@ export function OperatorDashboard({ operator }: { operator: StoredOperator }) {
           {/* ----- 我的领取 ----- */}
           <MyClaimsPanel
             claims={claims}
+            onOpen={(accountId) => router.push(`/accounts/${accountId}`)}
             onReturn={(claimId) => {
               setError(null);
               if (confirm("归还这个账号？归还后其他客服可以领取。")) {
@@ -202,12 +204,14 @@ export function OperatorDashboard({ operator }: { operator: StoredOperator }) {
 
 function MyClaimsPanel({
   claims,
+  onOpen,
   onReturn,
   returnPending,
   onRefresh,
   refreshing
 }: {
   claims: OperatorClaim[];
+  onOpen: (accountId: number) => void;
   onReturn: (claimId: number) => void;
   returnPending: boolean;
   onRefresh: () => void;
@@ -219,7 +223,7 @@ function MyClaimsPanel({
         <div>
           <CardTitle>我领的账号</CardTitle>
           <div className="mt-1 text-xs text-muted-foreground">
-            点账号进入详情(看密码 / 同步订单 / 补销售信息) — PR C 上线
+            点账号进入详情(看密码 / 同步订单 / 补销售信息)
           </div>
         </div>
         <Button variant="outline" size="sm" onClick={onRefresh} disabled={refreshing}>
@@ -238,9 +242,14 @@ function MyClaimsPanel({
           </TableHeader>
           <TableBody>
             {claims.map((claim) => (
-              <TableRow key={claim.id}>
+              <TableRow
+                key={claim.id}
+                className="cursor-pointer"
+                onClick={() => onOpen(claim.accountId)}
+              >
                 <TableCell className="text-sm">
                   <Badge tone="transfer">#{claim.accountId}</Badge>
+                  <ChevronRight className="ml-1 inline h-3 w-3 text-muted-foreground" />
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground tabular-nums">
                   {formatDateTimeSeconds(claim.claimedAt)}
@@ -249,7 +258,10 @@ function MyClaimsPanel({
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => onReturn(claim.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onReturn(claim.id);
+                    }}
                     disabled={returnPending}
                   >
                     <Undo2 className="h-3.5 w-3.5" />
