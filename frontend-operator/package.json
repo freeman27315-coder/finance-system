@@ -5,10 +5,10 @@
   "description": "XBOX 客服销售系统 (Electron + Next.js, CEO 2026-05-12)",
   "main": "electron/main.js",
   "scripts": {
+    "dev": "node scripts/dev.js",
     "dev:next": "next dev -p 3100",
-    "dev:electron": "wait-on http://localhost:3100 && electron .",
-    "dev": "concurrently -k -n NEXT,ELECTRON -c blue,green \"npm:dev:next\" \"npm:dev:electron\"",
-    "build:next": "next build && next export -o out",
+    "dev:electron": "electron .",
+    "build:next": "cross-env NEXT_EXPORT=1 next build",
     "build:electron": "electron-builder",
     "typecheck": "tsc --noEmit",
     "start:web": "next dev -p 3100"
@@ -29,13 +29,12 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "autoprefixer": "^10.4.20",
-    "concurrently": "^9.0.1",
+    "cross-env": "^7.0.3",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.15",
-    "typescript": "^5.6.3",
-    "wait-on": "^8.0.1"
+    "typescript": "^5.6.3"
   },
   "build": {
     "appId": "com.xbox-finance.operator",
