@@ -25,6 +25,7 @@
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -296,8 +297,15 @@ def trigger_sync(
     session.add(batch)
     session.flush()
 
-    # 调抓取(阶段 1 = stub)
-    result = _fetch_orders_microsoft_stub(account, count)
+    # 调抓取
+    # CEO 2026-05-12 Q1-A/Q4: 默认 stub(单元测试用), .env 设 XBOX_SYNC_MODE=real
+    # 即启 Playwright + Chromium 真实抓取。生产环境必须设 real。
+    sync_mode = os.environ.get("XBOX_SYNC_MODE", "stub").lower()
+    if sync_mode == "real":
+        from src.services.xbox_playwright import fetch_microsoft_orders_real
+        result = fetch_microsoft_orders_real(account, count)
+    else:
+        result = _fetch_orders_microsoft_stub(account, count)
 
     if not result.success:
         # 失败处理

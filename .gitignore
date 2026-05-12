@@ -21,3 +21,6 @@ build/
 .DS_Store
 
 bot/.env
+
+# Playwright 浏览器持久化数据(cookies、信任设备),CEO 2026-05-12 PR D
+.playwright-user-data/
