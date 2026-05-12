@@ -5,6 +5,10 @@ import type {
   AvailableAccount,
   LoginResponse,
   OperatorClaim,
+  OperatorOrder,
+  SaleCurrency,
+  SyncOrdersResult,
+  WalletMethod,
   XboxAccountDetail
 } from "@/types";
 import { clearSession, getToken } from "./auth";
@@ -96,14 +100,64 @@ export function returnClaim(
   });
 }
 
-// ---------- XBOX 账号详情 (PR C 用,先暴露 stub) ----------
+// ---------- XBOX 账号详情 / 同步 / 补销售 (PR C) ----------
 
-export async function getAccountDetail(
-  accountId: number
-): Promise<XboxAccountDetail | null> {
-  // /xbox/accounts 返回完整列表; 后续会做单 GET /xbox/accounts/{id}
-  const list = await request<XboxAccountDetail[]>("/api/xbox/accounts");
-  return list.find((a) => a.id === accountId) ?? null;
+export function getAccountDetail(
+  accountId: number,
+  operatorId: number
+): Promise<XboxAccountDetail> {
+  return request<XboxAccountDetail>(
+    `/api/operator/accounts/${accountId}?operatorId=${operatorId}`
+  );
+}
+
+export function syncOrders(
+  accountId: number,
+  operatorId: number,
+  count: number
+): Promise<SyncOrdersResult> {
+  return request<SyncOrdersResult>(
+    `/api/operator/accounts/${accountId}/sync-orders`,
+    {
+      method: "POST",
+      body: JSON.stringify({ operatorId, count })
+    }
+  );
+}
+
+export function getAccountOrders(
+  accountId: number,
+  operatorId: number,
+  onlyPending = true
+): Promise<OperatorOrder[]> {
+  return request<OperatorOrder[]>(
+    `/api/operator/accounts/${accountId}/orders?operatorId=${operatorId}&onlyPending=${onlyPending}`
+  );
+}
+
+export function completeOrder(
+  orderId: number,
+  payload: {
+    operatorId: number;
+    productName: string;
+    salePrice: string;
+    saleCurrency: SaleCurrency;
+    walletMethodId: number;
+    walletItemId: number;
+  }
+): Promise<OperatorOrder> {
+  return request<OperatorOrder>(
+    `/api/operator/orders/${orderId}/completion`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+// 钱包设置(收款方式 / 备注模板) — 复用 CEO 后台的端点
+export function getWalletMethods(): Promise<WalletMethod[]> {
+  return request<WalletMethod[]>("/api/xbox/wallet-settings?onlyActive=true");
 }
 
 export { ApiError };

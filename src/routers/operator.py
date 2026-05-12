@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.database import get_db
 from src.models.operator import Operator, XboxAccountClaim
+from src.models.xbox import XboxAccount, XboxOrder, XboxOrderStatus
 from src.services.operator_auth import (
     AuthError,
     confirm_totp,
@@ -22,15 +25,20 @@ from src.services.operator_auth import (
     totp_qrcode_png_base64,
     totp_provisioning_uri,
 )
+from src.services.xbox_account import reveal_password
 from src.services.xbox_account_claim import (
     ClaimError,
     claim_account,
     count_active_claims_for_operator,
+    get_active_claim_for_account,
     list_active_claims_for_operator,
     list_all_claims_with_active_filter,
     list_available_accounts,
     return_claim,
 )
+from src.services.xbox_order import update_order_completion
+from src.services.xbox_sync import trigger_sync
+from src.utils.crypto import CryptoError
 
 
 router = APIRouter(prefix="/operator", tags=["operator"])
@@ -400,3 +408,233 @@ def list_all_claims_endpoint(
 ) -> list[XboxAccountClaimOut]:
     """CEO 后台: 看所有领取记录(默认仅活跃,可看历史)。"""
     return [_serialize_claim(c) for c in list_all_claims_with_active_filter(db, only_active)]
+
+
+# ===================================================================
+# 客服 exe: 账号详情 + 同步 + 补销售信息 (CEO 2026-05-12 PR-C)
+# ===================================================================
+
+
+def _require_holding(
+    db: Session, account_id: int, operator_id: int
+) -> tuple[XboxAccount, Operator]:
+    """校验 operator 当前持有此账号(active claim)。返回 (account, operator)。
+
+    任意一个不满足都抛 403/404。
+    """
+    account = db.get(XboxAccount, account_id)
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账号不存在")
+    operator = get_operator(db, operator_id)
+    if operator is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="客服不存在")
+    if not operator.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="客服账号已停用")
+
+    claim = get_active_claim_for_account(db, account_id)
+    if claim is None or claim.operator_id != operator_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="你没有领取这个账号,无权操作",
+        )
+    return account, operator
+
+
+class OperatorAccountDetailOut(BaseModel):
+    """客服看的账号详情(含密码明文 + 当前余额)。"""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    id: int
+    account_no: Optional[str]
+    name: str
+    country: str
+    currency: str
+    login_email: Optional[str]
+    password_plain: Optional[str]  # 解密后明文(客服需要拿来登录 Microsoft)
+    exchange_rate: Optional[str]
+    local_balance: str  # 微软账号当前本币余额(同步后会更新)
+    status: str
+    status_message: Optional[str]
+    last_synced_at: Optional[str]
+
+
+@router.get(
+    "/accounts/{account_id}",
+    response_model=OperatorAccountDetailOut,
+    response_model_by_alias=True,
+)
+def get_account_detail_endpoint(
+    account_id: int,
+    operator_id: int = Query(..., alias="operatorId"),
+    db: Session = Depends(get_db),
+) -> OperatorAccountDetailOut:
+    """客服 exe 看账号详情(密码明文 + 当前余额)。
+
+    校验: 必须是当前持有此账号的客服。
+    """
+    account, _ = _require_holding(db, account_id, operator_id)
+
+    password_plain: Optional[str] = None
+    if account.password_enc:
+        try:
+            password_plain = reveal_password(account)
+        except (CryptoError, ValueError):
+            password_plain = None  # 密钥配置错或密文损坏,不阻塞详情展示
+
+    return OperatorAccountDetailOut(
+        id=account.id,
+        account_no=account.account_no,
+        name=account.name,
+        country=account.country.value if hasattr(account.country, "value") else account.country,
+        currency=account.currency.value if hasattr(account.currency, "value") else account.currency,
+        login_email=account.login_email,
+        password_plain=password_plain,
+        exchange_rate=str(account.exchange_rate) if account.exchange_rate is not None else None,
+        local_balance=str(account.local_balance or Decimal("0")),
+        status=account.status,
+        status_message=account.status_message,
+        last_synced_at=account.last_synced_at.isoformat() if account.last_synced_at else None,
+    )
+
+
+class OperatorSyncRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    operator_id: int
+    count: int = 20  # 10 / 20 / 30 / 50
+
+
+@router.post(
+    "/accounts/{account_id}/sync-orders",
+    response_model=dict,
+)
+def operator_sync_orders_endpoint(
+    account_id: int,
+    request: OperatorSyncRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """客服触发该账号的 Microsoft 订单同步。
+
+    校验: 必须是当前持有此账号的客服。
+    返回: {batchId, success, ordersAdded, ordersSkipped, balance, failure}
+    """
+    account, _ = _require_holding(db, account_id, request.operator_id)
+    try:
+        result = trigger_sync(db, account, count=request.count)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    return result
+
+
+class OperatorOrderOut(BaseModel):
+    """客服 exe 看的订单(简化版,只暴露客服需要的字段)。"""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    id: int
+    account_id: int
+    order_no: str
+    amount_local: str
+    currency_local: str
+    order_at: str
+    sale_date: Optional[str]
+    status: str
+    product_name: Optional[str]
+    sale_price: Optional[str]
+    sale_currency: Optional[str]
+    wallet_method_id: Optional[int]
+    wallet_item_id: Optional[int]
+
+
+def _serialize_op_order(order: XboxOrder) -> OperatorOrderOut:
+    return OperatorOrderOut(
+        id=order.id,
+        account_id=order.account_id,
+        order_no=order.order_no,
+        amount_local=str(order.amount_local),
+        currency_local=order.currency_local,
+        order_at=order.order_at.isoformat() if order.order_at else "",
+        sale_date=order.sale_date.isoformat() if order.sale_date else None,
+        status=order.status,
+        product_name=order.product_name,
+        sale_price=str(order.sale_price) if order.sale_price is not None else None,
+        sale_currency=order.sale_currency,
+        wallet_method_id=order.wallet_method_id,
+        wallet_item_id=order.wallet_item_id,
+    )
+
+
+@router.get(
+    "/accounts/{account_id}/orders",
+    response_model=list[OperatorOrderOut],
+    response_model_by_alias=True,
+)
+def operator_list_orders_endpoint(
+    account_id: int,
+    operator_id: int = Query(..., alias="operatorId"),
+    only_pending: bool = Query(True, alias="onlyPending"),
+    db: Session = Depends(get_db),
+) -> list[OperatorOrderOut]:
+    """客服看该账号的订单列表(默认只看待补销售的)。"""
+    _require_holding(db, account_id, operator_id)
+    stmt = select(XboxOrder).where(XboxOrder.account_id == account_id)
+    if only_pending:
+        stmt = stmt.where(XboxOrder.status == XboxOrderStatus.PENDING_COMPLETE.value)
+    stmt = stmt.order_by(XboxOrder.order_at.desc())
+    return [_serialize_op_order(o) for o in db.scalars(stmt)]
+
+
+class OperatorOrderCompletion(BaseModel):
+    """客服补销售信息。销售日期 + 经办人系统自动填,客服只填商品/售价/币种/收款方式/备注模板。"""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    operator_id: int
+    product_name: str = Field(..., min_length=1, max_length=255)
+    sale_price: Decimal
+    sale_currency: str
+    wallet_method_id: int
+    wallet_item_id: int
+
+
+@router.patch(
+    "/orders/{order_id}/completion",
+    response_model=OperatorOrderOut,
+    response_model_by_alias=True,
+)
+def operator_complete_order_endpoint(
+    order_id: int,
+    request: OperatorOrderCompletion,
+    db: Session = Depends(get_db),
+) -> OperatorOrderOut:
+    """客服补销售信息(自动经办人 = 客服显示名;销售日期已自动 = order_at)。
+
+    校验: 客服必须持有该订单对应的账号。
+    成功后订单 status 变 converted(若所有字段就位)。
+    """
+    order = db.get(XboxOrder, order_id)
+    if order is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="订单不存在")
+    _account, operator = _require_holding(db, order.account_id, request.operator_id)
+
+    try:
+        update_order_completion(
+            db,
+            order,
+            # sale_date 不传 → 保持自动填的 order_at
+            product_name=request.product_name.strip(),
+            # 经办人系统自动填(CEO 2026-05-11: 自动填客服名字)
+            operator_name=operator.display_name,
+            sale_price=request.sale_price,
+            sale_currency=request.sale_currency,
+            wallet_method_id=request.wallet_method_id,
+            wallet_item_id=request.wallet_item_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    db.commit()
+    db.refresh(order)
+    return _serialize_op_order(order)
