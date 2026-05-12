@@ -11,21 +11,21 @@ import {
   EyeOff,
   Gamepad2,
   Globe2,
-  KeyRound,
   LogOut,
   PackageOpen,
-  PencilLine,
   RefreshCcw,
   Undo2,
-  Wallet,
   Zap
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { CompleteOrderModal } from "@/components/complete-order-modal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  EditableSelectCell,
+  EditableTextCell
+} from "@/components/ui/editable-cell";
 import {
   Table,
   TableBody,
@@ -36,16 +36,20 @@ import {
 } from "@/components/ui/table";
 import {
   claimAccount,
+  completeOrder,
   getAccountDetail,
   getAccountOrders,
   getAvailableAccounts,
   getMyClaims,
+  getWalletMethods,
   returnClaim,
   syncOrders
 } from "@/lib/api";
 import { clearSession, type StoredOperator } from "@/lib/auth";
 import { formatDateTimeSeconds } from "@/lib/utils";
-import type { OperatorOrder } from "@/types";
+import type { OperatorOrder, SaleCurrency, WalletMethod } from "@/types";
+
+const SALE_CURRENCIES: SaleCurrency[] = ["CNY", "USD", "USDT", "TWD"];
 
 const MAX_CLAIMS = 3;
 const SYNC_COUNTS = [10, 20, 30, 50] as const;
@@ -63,7 +67,6 @@ export function OperatorWorkbench({ operator }: { operator: StoredOperator }) {
   const [syncCount, setSyncCount] = useState<10 | 20 | 30 | 50>(20);
   const [error, setError] = useState<string | null>(null);
   const [syncSummary, setSyncSummary] = useState<string | null>(null);
-  const [completeTarget, setCompleteTarget] = useState<OperatorOrder | null>(null);
   const [claimPanelOpen, setClaimPanelOpen] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
@@ -358,7 +361,8 @@ export function OperatorWorkbench({ operator }: { operator: StoredOperator }) {
                   ? "先选账号 + 点同步"
                   : "暂无订单, 点上方「同步订单」拉取"
               }
-              onCompleteOrder={(o) => setCompleteTarget(o)}
+              operatorId={operator.id}
+              queryClient={queryClient}
             />
           </CardContent>
         </Card>
@@ -388,34 +392,53 @@ export function OperatorWorkbench({ operator }: { operator: StoredOperator }) {
           ) : null}
         </Card>
       </main>
-
-      {completeTarget ? (
-        <CompleteOrderModal
-          order={completeTarget}
-          operatorId={operator.id}
-          operatorDisplayName={operator.displayName}
-          onClose={() => setCompleteTarget(null)}
-        />
-      ) : null}
     </div>
   );
 }
 
 // ===================================================================
-// 历史订单表 (CEO 2026-05-12 Q2: 9 列)
+// 历史订单表 (CEO 2026-05-12: 9 列 + inline 编辑)
+// - 类型: 暂统一"上号"(后续 CEO 给区分逻辑)
+// - 可编辑: 商品名 / 收款金额 / 币种 / 收款方式 / 备注模板 / 备注
+// - 只读: 账号编号 / 订单编号 / 类型 / 日期 / 经办人(系统自动)
 // ===================================================================
 
 function HistoryOrdersTable({
   orders,
   loading,
   empty,
-  onCompleteOrder
+  operatorId,
+  queryClient
 }: {
   orders: OperatorOrder[];
   loading: boolean;
   empty: string;
-  onCompleteOrder: (order: OperatorOrder) => void;
+  operatorId: number;
+  queryClient: ReturnType<typeof useQueryClient>;
 }) {
+  // 加载钱包方式/模板用于 inline select
+  const methodsQuery = useQuery({
+    queryKey: ["wallet-methods"],
+    queryFn: getWalletMethods
+  });
+  const methods: WalletMethod[] = methodsQuery.data ?? [];
+
+  // 通用保存函数: 调 PATCH 后刷订单列表
+  const save = async (orderId: number, payload: Record<string, unknown>) => {
+    await completeOrder(orderId, {
+      operatorId,
+      ...(payload as {
+        productName?: string;
+        salePrice?: string;
+        saleCurrency?: SaleCurrency;
+        walletMethodId?: number;
+        walletItemId?: number;
+        remark?: string;
+      })
+    });
+    await queryClient.invalidateQueries({ queryKey: ["operator-orders"] });
+  };
+
   return (
     <Table>
       <TableHeader>
@@ -424,17 +447,18 @@ function HistoryOrdersTable({
           <TableHead>订单编号</TableHead>
           <TableHead>类型</TableHead>
           <TableHead>日期(秒)</TableHead>
-          <TableHead>商品名称</TableHead>
+          <TableHead className="min-w-[140px]">商品名称</TableHead>
           <TableHead>经办人</TableHead>
-          <TableHead>收款方式</TableHead>
-          <TableHead className="text-right">收款金额</TableHead>
-          <TableHead>备注</TableHead>
-          <TableHead className="text-right">操作</TableHead>
+          <TableHead className="min-w-[140px]">收款方式</TableHead>
+          <TableHead className="min-w-[140px]">备注模板</TableHead>
+          <TableHead className="min-w-[140px] text-right">收款金额</TableHead>
+          <TableHead className="min-w-[160px]">备注</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {orders.map((order) => {
-          const isPending = order.status === "pending_complete";
+          const selectedMethod = methods.find((m) => m.id === order.walletMethodId);
+          const itemOptions = (selectedMethod?.items ?? []).filter((it) => it.isActive);
           return (
             <TableRow key={order.id}>
               <TableCell className="font-mono text-xs">
@@ -442,62 +466,87 @@ function HistoryOrdersTable({
               </TableCell>
               <TableCell className="font-mono text-xs">{order.orderNo}</TableCell>
               <TableCell>
-                {isPending ? (
-                  <Badge tone="warning">待补</Badge>
-                ) : (
-                  <Badge tone="success">已转销售</Badge>
-                )}
+                {/* CEO 2026-05-12: 类型暂定只有"上号", 后续给区分逻辑 */}
+                <Badge tone="transfer">上号</Badge>
               </TableCell>
-              <TableCell className="text-xs tabular-nums">
+              <TableCell className="text-xs tabular-nums whitespace-nowrap">
                 {formatDateTimeSeconds(order.orderAt)}
               </TableCell>
-              <TableCell className="text-sm">
-                {order.productName ?? <span className="text-muted-foreground">-</span>}
+
+              {/* 商品名 - 可编辑 */}
+              <TableCell className="p-1">
+                <EditableTextCell
+                  value={order.productName}
+                  placeholder="如: 5350 档"
+                  onSave={(v) => save(order.id, { productName: v })}
+                />
               </TableCell>
-              <TableCell className="text-xs">
-                {order.operatorName ?? <span className="text-muted-foreground">-</span>}
+
+              {/* 经办人 - 只读, 系统自动填(补销售时取 operator.display_name) */}
+              <TableCell className="text-xs text-muted-foreground">
+                {order.operatorName ?? <span className="italic">(待补销售时自动)</span>}
               </TableCell>
-              <TableCell className="text-xs">
-                {order.walletMethodLabel ? (
-                  <div className="flex flex-col">
-                    <span>{order.walletMethodLabel}</span>
-                    {order.walletItemLabel ? (
-                      <span className="text-[10px] text-muted-foreground">
-                        {order.walletItemLabel}
-                      </span>
-                    ) : null}
-                  </div>
-                ) : (
-                  <span className="text-muted-foreground">-</span>
-                )}
+
+              {/* 收款方式 - 可编辑 select */}
+              <TableCell className="p-1">
+                <EditableSelectCell<number>
+                  value={order.walletMethodId}
+                  options={methods
+                    .filter((m) => m.isActive)
+                    .map((m) => ({ value: m.id, label: m.label }))}
+                  onSave={(v) =>
+                    save(order.id, {
+                      walletMethodId: v ?? undefined,
+                      // 换方式时,清空旧 item(防止跨方式的 item 残留)
+                      walletItemId: undefined
+                    })
+                  }
+                />
               </TableCell>
-              <TableCell className="text-right tabular-nums font-semibold">
-                {order.salePrice ? (
-                  <>
-                    {order.salePrice}
-                    <span className="ml-1 text-[10px] font-normal text-muted-foreground">
-                      {order.saleCurrency}
-                    </span>
-                  </>
-                ) : (
-                  <span className="text-xs text-muted-foreground">
-                    {order.amountLocal} {order.currencyLocal}
-                  </span>
-                )}
+
+              {/* 备注模板 - 可编辑 select, 依赖 method */}
+              <TableCell className="p-1">
+                <EditableSelectCell<number>
+                  value={order.walletItemId}
+                  options={itemOptions.map((it) => ({
+                    value: it.id,
+                    label: it.label
+                  }))}
+                  disabled={!selectedMethod}
+                  placeholder={selectedMethod ? "请选择" : "先选收款方式"}
+                  onSave={(v) => save(order.id, { walletItemId: v ?? undefined })}
+                />
               </TableCell>
-              <TableCell className="max-w-[160px] truncate text-xs text-muted-foreground">
-                {order.remark ?? "-"}
+
+              {/* 收款金额 + 币种 - 两个可编辑控件并排 */}
+              <TableCell className="p-1">
+                <div className="flex items-center gap-1">
+                  <EditableTextCell
+                    value={order.salePrice}
+                    placeholder={order.amountLocal}
+                    inputMode="decimal"
+                    onSave={(v) => save(order.id, { salePrice: v })}
+                    className="flex-1"
+                  />
+                  <EditableSelectCell<string>
+                    value={order.saleCurrency}
+                    options={SALE_CURRENCIES.map((c) => ({ value: c, label: c }))}
+                    placeholder="币"
+                    onSave={(v) =>
+                      save(order.id, { saleCurrency: v ?? undefined })
+                    }
+                    className="w-[68px]"
+                  />
+                </div>
               </TableCell>
-              <TableCell className="text-right">
-                <Button
-                  size="sm"
-                  variant={isPending ? "default" : "ghost"}
-                  onClick={() => onCompleteOrder(order)}
-                  title={isPending ? "补销售信息" : "修改销售信息(拆单)"}
-                >
-                  <PencilLine className="h-3.5 w-3.5" />
-                  {isPending ? "补销售" : "改"}
-                </Button>
+
+              {/* 备注 - 可编辑 */}
+              <TableCell className="p-1">
+                <EditableTextCell
+                  value={order.remark}
+                  placeholder="可自由填写"
+                  onSave={(v) => save(order.id, { remark: v })}
+                />
               </TableCell>
             </TableRow>
           );

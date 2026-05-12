@@ -139,11 +139,12 @@ export function completeOrder(
   orderId: number,
   payload: {
     operatorId: number;
-    productName: string;
-    salePrice: string;
-    saleCurrency: SaleCurrency;
-    walletMethodId: number;
-    walletItemId: number;
+    // CEO 2026-05-12 inline 编辑: 所有补销售字段都可选,只传改的
+    productName?: string;
+    salePrice?: string;
+    saleCurrency?: SaleCurrency;
+    walletMethodId?: number;
+    walletItemId?: number;
     remark?: string;
   }
 ): Promise<OperatorOrder> {
