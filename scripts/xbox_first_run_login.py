@@ -22,9 +22,30 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
+
+# 让脚本能在仓库根目录之外被调用(把项目根加进 sys.path)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 # 强制 headed
 os.environ["XBOX_PLAYWRIGHT_HEADLESS"] = "false"
+
+# 加载 .env (含 XBOX_ACCOUNT_PASSWORD_KEY)
+def _load_dotenv() -> None:
+    env_path = _PROJECT_ROOT / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or "=" not in s:
+            continue
+        k, _, v = s.partition("=")
+        k, v = k.strip(), v.strip()
+        if k and k not in os.environ:
+            os.environ[k] = v
+_load_dotenv()
 
 from src import database
 from src.models.xbox import XboxAccount

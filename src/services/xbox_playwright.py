@@ -77,11 +77,13 @@ _MONTH_NAMES = {
 
 
 def _user_data_dir() -> Path:
-    raw = os.environ.get(
-        "XBOX_PLAYWRIGHT_USER_DATA_DIR",
-        str(Path.cwd() / ".playwright-user-data" / "xbox"),
-    )
-    p = Path(raw)
+    """返回 Playwright user_data 目录的**绝对路径**(必须绝对; Edge 启动后 CWD 不同
+    导致相对路径解析失败,会报"无法创建数据目录")。"""
+    raw = os.environ.get("XBOX_PLAYWRIGHT_USER_DATA_DIR")
+    if raw:
+        p = Path(raw).expanduser().resolve()
+    else:
+        p = (Path.cwd() / ".playwright-user-data" / "xbox").resolve()
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -152,16 +154,41 @@ def fetch_microsoft_orders_real(
 
 
 def _launch_context(p: Playwright) -> BrowserContext:
-    """启动持久化 Chromium 上下文(cookies 存在 user_data_dir)。"""
-    return p.chromium.launch_persistent_context(
+    """启动持久化浏览器上下文(cookies 存在 user_data_dir)。
+
+    Windows 下 Playwright 自带的 Chromium 偶发缺 VC++ 运行时报
+    "side-by-side configuration is incorrect"。
+    优先用 Windows 自带的 Microsoft Edge(同 Chromium 引擎,用系统 runtime)。
+    env XBOX_PLAYWRIGHT_BROWSER=chromium 强制走自带 Chromium。
+    """
+    # 默认用 Windows 系统的 Chrome (CEO 平时用 Chrome 登录 Microsoft, 视觉上一致)
+    # 注意: Playwright 控制的 Chrome 是**独立实例**, user_data_dir 独立,
+    # 跟 CEO 平时用的 Chrome 浏览器隔离。第一次必须在 Playwright Chrome 里登录一次。
+    browser_pref = os.environ.get("XBOX_PLAYWRIGHT_BROWSER", "chrome").lower()
+    want_headless = _is_headless()
+    args = [
+        "--disable-blink-features=AutomationControlled",  # 降低 bot 特征
+        # 真实 UA(Microsoft 对默认 Playwright UA 反爬严)
+        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    ]
+    if want_headless:
+        # Chrome 新版 headless 模式: 比传统 headless 更难被反爬识别
+        args.append("--headless=new")
+    common_kwargs = dict(
         user_data_dir=str(_user_data_dir()),
-        headless=_is_headless(),
-        args=[
-            "--disable-blink-features=AutomationControlled",  # 降低 bot 特征
-        ],
+        # Playwright 的 headless=True 走旧 protocol, 反爬识别率 100%;
+        # 我们用 args=--headless=new 控制 Chrome 实际 headless, Playwright 这边设 False。
+        headless=False,
+        args=args,
         viewport={"width": 1280, "height": 800},
         locale="en-US",
     )
+    if browser_pref in {"chrome", "msedge"}:
+        # 用 Windows 系统的 Chrome / Edge (channel='chrome' or 'msedge')
+        return p.chromium.launch_persistent_context(channel=browser_pref, **common_kwargs)
+    # chromium = Playwright 自带 (Windows 上可能缺 VC++ runtime)
+    return p.chromium.launch_persistent_context(**common_kwargs)
 
 
 def _do_fetch(
@@ -172,28 +199,88 @@ def _do_fetch(
 ) -> FetchResult:
     """登录 + 拉订单。"""
     # 访问订单页 (已登录会直接进; 未登录会跳 login.live.com)
-    page.goto(_ORDERS_URL, wait_until="domcontentloaded", timeout=30_000)
+    # 用宽容的 "commit" 等待(只等服务器响应,不等完成),避免 Microsoft 大量后台
+    # XHR 导致 domcontentloaded 超时。
+    page.goto(_ORDERS_URL, wait_until="commit", timeout=60_000)
 
-    # 处理登录(如果被跳到登录页)
+    # Microsoft 多重重定向 - 等所有跳转结束再判断
+    try:
+        page.wait_for_load_state("networkidle", timeout=45_000)
+    except PlaywrightTimeout:
+        pass
+
+    # 处理"Is your security info still accurate?" 提示页 - 自动点 Looks good
+    if "account.live.com/proofs/remind" in page.url or "proofs" in page.url:
+        try:
+            # 优先点 "Looks good" / 中文 "看起来不错" 按钮
+            for label in ["Looks good!", "Looks good", "看起来不错", "看起来没问题"]:
+                btn = page.get_by_role("button", name=label, exact=False)
+                if btn.count() > 0:
+                    btn.first.click(timeout=5_000)
+                    break
+        except Exception:
+            pass
+        try:
+            page.wait_for_load_state("networkidle", timeout=20_000)
+        except PlaywrightTimeout:
+            pass
+
+    # 处理登录(如果被跳到登录页且 cookies 失效)
     if page.url.startswith(_LOGIN_URL_PREFIX):
         login_result = _do_login(page, login_email, password_plain)
         if login_result is not None:
             return login_result  # 失败时直接返回失败结构
 
         # 登录成功 → 再访问订单页(有时登录跳到首页)
-        if not page.url.startswith("https://account.microsoft.com/billing/orders"):
+        if "account.microsoft.com/billing/orders" not in page.url:
             page.goto(_ORDERS_URL, wait_until="domcontentloaded", timeout=30_000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=20_000)
+            except PlaywrightTimeout:
+                pass
 
-    # 已登录,等订单卡片出来
+    # 终极兜底: 如果到现在还没到订单页, 再 goto 一次
+    if "account.microsoft.com/billing/orders" not in page.url:
+        page.goto(_ORDERS_URL, wait_until="domcontentloaded", timeout=30_000)
+        try:
+            page.wait_for_load_state("networkidle", timeout=20_000)
+        except PlaywrightTimeout:
+            pass
+
+    # 已登录,等订单卡片出来 (放宽超时 + 调试输出)
     try:
-        page.wait_for_selector("text=Order number", timeout=20_000)
+        # 等更宽容的条件:任何包含数字的内容,或者 "Order number" / "Past 3 months"
+        page.wait_for_load_state("networkidle", timeout=30_000)
     except PlaywrightTimeout:
+        pass
+
+    try:
+        page.wait_for_selector("text=Order number", timeout=30_000)
+    except PlaywrightTimeout:
+        # 调试: 把页面 URL + 截图 + body text 写文件
+        dbg_dir = _user_data_dir().parent / "debug"
+        dbg_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            page.screenshot(path=str(dbg_dir / "no_orders.png"), full_page=True)
+        except Exception:
+            pass
+        body_text = ""
+        try:
+            body_text = page.inner_text("body", timeout=5_000)
+        except Exception:
+            pass
+        (dbg_dir / "no_orders.txt").write_text(
+            f"URL: {page.url}\n\n--- BODY ---\n{body_text[:5000]}",
+            encoding="utf-8",
+        )
         return FetchResult(
             success=False,
             orders=[],
             balance=None,
             failure_category="order_page_failed",
-            failure_message="订单卡片未在 20 秒内渲染(可能页面结构变化或无任何订单)",
+            failure_message=(
+                "订单卡片未渲染(URL={}). 调试快照: {}".format(page.url, dbg_dir)
+            ),
         )
 
     orders = _parse_orders(page, limit=count)
@@ -367,8 +454,8 @@ def _parse_orders_fallback(page: Page, limit: int) -> list[FetchedOrder]:
 # ---------------------------------------------------------------------------
 
 
-def first_run_login(login_email: str, password_plain: str, timeout_seconds: int = 300) -> str:
-    """开发模式: 启动 headed Chromium 让 CEO 手动完成 2FA + 信任设备,
+def first_run_login(login_email: str, password_plain: str, timeout_seconds: int = 600) -> str:
+    """开发模式: 启动 headed Chromium/Edge 让 CEO 手动完成 2FA + 信任设备,
     完成后 cookies 自动落到 user_data_dir,后续 headless 可复用。
 
     用法 (在 Python REPL 或脚本):
@@ -380,13 +467,27 @@ def first_run_login(login_email: str, password_plain: str, timeout_seconds: int 
         ctx = _launch_context(p)
         try:
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
-            page.goto(_ORDERS_URL, wait_until="domcontentloaded", timeout=30_000)
-            print(f"[first_run_login] 浏览器已打开, 请手动完成登录 + 2FA + 信任设备...")
-            print(f"[first_run_login] 完成后页面 URL 应为: {_ORDERS_URL}")
+            page.goto(_ORDERS_URL, wait_until="domcontentloaded", timeout=60_000)
+            print("[first_run_login] 浏览器已打开. 请在浏览器中完成:")
+            print("[first_run_login]   1) 填邮箱密码登录")
+            print("[first_run_login]   2) 完成 2FA(邮箱/短信验证码)")
+            print("[first_run_login]   3) 看到 'Stay signed in?' 点 Yes")
+            print("[first_run_login]   4) 看到订单页(account.microsoft.com/billing/orders)")
+            print(f"[first_run_login] 完成后,在浏览器里看到订单卡片 -> 关闭浏览器窗口即可")
             print(f"[first_run_login] 等待最多 {timeout_seconds} 秒...")
             # 等用户手动登录到订单页
-            page.wait_for_url(f"{_ORDERS_URL}**", timeout=timeout_seconds * 1000)
-            print(f"[first_run_login] ✓ 登录成功 + cookies 已写入 {_user_data_dir()}")
+            page.wait_for_url(
+                lambda url: "account.microsoft.com/billing/orders" in url,
+                timeout=timeout_seconds * 1000,
+            )
+            print(f"[first_run_login] OK -- LOGIN SUCCESS")
+            print(f"[first_run_login] cookies written to {_user_data_dir()}")
+            print("[first_run_login] 你现在可以关闭浏览器, 后续 trigger_sync 会自动复用 cookies")
+            # 多等几秒让 cookies flush
+            page.wait_for_timeout(3000)
             return f"OK cookies in {_user_data_dir()}"
         finally:
-            ctx.close()
+            try:
+                ctx.close()
+            except Exception:
+                pass
