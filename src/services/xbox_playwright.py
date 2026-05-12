@@ -29,8 +29,11 @@ Q3 截图已对照 / Q4 直接上真实抓取(不再 mock)。
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import re
+import sys
+import threading
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -105,6 +108,11 @@ def fetch_microsoft_orders_real(
     """用 Playwright 真实抓取 Microsoft 订单 (CEO 2026-05-12 PR D)。
 
     返回的 ``FetchResult`` 结构与 stub 完全一致(可直接替换 trigger_sync 调用)。
+
+    Windows + FastAPI 兼容性:
+    FastAPI 在 thread pool 跑同步 endpoint 时, 线程默认 SelectorEventLoop 不支持
+    subprocess → Playwright 启动 Chrome 时 NotImplementedError。
+    所以在这里专开一个 worker thread, 设 ProactorEventLoop 再跑 Playwright。
     """
     if not account.login_email or not account.password_enc:
         return FetchResult(
@@ -126,26 +134,73 @@ def fetch_microsoft_orders_real(
             failure_message=f"密码解密失败: {exc}",
         )
 
-    try:
-        with sync_playwright() as p:
-            ctx = _launch_context(p)
+    return _run_in_worker_thread(account.login_email, password_plain, count)
+
+
+def _run_in_worker_thread(login_email: str, password_plain: str, count: int) -> FetchResult:
+    """在独立 worker thread 里跑 Playwright,设 ProactorEventLoop(Windows)
+    避免 FastAPI thread pool 的 SelectorEventLoop subprocess 报 NotImplementedError。
+    """
+    result_holder: dict = {"result": None}
+    error_holder: dict = {"err": None}
+
+    def _worker() -> None:
+        try:
+            # Windows 上必须用 ProactorEventLoop 才能 subprocess
+            if sys.platform == "win32":
+                asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             try:
-                page = ctx.pages[0] if ctx.pages else ctx.new_page()
-                result = _do_fetch(page, account.login_email, password_plain, count)
+                with sync_playwright() as p:
+                    ctx = _launch_context(p)
+                    try:
+                        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                        result_holder["result"] = _do_fetch(
+                            page, login_email, password_plain, count
+                        )
+                    finally:
+                        try:
+                            ctx.close()
+                        except Exception:
+                            pass
             finally:
                 try:
-                    ctx.close()
+                    loop.close()
                 except Exception:
                     pass
-        return result
-    except Exception as exc:  # 网络断 / Chromium 启动失败 / 未预料异常
+        except Exception as exc:
+            error_holder["err"] = exc
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout=180)  # 整体 3 分钟硬上限,防止 Playwright hang 死后端
+
+    if t.is_alive():
         return FetchResult(
             success=False,
             orders=[],
             balance=None,
             failure_category="unknown",
-            failure_message=f"Playwright 抓取异常: {exc}",
+            failure_message="Playwright 抓取超过 180 秒未返回(可能浏览器 hang 死)",
         )
+
+    if error_holder["err"] is not None:
+        return FetchResult(
+            success=False,
+            orders=[],
+            balance=None,
+            failure_category="unknown",
+            failure_message=f"Playwright 抓取异常: {type(error_holder['err']).__name__}: {error_holder['err']}",
+        )
+
+    return result_holder["result"] or FetchResult(
+        success=False,
+        orders=[],
+        balance=None,
+        failure_category="unknown",
+        failure_message="Playwright worker 返回空结果",
+    )
 
 
 # ---------------------------------------------------------------------------
