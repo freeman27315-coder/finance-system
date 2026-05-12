@@ -543,11 +543,15 @@ class XboxOrderCreate(BaseModel):
 
 
 class XboxOrderCompletion(BaseModel):
-    """订单补齐字段。全部填齐后自动转销售记录。"""
+    """订单补齐字段。全部填齐后自动转销售记录。
+
+    CEO 2026-05-12: 销售日期(sale_date)系统自动填(= 订单时间, 中国时区精确到秒),
+    客服无需传; 传了也会接受(datetime 字符串, ISO 8601)。
+    """
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
 
-    sale_date: Optional[date] = None
+    sale_date: Optional[datetime] = None
     product_name: Optional[str] = Field(None, min_length=1, max_length=255)
     operator_name: Optional[str] = Field(None, min_length=1, max_length=64)
     sale_price: Optional[Decimal] = None
@@ -601,11 +605,14 @@ class XboxSaleRecordOut(BaseModel):
 
 
 class XboxSaleRecordUpdate(BaseModel):
-    """改销售记录字段。后端自动联动钱包余额。"""
+    """改销售记录字段。后端自动联动钱包余额。
+
+    CEO 2026-05-12: sale_date 是 datetime(中国时区精确到秒), CEO 后台可改。
+    """
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
 
-    sale_date: Optional[date] = None
+    sale_date: Optional[datetime] = None
     product_name: Optional[str] = None
     operator_name: Optional[str] = None
     sale_price: Optional[Decimal] = None

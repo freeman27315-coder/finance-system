@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, Union
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -87,6 +87,8 @@ def create_order(
         exchange_rate=used_rate_value,
         rmb_cost=rmb_cost,
         order_at=order_at,
+        # CEO 2026-05-12: 销售日期 = 微软订单时间(中国时区精确到秒),系统自动填
+        sale_date=order_at,
         raw_data=raw_data,
         status=XboxOrderStatus.PENDING_COMPLETE.value,
     )
@@ -105,7 +107,7 @@ def update_order_completion(
     session: Session,
     order: XboxOrder,
     *,
-    sale_date: Optional[date] = None,
+    sale_date: Union[date, datetime, None] = None,
     product_name: Optional[str] = None,
     operator_name: Optional[str] = None,
     sale_price: Optional[Decimal] = None,
@@ -117,9 +119,16 @@ def update_order_completion(
     """更新订单的补齐字段。所有必填都到位时自动转销售记录。
 
     返回 ``(order, sale_record_id_or_None)``。
+
+    CEO 2026-05-12: 销售日期(sale_date)默认 = order.order_at(微软抓订单的时间,
+    中国时区精确到秒,创建订单时已自动赋值)。客服一般无需传 sale_date;
+    传了会按 datetime 升级。
     """
     if sale_date is not None:
-        order.sale_date = sale_date
+        if isinstance(sale_date, date) and not isinstance(sale_date, datetime):
+            order.sale_date = datetime.combine(sale_date, datetime.min.time())
+        else:
+            order.sale_date = sale_date
     if product_name is not None:
         order.product_name = product_name
     if operator_name is not None:

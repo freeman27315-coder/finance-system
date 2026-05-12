@@ -732,6 +732,45 @@ def test_sync_orders_mock_creates_orders_and_balance_snapshot(client):
     assert batches[0]["success"] is True
 
 
+def test_sync_orders_updates_account_local_balance(client):
+    """CEO 2026-05-12: 每次同步成功后,account.local_balance 必须更新为最新余额。
+
+    现在 mock stub 返回 balance=123.45,所以同步后账号余额应该 = 123.45。
+    """
+    account = _create_account(client)
+    # 同步前余额应为 0
+    initial = client.get("/xbox/accounts").json()
+    initial_acc = next(a for a in initial if a["id"] == int(account["id"]))
+    assert Decimal(str(initial_acc["localBalance"])) == Decimal("0")
+
+    # 触发同步
+    r = client.post("/xbox/sync/orders", json={"accountId": account["id"], "count": 10})
+    assert r.status_code == 200, r.text
+    assert r.json()["success"] is True
+
+    # 同步后账号 local_balance 应已更新 = stub 返回的 123.45
+    updated = client.get("/xbox/accounts").json()
+    updated_acc = next(a for a in updated if a["id"] == int(account["id"]))
+    assert Decimal(str(updated_acc["localBalance"])) == Decimal("123.45")
+
+
+def test_sync_orders_sets_sale_date_to_order_at(client):
+    """CEO 2026-05-12: 销售日期(sale_date) = 订单时间(order_at, 中国时区精确到秒)。
+
+    同步抓订单时 sale_date 应自动 = order_at,无需客服手填。
+    """
+    account = _create_account(client)
+    r = client.post("/xbox/sync/orders", json={"accountId": account["id"], "count": 10})
+    assert r.status_code == 200
+
+    orders = client.get(f"/xbox/orders?accountId={account['id']}").json()
+    assert len(orders) >= 1
+    for order in orders:
+        # saleDate 必须自动填了,且等于 orderAt
+        assert order["saleDate"] is not None
+        assert order["saleDate"] == order["orderAt"]
+
+
 def test_sync_orders_failure_marks_account_error_and_audits(client):
     """同步失败(账号无密码) → 账号状态变 error + 写审计 + 不发 Discord。"""
     # 创建账号但不设密码,触发 mock 失败路径
