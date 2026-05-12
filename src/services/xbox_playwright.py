@@ -158,37 +158,60 @@ def _launch_context(p: Playwright) -> BrowserContext:
 
     Windows 下 Playwright 自带的 Chromium 偶发缺 VC++ 运行时报
     "side-by-side configuration is incorrect"。
-    优先用 Windows 自带的 Microsoft Edge(同 Chromium 引擎,用系统 runtime)。
+    优先用 Windows 系统的 Chrome(同 Chromium 引擎,用系统 runtime)。
     env XBOX_PLAYWRIGHT_BROWSER=chromium 强制走自带 Chromium。
     """
     # 默认用 Windows 系统的 Chrome (CEO 平时用 Chrome 登录 Microsoft, 视觉上一致)
-    # 注意: Playwright 控制的 Chrome 是**独立实例**, user_data_dir 独立,
-    # 跟 CEO 平时用的 Chrome 浏览器隔离。第一次必须在 Playwright Chrome 里登录一次。
     browser_pref = os.environ.get("XBOX_PLAYWRIGHT_BROWSER", "chrome").lower()
     want_headless = _is_headless()
     args = [
         "--disable-blink-features=AutomationControlled",  # 降低 bot 特征
-        # 真实 UA(Microsoft 对默认 Playwright UA 反爬严)
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        # 加速启动: 关掉不必要功能
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-default-apps",
+        "--disable-extensions",
+        "--disable-component-update",
+        "--disable-sync",
+        "--disable-features=Translate,MediaRouter,OptimizationHints",
     ]
     if want_headless:
-        # Chrome 新版 headless 模式: 比传统 headless 更难被反爬识别
+        # Chrome 109+ 新版 headless, 反爬识别率比传统 headless 低
         args.append("--headless=new")
     common_kwargs = dict(
         user_data_dir=str(_user_data_dir()),
-        # Playwright 的 headless=True 走旧 protocol, 反爬识别率 100%;
-        # 我们用 args=--headless=new 控制 Chrome 实际 headless, Playwright 这边设 False。
-        headless=False,
+        headless=False,  # 我们用 args=--headless=new 控制 (上面)
         args=args,
         viewport={"width": 1280, "height": 800},
         locale="en-US",
     )
     if browser_pref in {"chrome", "msedge"}:
-        # 用 Windows 系统的 Chrome / Edge (channel='chrome' or 'msedge')
-        return p.chromium.launch_persistent_context(channel=browser_pref, **common_kwargs)
-    # chromium = Playwright 自带 (Windows 上可能缺 VC++ runtime)
-    return p.chromium.launch_persistent_context(**common_kwargs)
+        ctx = p.chromium.launch_persistent_context(channel=browser_pref, **common_kwargs)
+    else:
+        ctx = p.chromium.launch_persistent_context(**common_kwargs)
+
+    # 拦截不必要资源(图片/字体/媒体/广告/Google Analytics)— 速度提升 2-5x
+    def _block_unwanted(route, request):
+        rt = request.resource_type
+        url = request.url.lower()
+        if rt in {"image", "media", "font"}:
+            # 不拦 stylesheet (React 组件渲染时机依赖 CSS 加载)
+            route.abort()
+            return
+        # 第三方追踪 / 分析
+        if any(d in url for d in (
+            "google-analytics.com", "googletagmanager.com", "doubleclick.net",
+            "bing.com/insightservice", "clarity.ms", "scorecardresearch.com",
+            "ads.microsoft.com",
+        )):
+            route.abort()
+            return
+        route.continue_()
+
+    ctx.route("**/*", _block_unwanted)
+    return ctx
 
 
 def _do_fetch(
@@ -197,65 +220,40 @@ def _do_fetch(
     password_plain: str,
     count: int,
 ) -> FetchResult:
-    """登录 + 拉订单。"""
-    # 访问订单页 (已登录会直接进; 未登录会跳 login.live.com)
-    # 用宽容的 "commit" 等待(只等服务器响应,不等完成),避免 Microsoft 大量后台
-    # XHR 导致 domcontentloaded 超时。
-    page.goto(_ORDERS_URL, wait_until="commit", timeout=60_000)
+    """登录 + 拉订单。性能优化(CEO 2026-05-12):
+    - 不用 networkidle (Microsoft 页面 XHR 永不停, 等满超时)
+    - 直接等订单卡片 selector 出现
+    - 资源拦截在 _launch_context 里 (图片/字体/广告)
+    """
+    page.goto(_ORDERS_URL, wait_until="commit", timeout=30_000)
 
-    # Microsoft 多重重定向 - 等所有跳转结束再判断
-    try:
-        page.wait_for_load_state("networkidle", timeout=45_000)
-    except PlaywrightTimeout:
-        pass
-
-    # 处理"Is your security info still accurate?" 提示页 - 自动点 Looks good
-    if "account.live.com/proofs/remind" in page.url or "proofs" in page.url:
+    # "Is your security info still accurate?" 提示页 - 自动点 Looks good
+    # 用短超时检测(没出现就跳过, 不阻塞主流程)
+    if "proofs" in page.url:
         try:
-            # 优先点 "Looks good" / 中文 "看起来不错" 按钮
-            for label in ["Looks good!", "Looks good", "看起来不错", "看起来没问题"]:
+            for label in ["Looks good!", "Looks good", "看起来不错"]:
                 btn = page.get_by_role("button", name=label, exact=False)
                 if btn.count() > 0:
-                    btn.first.click(timeout=5_000)
+                    btn.first.click(timeout=3_000)
                     break
         except Exception:
             pass
-        try:
-            page.wait_for_load_state("networkidle", timeout=20_000)
-        except PlaywrightTimeout:
-            pass
 
-    # 处理登录(如果被跳到登录页且 cookies 失效)
+    # 处理登录(cookies 失效情况)
     if page.url.startswith(_LOGIN_URL_PREFIX):
         login_result = _do_login(page, login_email, password_plain)
         if login_result is not None:
-            return login_result  # 失败时直接返回失败结构
-
-        # 登录成功 → 再访问订单页(有时登录跳到首页)
+            return login_result
         if "account.microsoft.com/billing/orders" not in page.url:
-            page.goto(_ORDERS_URL, wait_until="domcontentloaded", timeout=30_000)
-            try:
-                page.wait_for_load_state("networkidle", timeout=20_000)
-            except PlaywrightTimeout:
-                pass
+            page.goto(_ORDERS_URL, wait_until="commit", timeout=30_000)
 
-    # 终极兜底: 如果到现在还没到订单页, 再 goto 一次
+    # 兜底再 goto 一次(如果中间跳到首页等)
     if "account.microsoft.com/billing/orders" not in page.url:
-        page.goto(_ORDERS_URL, wait_until="domcontentloaded", timeout=30_000)
-        try:
-            page.wait_for_load_state("networkidle", timeout=20_000)
-        except PlaywrightTimeout:
-            pass
+        page.goto(_ORDERS_URL, wait_until="commit", timeout=30_000)
 
-    # 已登录,等订单卡片出来 (放宽超时 + 调试输出)
+    # 直接等订单卡片 — 不用 networkidle (Microsoft 后台 XHR 永不停)
     try:
-        # 等更宽容的条件:任何包含数字的内容,或者 "Order number" / "Past 3 months"
-        page.wait_for_load_state("networkidle", timeout=30_000)
-    except PlaywrightTimeout:
-        pass
-
-    try:
-        page.wait_for_selector("text=Order number", timeout=30_000)
+        page.wait_for_selector("text=Order number", timeout=20_000)
     except PlaywrightTimeout:
         # 调试: 把页面 URL + 截图 + body text 写文件
         dbg_dir = _user_data_dir().parent / "debug"
