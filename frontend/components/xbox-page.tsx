@@ -17,6 +17,7 @@ import {
   Layers,
   Link2,
   ListOrdered,
+  Lock,
   Pencil,
   Plus,
   Receipt,
@@ -24,6 +25,7 @@ import {
   Settings2,
   ShieldAlert,
   Trash2,
+  Unlock,
   Users
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -40,7 +42,9 @@ import {
   createXboxReconcileMapping,
   deleteXboxReconcileMapping,
   exportXboxSaleRecordsUrl,
+  getAllClaims,
   getAssetWallets,
+  getOperators,
   getXboxAccountAuditLogs,
   getXboxAccounts,
   getXboxOrderChangeLogs,
@@ -55,10 +59,12 @@ import {
   getXboxTransactions,
   getXboxWalletPoolOptions,
   getXboxWalletSettings,
+  patchXboxAccountAvailability,
   patchXboxOrder,
   patchXboxSaleRecord,
   pushXboxWalletSettings,
   rechargeXbox,
+  returnClaim,
   triggerXboxSync,
   updateXboxAccount
 } from "@/lib/api";
@@ -1047,19 +1053,31 @@ function StatusBadge({ status }: { status: XboxAccountStatus }) {
 function AccountsTable({
   accounts,
   country,
+  claimByAccountId,
+  operatorById,
   onTransactions,
   onEdit,
   onChangePassword,
   onChangeStatus,
-  onShowAuditLogs
+  onShowAuditLogs,
+  onToggleAvailable,
+  onForceRecall,
+  togglePending,
+  recallPending
 }: {
   accounts: XboxAccount[];
   country: XboxCountry;
+  claimByAccountId: Map<number, { id: number; operatorId: number }>;
+  operatorById: Map<number, { id: number; displayName: string; loginName: string }>;
   onTransactions: (account: XboxAccount) => void;
   onEdit: (account: XboxAccount) => void;
   onChangePassword: (account: XboxAccount) => void;
   onChangeStatus: (account: XboxAccount) => void;
   onShowAuditLogs: (account: XboxAccount) => void;
+  onToggleAvailable: (account: XboxAccount) => void;
+  onForceRecall: (claimId: number, accountLabel: string, holderName: string) => void;
+  togglePending: boolean;
+  recallPending: boolean;
 }) {
   const meta = COUNTRY_META[country];
   return (
@@ -1069,6 +1087,7 @@ function AccountsTable({
           <TableHead>账号编号</TableHead>
           <TableHead>登录邮箱</TableHead>
           <TableHead>状态</TableHead>
+          <TableHead>领取情况</TableHead>
           <TableHead className="text-right">RMB 累计成本</TableHead>
           <TableHead className="text-right">本地余额</TableHead>
           <TableHead>备注</TableHead>
@@ -1076,65 +1095,129 @@ function AccountsTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {accounts.map((account) => (
-          <TableRow key={account.id}>
-            <TableCell className="text-xs tabular-nums text-muted-foreground">
-              {account.accountNo ?? account.name}
-            </TableCell>
-            <TableCell className="text-xs text-muted-foreground">
-              <div className="flex items-center gap-1">
-                <span className="truncate max-w-[160px]">{account.loginEmail ?? "-"}</span>
-                {account.hasPassword ? (
-                  <KeyRound className="h-3 w-3 text-emerald-600" aria-label="已设密码" />
-                ) : null}
-              </div>
-            </TableCell>
-            <TableCell>
-              <div className="flex flex-col gap-0.5">
-                <StatusBadge status={account.status} />
-                {account.statusMessage ? (
-                  <span className="text-[10px] text-muted-foreground truncate max-w-[120px]">
-                    {account.statusMessage}
-                  </span>
-                ) : null}
-              </div>
-            </TableCell>
-            <TableCell className="text-right tabular-nums text-red-600">
-              {formatMoney(account.rmbCostMinor, "CNY")}
-            </TableCell>
-            <TableCell className={cn("text-right tabular-nums font-semibold", meta.accentText)}>
-              {formatMoney(account.localBalanceMinor, account.currency)}
-            </TableCell>
-            <TableCell className="text-muted-foreground text-xs">{account.remark ?? "-"}</TableCell>
-            <TableCell className="text-right">
-              <div className="flex flex-wrap justify-end gap-1">
-                <Button size="sm" variant="ghost" onClick={() => onTransactions(account)}>
-                  <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />
-                  流水
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => onEdit(account)}>
-                  <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-                  编辑
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => onChangePassword(account)}>
-                  <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
-                  改密码
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => onChangeStatus(account)}>
-                  <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" />
-                  改状态
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => onShowAuditLogs(account)}>
-                  <History className="h-3.5 w-3.5" aria-hidden="true" />
-                  审计
-                </Button>
-              </div>
-            </TableCell>
-          </TableRow>
-        ))}
+        {accounts.map((account) => {
+          const claim = claimByAccountId.get(Number(account.id));
+          const holder = claim ? operatorById.get(claim.operatorId) : null;
+          return (
+            <TableRow key={account.id}>
+              <TableCell className="text-xs tabular-nums text-muted-foreground">
+                {account.accountNo ?? account.name}
+              </TableCell>
+              <TableCell className="text-xs text-muted-foreground">
+                <div className="flex items-center gap-1">
+                  <span className="truncate max-w-[160px]">{account.loginEmail ?? "-"}</span>
+                  {account.hasPassword ? (
+                    <KeyRound className="h-3 w-3 text-emerald-600" aria-label="已设密码" />
+                  ) : null}
+                </div>
+              </TableCell>
+              <TableCell>
+                <div className="flex flex-col gap-0.5">
+                  <StatusBadge status={account.status} />
+                  {account.statusMessage ? (
+                    <span className="text-[10px] text-muted-foreground truncate max-w-[120px]">
+                      {account.statusMessage}
+                    </span>
+                  ) : null}
+                </div>
+              </TableCell>
+              <TableCell>
+                {claim ? (
+                  <div className="flex flex-col gap-0.5">
+                    <Badge tone="warning">
+                      <Lock className="mr-1 h-3 w-3" />
+                      {holder?.displayName ?? `#${claim.operatorId}`}
+                    </Badge>
+                    <span className="text-[10px] text-muted-foreground">
+                      {holder?.loginName ?? ""}
+                    </span>
+                  </div>
+                ) : account.isAvailableForClaim ? (
+                  <Badge tone="success">
+                    <Unlock className="mr-1 h-3 w-3" />
+                    可出库
+                  </Badge>
+                ) : (
+                  <Badge tone="neutral">未上架</Badge>
+                )}
+              </TableCell>
+              <TableCell className="text-right tabular-nums text-red-600">
+                {formatMoney(account.rmbCostMinor, "CNY")}
+              </TableCell>
+              <TableCell className={cn("text-right tabular-nums font-semibold", meta.accentText)}>
+                {formatMoney(account.localBalanceMinor, account.currency)}
+              </TableCell>
+              <TableCell className="text-muted-foreground text-xs">{account.remark ?? "-"}</TableCell>
+              <TableCell className="text-right">
+                <div className="flex flex-wrap justify-end gap-1">
+                  <Button
+                    size="sm"
+                    variant={account.isAvailableForClaim ? "outline" : "default"}
+                    onClick={() => onToggleAvailable(account)}
+                    disabled={togglePending}
+                    title={
+                      account.isAvailableForClaim
+                        ? "撤销可出库（客服将无法再领取此账号）"
+                        : "标记为可出库，客服可领取此账号"
+                    }
+                  >
+                    {account.isAvailableForClaim ? (
+                      <>
+                        <Lock className="h-3.5 w-3.5" />
+                        撤销可出库
+                      </>
+                    ) : (
+                      <>
+                        <Unlock className="h-3.5 w-3.5" />
+                        标可出库
+                      </>
+                    )}
+                  </Button>
+                  {claim ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        onForceRecall(
+                          claim.id,
+                          account.accountNo ?? account.name,
+                          holder?.displayName ?? `#${claim.operatorId}`
+                        )
+                      }
+                      disabled={recallPending}
+                      title="强制回收：跳过持有人确认，CEO 直接收回账号"
+                    >
+                      强制回收
+                    </Button>
+                  ) : null}
+                  <Button size="sm" variant="ghost" onClick={() => onTransactions(account)}>
+                    <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />
+                    流水
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => onEdit(account)}>
+                    <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                    编辑
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => onChangePassword(account)}>
+                    <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
+                    改密码
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => onChangeStatus(account)}>
+                    <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" />
+                    改状态
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => onShowAuditLogs(account)}>
+                    <History className="h-3.5 w-3.5" aria-hidden="true" />
+                    审计
+                  </Button>
+                </div>
+              </TableCell>
+            </TableRow>
+          );
+        })}
         {accounts.length === 0 ? (
           <TableRow>
-            <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
+            <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
               当前 Tab 暂无账号，点击右上角「+ 新建账号」开始
             </TableCell>
           </TableRow>
@@ -2914,6 +2997,7 @@ function AddMappingModal({
 }
 
 function AccountsManagementTab() {
+  const queryClient = useQueryClient();
   const [country, setCountry] = useState<XboxCountry>("US");
   const [showCreate, setShowCreate] = useState(false);
   const [transactionsTarget, setTransactionsTarget] = useState<XboxAccount | null>(null);
@@ -2921,10 +3005,50 @@ function AccountsManagementTab() {
   const [passwordTarget, setPasswordTarget] = useState<XboxAccount | null>(null);
   const [statusTarget, setStatusTarget] = useState<XboxAccount | null>(null);
   const [auditTarget, setAuditTarget] = useState<XboxAccount | null>(null);
+  const [availabilityError, setAvailabilityError] = useState<string | null>(null);
 
   const { data: accounts = [], isFetching, refetch } = useQuery({
     queryKey: ["xbox-accounts", country],
     queryFn: () => getXboxAccounts(country)
+  });
+
+  // CEO 后台需要的领取数据 + 客服字典
+  const { data: claims = [] } = useQuery({
+    queryKey: ["operator-claims-all", true],
+    queryFn: () => getAllClaims(true)
+  });
+  const { data: operators = [] } = useQuery({
+    queryKey: ["operators"],
+    queryFn: getOperators
+  });
+  const claimByAccountId = new Map(
+    claims.map((c) => [c.accountId, { id: c.id, operatorId: c.operatorId }])
+  );
+  const operatorById = new Map(
+    operators.map((o) => [
+      o.id,
+      { id: o.id, displayName: o.displayName, loginName: o.loginName }
+    ])
+  );
+
+  const toggleAvailabilityMut = useMutation({
+    mutationFn: (account: XboxAccount) =>
+      patchXboxAccountAvailability(account.id, !account.isAvailableForClaim),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["xbox-accounts"] });
+    },
+    onError: (err) =>
+      setAvailabilityError(err instanceof Error ? err.message : "标记失败")
+  });
+
+  const recallMut = useMutation({
+    mutationFn: (claimId: number) => returnClaim(claimId, { forceRecall: true }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["operator-claims-all"] });
+      await queryClient.invalidateQueries({ queryKey: ["xbox-accounts"] });
+    },
+    onError: (err) =>
+      setAvailabilityError(err instanceof Error ? err.message : "强制回收失败")
   });
 
   const meta = COUNTRY_META[country];
@@ -2955,6 +3079,12 @@ function AccountsManagementTab() {
 
       <SummaryCards country={country} />
 
+      {availabilityError ? (
+        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          {availabilityError}
+        </div>
+      ) : null}
+
       <Card className={cn("border", meta.accentBorder)}>
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
@@ -2969,11 +3099,38 @@ function AccountsManagementTab() {
           <AccountsTable
             accounts={accounts}
             country={country}
+            claimByAccountId={claimByAccountId}
+            operatorById={operatorById}
             onTransactions={setTransactionsTarget}
             onEdit={setEditTarget}
             onChangePassword={setPasswordTarget}
             onChangeStatus={setStatusTarget}
             onShowAuditLogs={setAuditTarget}
+            onToggleAvailable={(account) => {
+              setAvailabilityError(null);
+              const next = !account.isAvailableForClaim;
+              if (
+                confirm(
+                  next
+                    ? `把账号「${account.accountNo ?? account.name}」标为可出库？客服可以从客服 exe 领取此账号。`
+                    : `撤销账号「${account.accountNo ?? account.name}」的可出库状态？客服将无法再领取此账号（已领取的不受影响）。`
+                )
+              ) {
+                toggleAvailabilityMut.mutate(account);
+              }
+            }}
+            onForceRecall={(claimId, accountLabel, holderName) => {
+              setAvailabilityError(null);
+              if (
+                confirm(
+                  `强制回收账号「${accountLabel}」(当前由「${holderName}」持有)？回收后该账号回到可领池子。`
+                )
+              ) {
+                recallMut.mutate(claimId);
+              }
+            }}
+            togglePending={toggleAvailabilityMut.isPending}
+            recallPending={recallMut.isPending}
           />
         </CardContent>
       </Card>

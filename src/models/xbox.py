@@ -10,7 +10,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, ForeignKey, JSON, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.database import Base
@@ -72,6 +72,11 @@ class XboxAccount(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # CEO 2026-05-11: 是否"可出库"(允许客服领取)
+    # 默认 False, CEO 在财务系统后台手动标
+    is_available_for_claim: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     remark: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

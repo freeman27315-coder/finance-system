@@ -1,6 +1,7 @@
 import { AppShell } from "@/components/app-shell";
 import { AssetsPage } from "@/components/assets-page";
 import { ModuleOverview } from "@/components/module-overview";
+import { OperatorsPage } from "@/components/operators-page";
 import { TaobaoPage } from "@/components/taobao-page";
 import { VendorsPage } from "@/components/vendors-page";
 import { XboxPage } from "@/components/xbox-page";
@@ -25,6 +26,8 @@ export default function SectionPage({ params }: SectionPageProps) {
         <XboxPage />
       ) : section.id === "taobao" ? (
         <TaobaoPage />
+      ) : section.id === "operators" ? (
+        <OperatorsPage />
       ) : (
         <ModuleOverview section={section} />
       )}

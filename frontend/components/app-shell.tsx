@@ -5,7 +5,8 @@ import {
   Gamepad2,
   LayoutDashboard,
   Landmark,
-  ShoppingBag
+  ShoppingBag,
+  Users
 } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
@@ -19,7 +20,8 @@ const icons = {
   vendors: Building2,
   xbox: Gamepad2,
   taobao: ShoppingBag,
-  taiwan: Landmark
+  taiwan: Landmark,
+  operators: Users
 };
 
 type AppShellProps = {
