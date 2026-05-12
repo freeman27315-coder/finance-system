@@ -1,0 +1,61 @@
+{
+  "name": "xbox-operator-exe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "XBOX 客服销售系统 (Electron + Next.js, CEO 2026-05-12)",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev:next": "next dev -p 3100",
+    "dev:electron": "wait-on http://localhost:3100 && electron .",
+    "dev": "concurrently -k -n NEXT,ELECTRON -c blue,green \"npm:dev:next\" \"npm:dev:electron\"",
+    "build:next": "next build && next export -o out",
+    "build:electron": "electron-builder",
+    "typecheck": "tsc --noEmit",
+    "start:web": "next dev -p 3100"
+  },
+  "dependencies": {
+    "@radix-ui/react-slot": "^1.1.0",
+    "@tanstack/react-query": "^5.59.20",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.468.0",
+    "next": "^14.2.18",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwind-merge": "^2.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.0.1",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.xbox-finance.operator",
+    "productName": "XBOX 客服销售系统",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
