@@ -104,6 +104,12 @@ function formatDateTime(value: string) {
   return value.length >= 16 ? value.slice(0, 16).replace("T", " ") : value;
 }
 
+// CEO 2026-05-12: 销售日期/时间显示到秒(中国时区)
+function formatDateTimeSeconds(value: string) {
+  if (!value) return "-";
+  return value.length >= 19 ? value.slice(0, 19).replace("T", " ") : value;
+}
+
 function SummaryCards({ country }: { country: XboxCountry }) {
   const { data, isFetching, refetch } = useQuery({
     queryKey: ["xbox-summary"],
@@ -1611,9 +1617,8 @@ function CompleteOrderModal({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [saleDate, setSaleDate] = useState(
-    order.saleDate ?? new Date().toISOString().slice(0, 10)
-  );
+  // CEO 2026-05-12: 销售日期 = 微软订单时间(order.orderAt),系统自动填,只读
+  const saleDate = order.saleDate ?? order.orderAt ?? "";
   const [productName, setProductName] = useState(order.productName ?? "");
   const [operatorName, setOperatorName] = useState(order.operatorName ?? "");
   const [salePrice, setSalePrice] = useState(
@@ -1651,8 +1656,8 @@ function CompleteOrderModal({
       if (!salePrice.trim()) throw new Error("售价不能为空");
       if (!walletMethodId) throw new Error("请选收款方式");
       if (!walletItemId) throw new Error("请选备注模板");
+      // saleDate 不再传 — 后端创建订单时已自动 = order_at(中国时区精确到秒)
       return patchXboxOrder(order.id, {
-        saleDate,
         productName: productName.trim(),
         operatorName: operatorName.trim(),
         salePrice: salePrice.trim(),
@@ -1717,13 +1722,10 @@ function CompleteOrderModal({
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">销售日期 *</div>
-            <input
-              type="date"
-              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={saleDate}
-              onChange={(event) => setSaleDate(event.target.value)}
-            />
+            <div className="text-sm text-muted-foreground">销售日期（系统自动，精确到秒）</div>
+            <div className="h-10 flex items-center rounded-md border border-border bg-muted px-3 text-sm tabular-nums text-muted-foreground">
+              {formatDateTimeSeconds(saleDate) || "-"}
+            </div>
           </div>
           <div className="space-y-1">
             <div className="text-sm text-muted-foreground">商品名 *</div>
@@ -2292,7 +2294,7 @@ function SaleRecordsTab({ highlightId }: { highlightId?: string | null }) {
                 const isHighlighted = highlightId === record.id;
                 return (
                   <TableRow key={record.id} className={cn(isHighlighted && "bg-emerald-50")}>
-                    <TableCell className="text-xs tabular-nums">{record.saleDate}</TableCell>
+                    <TableCell className="text-xs tabular-nums">{formatDateTimeSeconds(record.saleDate)}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {account?.accountNo ?? account?.name ?? "-"}
                     </TableCell>

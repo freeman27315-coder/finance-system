@@ -237,13 +237,15 @@ def trigger_sync(
             exchange_rate=used_rate_value,
             rmb_cost=rmb_cost,
             order_at=fetched.order_at,
+            # CEO 2026-05-12: 销售日期 = 微软订单时间(中国时区精确到秒),自动填
+            sale_date=fetched.order_at,
             raw_data=fetched.raw_data,
             status=XboxOrderStatus.PENDING_COMPLETE.value,
         )
         session.add(order)
         orders_added += 1
 
-    # 余额快照
+    # 余额快照 + 同步更新账号当前余额(CEO 2026-05-12: 每次同步都更新 account.local_balance)
     balance_info = None
     if result.balance is not None:
         snapshot = XboxBalanceSnapshot(
@@ -253,6 +255,8 @@ def trigger_sync(
             captured_at=china_now(),
         )
         session.add(snapshot)
+        # 更新账号当前余额,前端客服 exe 直接显示这个字段
+        account.local_balance = Decimal(result.balance.balance)
         balance_info = {
             "currency": result.balance.currency,
             "balance": str(result.balance.balance),

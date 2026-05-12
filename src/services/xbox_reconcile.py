@@ -117,15 +117,20 @@ def _theoretical_total_for_day(
     """理论值钱包在指定日期的"流入总额"。
 
     数据来源：``XboxSaleRecord``。
-    - sale_date == target_date 且 wallet_pool_id == theoretical_wallet_id
+    - sale_date 落在 target_date 当天 [00:00, 次日 00:00)
+      且 wallet_pool_id == theoretical_wallet_id
     - 直接 sum(sale_price)（合单后的最新值）
+
+    CEO 2026-05-12: sale_date 升级为 datetime,所以按当天 datetime 范围筛而不是相等。
 
     注意: 不是从 wallet_transactions 取(那里有合单调整流水会重复算)。
     """
+    start, end = _day_range(target_date)
     total = session.scalar(
         select(sa_func.coalesce(sa_func.sum(XboxSaleRecord.sale_price), 0)).where(
             XboxSaleRecord.wallet_pool_id == theoretical_wallet_id,
-            XboxSaleRecord.sale_date == target_date,
+            XboxSaleRecord.sale_date >= start,
+            XboxSaleRecord.sale_date < end,
         )
     )
     return Decimal(str(total or 0))

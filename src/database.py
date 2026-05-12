@@ -48,6 +48,7 @@ def init_db() -> None:
     _ensure_wallet_transaction_business_date_column()
     _ensure_xbox_account_extended_columns()
     _ensure_xbox_account_is_available_for_claim_column()
+    _migrate_xbox_sale_date_to_datetime()
 
 
 def _ensure_wallet_is_group_column() -> None:
@@ -126,6 +127,40 @@ def _ensure_xbox_account_is_available_for_claim_column() -> None:
         connection.execute(
             text("ALTER TABLE xbox_accounts ADD COLUMN is_available_for_claim BOOLEAN NOT NULL DEFAULT 0")
         )
+
+
+def _migrate_xbox_sale_date_to_datetime() -> None:
+    """CEO 2026-05-12: 把 xbox_sale_records.sale_date 和 xbox_orders.sale_date
+    从 DATE (YYYY-MM-DD) 升级为 DATETIME (YYYY-MM-DD HH:MM:SS.ffffff),
+    中国时区精确到秒。
+
+    SQLite 的列类型 affinity 很松散(DATE 和 DATETIME 都是 TEXT 存),所以
+    不需要 ALTER COLUMN,只把存量"YYYY-MM-DD"格式的旧值改成
+    "YYYY-MM-DD 00:00:00" 让 SQLAlchemy 能按 datetime 解析。
+    """
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+
+    inspector = inspect(engine)
+    table_names = inspector.get_table_names()
+
+    with engine.begin() as connection:
+        # xbox_sale_records.sale_date (NOT NULL)
+        if "xbox_sale_records" in table_names:
+            connection.execute(
+                text(
+                    "UPDATE xbox_sale_records SET sale_date = sale_date || ' 00:00:00' "
+                    "WHERE sale_date IS NOT NULL AND length(sale_date) = 10"
+                )
+            )
+        # xbox_orders.sale_date (nullable)
+        if "xbox_orders" in table_names:
+            connection.execute(
+                text(
+                    "UPDATE xbox_orders SET sale_date = sale_date || ' 00:00:00' "
+                    "WHERE sale_date IS NOT NULL AND length(sale_date) = 10"
+                )
+            )
 
 
 def _ensure_wallet_transaction_business_date_column() -> None:

@@ -12,9 +12,9 @@
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, Union
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -96,11 +96,22 @@ def _find_existing_sale_record(
     )
 
 
+def _coerce_sale_datetime(value: Union[date, datetime, None]) -> Optional[datetime]:
+    """把 date 自动升 datetime(00:00:00),便于和旧调用方/测试兼容。"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time())
+    return value
+
+
 def create_or_merge_sale_record(
     session: Session,
     *,
     account: XboxAccount,
-    sale_date: date,
+    sale_date: Union[date, datetime],
     product_name: str,
     operator_name: str,
     sale_price: Decimal,
@@ -118,11 +129,23 @@ def create_or_merge_sale_record(
 
     传入 ``order`` 时,会把订单的 sale_record_id 指向新/旧记录,
     并把订单 status 改成 converted。
+
+    CEO 2026-05-12: sale_date 是 datetime(中国时区精确到秒)。
+    当 ``order`` 提供时,如果 sale_date 是 date(只到天),会被升级为 order.order_at
+    (微软抓订单的时间)。
     """
     pool = _validate_pool_currency(session, wallet_pool_id, sale_currency)
     sale_price = Decimal(sale_price)
     if sale_price < 0:
         raise ValueError("销售价格不能为负数")
+
+    # 销售日期 → 一律 datetime;有订单时优先取 order.order_at
+    sale_dt = _coerce_sale_datetime(sale_date)
+    if order is not None and order.order_at is not None:
+        # CEO 2026-05-12: 销售日期 = 微软订单抓取时间(中国时区精确到秒)
+        sale_dt = order.order_at
+    if sale_dt is None:
+        raise ValueError("销售日期不能为空")
 
     existing = _find_existing_sale_record(session, account.id, wallet_item_id)
 
@@ -130,7 +153,7 @@ def create_or_merge_sale_record(
         # 新建销售记录
         record = XboxSaleRecord(
             account_id=account.id,
-            sale_date=sale_date,
+            sale_date=sale_dt,
             product_name=product_name,
             operator_name=operator_name,
             sale_price=sale_price,
@@ -220,7 +243,7 @@ def update_sale_record_fields(
     session: Session,
     record: XboxSaleRecord,
     *,
-    sale_date: Optional[date] = None,
+    sale_date: Union[date, datetime, None] = None,
     product_name: Optional[str] = None,
     operator_name: Optional[str] = None,
     sale_price: Optional[Decimal] = None,
@@ -311,7 +334,7 @@ def update_sale_record_fields(
 
     # 3) 更新其他普通字段
     if sale_date is not None:
-        record.sale_date = sale_date
+        record.sale_date = _coerce_sale_datetime(sale_date) or record.sale_date
     if product_name is not None:
         record.product_name = product_name
     if operator_name is not None:
@@ -328,6 +351,23 @@ def update_sale_record_fields(
     return record
 
 
+def _date_range_to_datetime_bounds(
+    from_date: Optional[date], to_date: Optional[date]
+) -> tuple[Optional[datetime], Optional[datetime]]:
+    """把传入的 date 范围转成 datetime 闭区间(用于和 sale_date(datetime)比较):
+    [from_date 00:00:00, (to_date+1天) 00:00:00).
+    """
+    from datetime import timedelta
+
+    lower: Optional[datetime] = None
+    upper: Optional[datetime] = None
+    if from_date is not None:
+        lower = datetime.combine(from_date, datetime.min.time())
+    if to_date is not None:
+        upper = datetime.combine(to_date, datetime.min.time()) + timedelta(days=1)
+    return lower, upper
+
+
 def list_sale_records(
     session: Session,
     *,
@@ -336,16 +376,17 @@ def list_sale_records(
     from_date: Optional[date] = None,
     to_date: Optional[date] = None,
 ) -> list[XboxSaleRecord]:
-    """列销售记录。按 sale_date 闭区间过滤。"""
+    """列销售记录。按 sale_date 闭区间过滤(传 date 时按当天 0 点 ~ 次日 0 点开区间)。"""
     stmt = select(XboxSaleRecord).order_by(XboxSaleRecord.id.desc())
     if account_id is not None:
         stmt = stmt.where(XboxSaleRecord.account_id == account_id)
     if wallet_pool_id is not None:
         stmt = stmt.where(XboxSaleRecord.wallet_pool_id == wallet_pool_id)
-    if from_date is not None:
-        stmt = stmt.where(XboxSaleRecord.sale_date >= from_date)
-    if to_date is not None:
-        stmt = stmt.where(XboxSaleRecord.sale_date <= to_date)
+    lower, upper = _date_range_to_datetime_bounds(from_date, to_date)
+    if lower is not None:
+        stmt = stmt.where(XboxSaleRecord.sale_date >= lower)
+    if upper is not None:
+        stmt = stmt.where(XboxSaleRecord.sale_date < upper)
     return list(session.scalars(stmt))
 
 
@@ -371,12 +412,13 @@ def get_sales_summary(
     from src.models.xbox import XboxOrder as _XboxOrder
     from src.models.xbox import XboxWalletItem, XboxWalletMethod
 
-    # 销售记录基础筛选
+    # 销售记录基础筛选(date → datetime 边界)
     base_filters = []
-    if from_date is not None:
-        base_filters.append(XboxSaleRecord.sale_date >= from_date)
-    if to_date is not None:
-        base_filters.append(XboxSaleRecord.sale_date <= to_date)
+    lower, upper = _date_range_to_datetime_bounds(from_date, to_date)
+    if lower is not None:
+        base_filters.append(XboxSaleRecord.sale_date >= lower)
+    if upper is not None:
+        base_filters.append(XboxSaleRecord.sale_date < upper)
 
     # 按币种汇总
     by_currency_rows = list(

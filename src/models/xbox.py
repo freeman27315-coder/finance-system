@@ -180,7 +180,9 @@ class XboxOrder(Base):
         String(32), nullable=False, default=XboxOrderStatus.PENDING_COMPLETE.value
     )
     # 补齐字段（运营填写）
-    sale_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    # CEO 2026-05-12: sale_date 从 DATE 升级为 DATETIME(中国时区,精确到秒)
+    # 销售记录创建时自动 = order_at(微软抓订单的时间),客服无需手填
+    sale_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     product_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     operator_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     sale_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
@@ -218,7 +220,9 @@ class XboxSaleRecord(Base):
     account_id: Mapped[int] = mapped_column(
         ForeignKey("xbox_accounts.id"), nullable=False, index=True
     )
-    sale_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # CEO 2026-05-12: sale_date 从 DATE 升级为 DATETIME(中国时区,精确到秒)
+    # 系统自动 = 对应订单的 order_at(微软抓订单的时间),客服无需手填
+    sale_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     product_name: Mapped[str] = mapped_column(String(255), nullable=False)
     operator_name: Mapped[str] = mapped_column(String(64), nullable=False)
     # 售价（合单后总金额,可改）
