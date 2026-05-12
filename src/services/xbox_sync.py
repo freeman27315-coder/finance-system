@@ -48,6 +48,132 @@ from src.utils.time import china_now
 VALID_SYNC_COUNTS = (10, 20, 30, 50)
 
 
+# CEO 2026-05-12 Q1-A: 同步爬到 balance.currency 后自动识别国家
+_CURRENCY_TO_COUNTRY = {
+    "USD": ("US", "USD"),
+    "GBP": ("UK", "GBP"),
+}
+
+
+def _identify_country_from_currency(currency: str) -> tuple[Optional[str], Optional[str]]:
+    """USD→(US,USD), GBP→(UK,GBP), 其他→(None,None)"""
+    return _CURRENCY_TO_COUNTRY.get(currency, (None, None))
+
+
+def _apply_country_auto_detection(
+    session: Session, account: XboxAccount, balance_currency: str
+) -> None:
+    """根据爬到的 balance.currency 自动设置账号的 country/currency,并写审计。
+
+    - 第一次识别 (country_identified=False) → 设置 + audit + 标已识别
+    - 重复识别 (已有值且一致) → 不动
+    - 不一致 (CEO 改了账号 country 但同步抓到不同 currency) → 用同步值覆盖 + audit
+    """
+    identified_country, identified_currency = _identify_country_from_currency(balance_currency)
+    if identified_country is None:
+        # 未知币种,不做处理(stub 阶段不会发生)
+        return
+
+    old_country = account.country.value if hasattr(account.country, "value") else account.country
+    old_currency = account.currency.value if hasattr(account.currency, "value") else account.currency
+    if (
+        account.country_identified
+        and old_country == identified_country
+        and old_currency == identified_currency
+    ):
+        return  # 已识别且一致,no-op
+
+    account.country = identified_country
+    account.currency = identified_currency
+    account.country_identified = True
+    session.add(
+        XboxAccountAuditLog(
+            account_id=account.id,
+            action="updated",
+            detail=(
+                f"同步自动识别国家: {old_country}/{old_currency} → "
+                f"{identified_country}/{identified_currency}"
+            ),
+            operator="sync",
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# 仅拉余额 (CEO 2026-05-12 Q2: 刷新余额按钮使用,不污染订单数据)
+# ---------------------------------------------------------------------------
+
+
+def fetch_balance_only_stub(account: XboxAccount) -> Optional[FetchedBalance]:
+    """阶段 1 stub: 模拟拉余额(不拉订单)。阶段 2 替换为真实 Playwright。
+
+    返回 None 表示拉失败(未设登录邮箱/密码),否则返回 mock 余额 + 币种。
+    Mock 规则:
+    - 账号已识别国家 → 用现有 currency 模拟
+    - 未识别 → 用 id%2 区分(演示自动识别效果)
+    """
+    if not account.login_email or not account.password_enc:
+        return None
+
+    if account.country_identified and account.currency:
+        currency = account.currency.value if hasattr(account.currency, "value") else account.currency
+    else:
+        currency = "USD" if account.id % 2 == 0 else "GBP"
+
+    # mock 余额: 每个账号有不同基数,以体现刷新差异
+    balance = Decimal("123.45") + Decimal(account.id) * Decimal("10.00")
+    return FetchedBalance(currency=currency, balance=balance)
+
+
+def refresh_account_balance(session: Session, account: XboxAccount) -> dict:
+    """刷新单个账号的微软余额 + 自动识别国家 + 写余额快照。
+
+    不拉订单。返回 {success, balance, currency, country, message?}。
+    """
+    if account.status == XboxAccountStatus.DISABLED.value:
+        return {
+            "success": False,
+            "message": "账号已停用",
+            "balance": str(account.local_balance),
+            "currency": account.currency.value if hasattr(account.currency, "value") else account.currency,
+            "country": account.country.value if hasattr(account.country, "value") else account.country,
+        }
+
+    fetched = fetch_balance_only_stub(account)
+    if fetched is None:
+        return {
+            "success": False,
+            "message": "账号未设置登录邮箱或密码",
+            "balance": str(account.local_balance),
+            "currency": account.currency.value if hasattr(account.currency, "value") else account.currency,
+            "country": account.country.value if hasattr(account.country, "value") else account.country,
+        }
+
+    # 写快照
+    snapshot = XboxBalanceSnapshot(
+        account_id=account.id,
+        currency=fetched.currency,
+        balance=Decimal(fetched.balance),
+        captured_at=china_now(),
+    )
+    session.add(snapshot)
+
+    # 自动识别国家
+    _apply_country_auto_detection(session, account, fetched.currency)
+
+    # 更新余额 + last_synced_at
+    account.local_balance = Decimal(fetched.balance)
+    account.last_synced_at = china_now()
+    session.flush()
+
+    return {
+        "success": True,
+        "balance": str(fetched.balance),
+        "currency": fetched.currency,
+        "country": account.country.value if hasattr(account.country, "value") else account.country,
+    }
+
+
 @dataclass
 class FetchedOrder:
     """从 Microsoft 抓到的单个订单原始字段。"""
@@ -257,6 +383,8 @@ def trigger_sync(
         session.add(snapshot)
         # 更新账号当前余额,前端客服 exe 直接显示这个字段
         account.local_balance = Decimal(result.balance.balance)
+        # CEO 2026-05-12: 根据爬回来的 currency 自动识别国家(USD→US, GBP→UK)
+        _apply_country_auto_detection(session, account, result.balance.currency)
         balance_info = {
             "currency": result.balance.currency,
             "balance": str(result.balance.balance),

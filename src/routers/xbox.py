@@ -60,6 +60,7 @@ from src.services.xbox_sync import (
     VALID_SYNC_COUNTS,
     list_balance_snapshots,
     list_sync_batches,
+    refresh_account_balance,
     trigger_sync,
 )
 from src.services.xbox_wallet_setting import (
@@ -83,12 +84,16 @@ def _to_camel(snake: str) -> str:
 
 
 class XboxAccountCreate(BaseModel):
-    """新增账号请求体（PR #103 升级,加新字段）。"""
+    """新增账号请求体（PR #103 升级,加新字段）。
+
+    CEO 2026-05-12 Q1-A: country 字段不再必填,默认占位 US,
+    第一次同步成功后根据爬到的 currency 自动识别(USD→US, GBP→UK)。
+    """
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
 
     name: str = Field(..., min_length=1, max_length=120)
-    country: XboxCountry
+    country: Optional[XboxCountry] = None  # 不传 = 待识别
     account_no: Optional[str] = Field(None, max_length=64)
     login_email: Optional[str] = Field(None, max_length=255)
     password: Optional[str] = Field(None, min_length=1)  # 明文,后端加密
@@ -147,6 +152,7 @@ class XboxAccountOut(BaseModel):
     status_message: Optional[str] = None
     last_synced_at: Optional[str] = None
     is_available_for_claim: bool = False  # CEO 2026-05-11
+    country_identified: bool = False  # CEO 2026-05-12 Q1-A: 国家是否已自动识别
     remark: Optional[str]
     created_at: str
 
@@ -221,6 +227,7 @@ def serialize_account(account: XboxAccount) -> XboxAccountOut:
         status_message=account.status_message,
         last_synced_at=account.last_synced_at.isoformat() if account.last_synced_at else None,
         is_available_for_claim=bool(account.is_available_for_claim),
+        country_identified=bool(account.country_identified),
         remark=account.remark,
         created_at=account.created_at.isoformat() if account.created_at else "",
     )
@@ -288,13 +295,20 @@ def apply_recharge_to_account(
     status_code=status.HTTP_201_CREATED,
 )
 def create_account(request: XboxAccountCreate, db: Session = Depends(get_db)) -> XboxAccountOut:
-    """新增账号。可选填账号编号 / 登录邮箱 / 密码（自动加密）/ 汇率 / 状态。"""
+    """新增账号。可选填账号编号 / 登录邮箱 / 密码（自动加密）/ 汇率 / 状态。
+
+    CEO 2026-05-12 Q1-A: country 字段不再必填。不传时占位 US,country_identified=False;
+    首次同步后根据爬到的 currency 自动识别(USD→US, GBP→UK)。
+    """
+    # 国家占位: 未传时默认 US/USD,country_identified=False 标记为"待识别"
+    effective_country = request.country or XboxCountry.US
+    effective_currency = COUNTRY_CURRENCY[effective_country]
     try:
         account = service_create_account(
             db,
             name=request.name,
-            country=request.country,
-            currency=COUNTRY_CURRENCY[request.country],
+            country=effective_country,
+            currency=effective_currency,
             account_no=request.account_no,
             login_email=request.login_email,
             password_plain=request.password,
@@ -305,6 +319,10 @@ def create_account(request: XboxAccountCreate, db: Session = Depends(get_db)) ->
             local_balance=request.local_balance or Decimal("0"),
             remark=request.remark,
         )
+        # 如果 CEO 明确传了 country, 视为已确认(skip auto-detect);否则待识别
+        if request.country is not None:
+            account.country_identified = True
+            db.flush()
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     db.commit()
@@ -1334,6 +1352,81 @@ def sync_orders_endpoint(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     db.commit()
     return result
+
+
+# ---------------------------------------------------------------------------
+# 刷新余额 (CEO 2026-05-12 Q2: 单账号 + 全部 — 用于判断出入库)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/accounts/{account_id}/refresh-balance",
+    response_model=XboxAccountOut,
+    response_model_by_alias=True,
+)
+def refresh_account_balance_endpoint(
+    account_id: int,
+    db: Session = Depends(get_db),
+) -> XboxAccountOut:
+    """刷新单个账号的微软余额(只拉余额,不拉订单)。
+
+    成功时:
+    - 更新 account.local_balance
+    - 自动识别国家(USD→US, GBP→UK) → 更新 country/currency + country_identified=True
+    - 写余额快照
+    - 写审计日志
+
+    失败时 (账号未设邮箱/密码 / 已停用) 返回 200 但 status_message 含原因,
+    不抛 4xx — 因为这是"刷新"语义,失败的账号也要让 CEO 看到状态。
+    """
+    account = get_account_or_404(db, account_id)
+    refresh_account_balance(db, account)
+    db.commit()
+    db.refresh(account)
+    return serialize_account(account)
+
+
+class XboxRefreshAllResult(BaseModel):
+    """全部刷新结果摘要 — 一次性看到所有账号的余额变化。"""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    total: int
+    succeeded: int
+    failed: int
+    accounts: list[XboxAccountOut]
+
+
+@router.post(
+    "/refresh-all-balances",
+    response_model=XboxRefreshAllResult,
+    response_model_by_alias=True,
+)
+def refresh_all_balances_endpoint(db: Session = Depends(get_db)) -> XboxRefreshAllResult:
+    """串行刷新所有 active 账号的余额(CEO 2026-05-12: 方便判断出入库)。
+
+    返回每个账号最新状态(含余额、国家、识别标记)。
+    """
+    accounts = service_list_accounts(db, status=XboxAccountStatus.ACTIVE.value)
+    succeeded = 0
+    failed = 0
+    out_accounts: list[XboxAccountOut] = []
+    for account in accounts:
+        result = refresh_account_balance(db, account)
+        if result["success"]:
+            succeeded += 1
+        else:
+            failed += 1
+    db.commit()
+    # 重新加载所有账号
+    accounts = service_list_accounts(db, status=XboxAccountStatus.ACTIVE.value)
+    out_accounts = [serialize_account(a) for a in accounts]
+    return XboxRefreshAllResult(
+        total=len(accounts),
+        succeeded=succeeded,
+        failed=failed,
+        accounts=out_accounts,
+    )
 
 
 @router.get(

@@ -48,6 +48,7 @@ def init_db() -> None:
     _ensure_wallet_transaction_business_date_column()
     _ensure_xbox_account_extended_columns()
     _ensure_xbox_account_is_available_for_claim_column()
+    _ensure_xbox_account_country_identified_column()
     _migrate_xbox_sale_date_to_datetime()
 
 
@@ -126,6 +127,35 @@ def _ensure_xbox_account_is_available_for_claim_column() -> None:
     with engine.begin() as connection:
         connection.execute(
             text("ALTER TABLE xbox_accounts ADD COLUMN is_available_for_claim BOOLEAN NOT NULL DEFAULT 0")
+        )
+
+
+def _ensure_xbox_account_country_identified_column() -> None:
+    """加 XBOX 账号"国家是否已识别"字段(CEO 2026-05-12 自动识别国家)。
+
+    业务规则:
+    - 新创建账号: country 占位 "US",country_identified=False,首次同步后根据爬到的
+      currency 自动改正国家(USD→US, GBP→UK)
+    - Q4-B: 旧账号一次性 reset 为 country_identified=False,下次同步重新识别
+    """
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+
+    inspector = inspect(engine)
+    if "xbox_accounts" not in inspector.get_table_names():
+        return
+
+    column_names = {column["name"] for column in inspector.get_columns("xbox_accounts")}
+    if "country_identified" in column_names:
+        return
+
+    with engine.begin() as connection:
+        # 新列默认 0(False) - 这自动满足 Q4-B(所有旧账号都变成"待识别")
+        connection.execute(
+            text(
+                "ALTER TABLE xbox_accounts ADD COLUMN country_identified "
+                "BOOLEAN NOT NULL DEFAULT 0"
+            )
         )
 
 

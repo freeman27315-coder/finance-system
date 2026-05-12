@@ -64,6 +64,8 @@ import {
   patchXboxSaleRecord,
   pushXboxWalletSettings,
   rechargeXbox,
+  refreshAllXboxBalances,
+  refreshXboxAccountBalance,
   returnClaim,
   triggerXboxSync,
   updateXboxAccount
@@ -372,14 +374,13 @@ const STATUS_META: Record<
 };
 
 function CreateAccountModal({
-  defaultCountry,
+  defaultCountry: _defaultCountry,
   onClose
 }: {
   defaultCountry: XboxCountry;
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [country, setCountry] = useState<XboxCountry>(defaultCountry);
   const [accountNo, setAccountNo] = useState("");
   const [loginEmail, setLoginEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -393,10 +394,9 @@ function CreateAccountModal({
       if (!trimmedAccountNo) {
         throw new Error("账号编号不能为空");
       }
+      // CEO 2026-05-12 Q1-A: 不传 country, 等首次同步根据 currency 自动识别
       return createXboxAccount({
-        // 后端 name 字段必填,直接用账号编号当 name 传过去
         name: trimmedAccountNo,
-        country,
         accountNo: trimmedAccountNo,
         loginEmail: loginEmail.trim() === "" ? undefined : loginEmail.trim(),
         password: password === "" ? undefined : password,
@@ -419,6 +419,9 @@ function CreateAccountModal({
       <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto">
         <CardHeader>
           <CardTitle>新建 XBOX 账号</CardTitle>
+          <div className="mt-1 text-xs text-muted-foreground">
+            国家(US/UK)首次同步后系统自动识别，无需手动选
+          </div>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="space-y-1">
@@ -433,24 +436,6 @@ function CreateAccountModal({
               placeholder="如 BH-US-001"
               autoFocus
             />
-          </div>
-          <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">国家</div>
-            <div className="grid grid-cols-2 rounded-md border border-border p-1">
-              {(["US", "UK"] as XboxCountry[]).map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  className={cn(
-                    "flex h-8 items-center justify-center rounded text-sm font-medium text-muted-foreground",
-                    country === item && "bg-muted text-foreground"
-                  )}
-                  onClick={() => setCountry(item)}
-                >
-                  {COUNTRY_META[item].label}
-                </button>
-              ))}
-            </div>
           </div>
           <div className="space-y-1">
             <div className="text-sm text-muted-foreground">登录邮箱（选填）</div>
@@ -1069,7 +1054,10 @@ function AccountsTable({
   onToggleAvailable,
   onForceRecall,
   togglePending,
-  recallPending
+  recallPending,
+  onRefreshBalance,
+  refreshingAccountId,
+  refreshPending
 }: {
   accounts: XboxAccount[];
   country: XboxCountry;
@@ -1084,6 +1072,9 @@ function AccountsTable({
   onForceRecall: (claimId: number, accountLabel: string, holderName: string) => void;
   togglePending: boolean;
   recallPending: boolean;
+  onRefreshBalance: (account: XboxAccount) => void;
+  refreshingAccountId: string | null;
+  refreshPending: boolean;
 }) {
   const meta = COUNTRY_META[country];
   return (
@@ -1092,6 +1083,7 @@ function AccountsTable({
         <TableRow>
           <TableHead>账号编号</TableHead>
           <TableHead>登录邮箱</TableHead>
+          <TableHead>国家</TableHead>
           <TableHead>状态</TableHead>
           <TableHead>领取情况</TableHead>
           <TableHead className="text-right">RMB 累计成本</TableHead>
@@ -1104,6 +1096,7 @@ function AccountsTable({
         {accounts.map((account) => {
           const claim = claimByAccountId.get(Number(account.id));
           const holder = claim ? operatorById.get(claim.operatorId) : null;
+          const isRefreshingThis = refreshPending && refreshingAccountId === account.id;
           return (
             <TableRow key={account.id}>
               <TableCell className="text-xs tabular-nums text-muted-foreground">
@@ -1116,6 +1109,18 @@ function AccountsTable({
                     <KeyRound className="h-3 w-3 text-emerald-600" aria-label="已设密码" />
                   ) : null}
                 </div>
+              </TableCell>
+              <TableCell>
+                {/* CEO 2026-05-12 Q1-A: 国家自动识别 */}
+                {account.countryIdentified ? (
+                  <Badge tone={account.country === "UK" ? "danger" : "transfer"}>
+                    {account.country}
+                  </Badge>
+                ) : (
+                  <Badge tone="neutral" title="待首次同步后系统自动识别">
+                    待识别
+                  </Badge>
+                )}
               </TableCell>
               <TableCell>
                 <div className="flex flex-col gap-0.5">
@@ -1151,11 +1156,28 @@ function AccountsTable({
                 {formatMoney(account.rmbCostMinor, "CNY")}
               </TableCell>
               <TableCell className={cn("text-right tabular-nums font-semibold", meta.accentText)}>
+                {/* CEO 2026-05-12 Q3-A: 余额后加币种缩写 */}
                 {formatMoney(account.localBalanceMinor, account.currency)}
+                <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                  {account.currency}
+                </span>
               </TableCell>
               <TableCell className="text-muted-foreground text-xs">{account.remark ?? "-"}</TableCell>
               <TableCell className="text-right">
                 <div className="flex flex-wrap justify-end gap-1">
+                  {/* CEO 2026-05-12 Q2: 单账号刷新余额 */}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onRefreshBalance(account)}
+                    disabled={refreshPending}
+                    title="刷新此账号微软余额(用于判断是否出入库)"
+                  >
+                    <RefreshCcw
+                      className={cn("h-3.5 w-3.5", isRefreshingThis && "animate-spin")}
+                    />
+                    {isRefreshingThis ? "刷新中" : "刷新余额"}
+                  </Button>
                   <Button
                     size="sm"
                     variant={account.isAvailableForClaim ? "outline" : "default"}
@@ -1223,7 +1245,7 @@ function AccountsTable({
         })}
         {accounts.length === 0 ? (
           <TableRow>
-            <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
+            <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">
               当前 Tab 暂无账号，点击右上角「+ 新建账号」开始
             </TableCell>
           </TableRow>
@@ -3053,6 +3075,32 @@ function AccountsManagementTab() {
       setAvailabilityError(err instanceof Error ? err.message : "强制回收失败")
   });
 
+  // CEO 2026-05-12 Q2: 单账号刷新余额(用于判断出入库)
+  const refreshOneMut = useMutation({
+    mutationFn: (accountId: string) => refreshXboxAccountBalance(accountId),
+    onSuccess: async () => {
+      setAvailabilityError(null);
+      await queryClient.invalidateQueries({ queryKey: ["xbox-accounts"] });
+    },
+    onError: (err) =>
+      setAvailabilityError(err instanceof Error ? err.message : "刷新余额失败")
+  });
+
+  // CEO 2026-05-12 Q2: 全部刷新余额(批量)
+  const refreshAllMut = useMutation({
+    mutationFn: () => refreshAllXboxBalances(),
+    onSuccess: async (result) => {
+      setAvailabilityError(null);
+      setRefreshAllSummary(
+        `刷新完成: ${result.succeeded}/${result.total} 个账号余额已更新${result.failed ? `, ${result.failed} 个失败(账号未设密码/已停用)` : ""}`
+      );
+      await queryClient.invalidateQueries({ queryKey: ["xbox-accounts"] });
+    },
+    onError: (err) =>
+      setAvailabilityError(err instanceof Error ? err.message : "全部刷新失败")
+  });
+  const [refreshAllSummary, setRefreshAllSummary] = useState<string | null>(null);
+
   const meta = COUNTRY_META[country];
 
   return (
@@ -3073,11 +3121,38 @@ function AccountsManagementTab() {
             </button>
           ))}
         </div>
-        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
-          <RefreshCcw className={cn("h-4 w-4", isFetching && "animate-spin")} />
-          刷新账号
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setRefreshAllSummary(null);
+              if (
+                confirm(
+                  "全部刷新余额? 将串行向 Microsoft 拉取所有 active 账号的最新余额(每个账号约 2-3 秒)。"
+                )
+              ) {
+                refreshAllMut.mutate();
+              }
+            }}
+            disabled={refreshAllMut.isPending}
+            title="批量刷新 → 判断哪些账号正在被使用(余额变了 = 客服在消费)"
+          >
+            <RefreshCcw className={cn("h-4 w-4", refreshAllMut.isPending && "animate-spin")} />
+            {refreshAllMut.isPending ? "全部刷新中…" : "全部刷新余额"}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+            <RefreshCcw className={cn("h-4 w-4", isFetching && "animate-spin")} />
+            刷新列表
+          </Button>
+        </div>
       </div>
+
+      {refreshAllSummary ? (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+          {refreshAllSummary}
+        </div>
+      ) : null}
 
       <SummaryCards country={country} />
 
@@ -3133,6 +3208,12 @@ function AccountsManagementTab() {
             }}
             togglePending={toggleAvailabilityMut.isPending}
             recallPending={recallMut.isPending}
+            onRefreshBalance={(account) => {
+              setRefreshAllSummary(null);
+              refreshOneMut.mutate(account.id);
+            }}
+            refreshingAccountId={refreshOneMut.variables ?? null}
+            refreshPending={refreshOneMut.isPending}
           />
         </CardContent>
       </Card>

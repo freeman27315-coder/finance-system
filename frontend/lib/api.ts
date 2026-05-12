@@ -352,6 +352,9 @@ type XboxAccountResponse = {
   // CEO 2026-05-11 新字段
   is_available_for_claim?: boolean;
   isAvailableForClaim?: boolean;
+  // CEO 2026-05-12 Q1-A
+  country_identified?: boolean;
+  countryIdentified?: boolean;
 };
 
 type XboxAccountAuditLogResponse = {
@@ -409,6 +412,9 @@ function normalizeXboxAccount(account: XboxAccountResponse): XboxAccount {
     lastSyncedAt: account.last_synced_at ?? account.lastSyncedAt ?? null,
     isAvailableForClaim: Boolean(
       account.is_available_for_claim ?? account.isAvailableForClaim ?? false
+    ),
+    countryIdentified: Boolean(
+      account.country_identified ?? account.countryIdentified ?? false
     )
   };
 }
@@ -449,7 +455,7 @@ export async function getXboxAccounts(country?: XboxCountry): Promise<XboxAccoun
 
 export async function createXboxAccount(payload: {
   name: string;
-  country: XboxCountry;
+  country?: XboxCountry; // CEO 2026-05-12 Q1-A: 不传 = 同步后自动识别
   remark?: string;
   accountNo?: string;
   loginEmail?: string;
@@ -459,9 +465,9 @@ export async function createXboxAccount(payload: {
   statusMessage?: string;
 }): Promise<XboxAccount> {
   const body: Record<string, unknown> = {
-    name: payload.name,
-    country: payload.country
+    name: payload.name
   };
+  if (payload.country) body.country = payload.country;
   if (payload.remark) body.remark = payload.remark;
   if (payload.accountNo) body.accountNo = payload.accountNo;
   if (payload.loginEmail) body.loginEmail = payload.loginEmail;
@@ -1671,6 +1677,42 @@ export async function patchXboxAccountAvailability(
     { isAvailableForClaim }
   )) as XboxAccountResponse;
   return normalizeXboxAccount(data);
+}
+
+// ---------------------------------------------------------------------------
+// 刷新余额 (CEO 2026-05-12 Q2: 单账号 + 全部)
+// ---------------------------------------------------------------------------
+
+export async function refreshXboxAccountBalance(
+  accountId: string
+): Promise<XboxAccount> {
+  const data = (await postJson(
+    `/api/xbox/accounts/${accountId}/refresh-balance`,
+    {}
+  )) as XboxAccountResponse;
+  return normalizeXboxAccount(data);
+}
+
+export type XboxRefreshAllResult = {
+  total: number;
+  succeeded: number;
+  failed: number;
+  accounts: XboxAccount[];
+};
+
+export async function refreshAllXboxBalances(): Promise<XboxRefreshAllResult> {
+  const raw = (await postJson("/api/xbox/refresh-all-balances", {})) as {
+    total: number;
+    succeeded: number;
+    failed: number;
+    accounts: XboxAccountResponse[];
+  };
+  return {
+    total: raw.total,
+    succeeded: raw.succeeded,
+    failed: raw.failed,
+    accounts: raw.accounts.map(normalizeXboxAccount)
+  };
 }
 
 // ---------------------------------------------------------------------------
