@@ -48,6 +48,12 @@ class XboxAccount(Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     country: Mapped[XboxCountry] = mapped_column(String(8), nullable=False)
     currency: Mapped[XboxCurrency] = mapped_column(String(8), nullable=False)
+    # CEO 2026-05-12: 国家是否已通过同步自动识别。
+    # False = 待识别(创建时占位 "US" + USD,等首次同步根据爬到的 currency 修正)
+    # True  = 已根据 balance.currency 识别过(USD→US, GBP→UK)
+    country_identified: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     rmb_cost: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False, default=Decimal("0"))
     local_balance: Mapped[Decimal] = mapped_column(
         Numeric(18, 6),

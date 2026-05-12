@@ -74,6 +74,8 @@ export type XboxAccount = {
   lastSyncedAt: string | null;
   // CEO 2026-05-11: 是否标为"可被客服领取"
   isAvailableForClaim: boolean;
+  // CEO 2026-05-12 Q1-A: 国家是否已通过同步自动识别(false=待识别占位)
+  countryIdentified: boolean;
 };
 
 // 账号变更审计日志
