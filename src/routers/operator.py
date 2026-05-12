@@ -529,12 +529,16 @@ def operator_sync_orders_endpoint(
 
 
 class OperatorOrderOut(BaseModel):
-    """客服 exe 看的订单(简化版,只暴露客服需要的字段)。"""
+    """客服 exe 看的订单(简化版,只暴露客服需要的字段)。
+
+    CEO 2026-05-12: 历史订单表展示 9 列 — 字段都映射到这里。
+    """
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
 
     id: int
     account_id: int
+    account_no: Optional[str]  # 账号编号(给历史订单表用,免去前端再查)
     order_no: str
     amount_local: str
     currency_local: str
@@ -542,16 +546,28 @@ class OperatorOrderOut(BaseModel):
     sale_date: Optional[str]
     status: str
     product_name: Optional[str]
+    operator_name: Optional[str]  # 经办人(=补销售时填的客服名)
     sale_price: Optional[str]
     sale_currency: Optional[str]
     wallet_method_id: Optional[int]
+    wallet_method_label: Optional[str]  # 收款方式 label(展示用)
     wallet_item_id: Optional[int]
+    wallet_item_label: Optional[str]  # 备注模板 label(展示用)
+    remark: Optional[str]  # CEO 2026-05-12: 客服自由填写的备注
 
 
-def _serialize_op_order(order: XboxOrder) -> OperatorOrderOut:
+def _serialize_op_order(
+    order: XboxOrder,
+    *,
+    account_no_map: Optional[dict[int, Optional[str]]] = None,
+    method_label_map: Optional[dict[int, str]] = None,
+    item_label_map: Optional[dict[int, str]] = None,
+) -> OperatorOrderOut:
+    """序列化客服 exe 端订单。可传 label 映射避免每行单独 query。"""
     return OperatorOrderOut(
         id=order.id,
         account_id=order.account_id,
+        account_no=(account_no_map or {}).get(order.account_id),
         order_no=order.order_no,
         amount_local=str(order.amount_local),
         currency_local=order.currency_local,
@@ -559,10 +575,22 @@ def _serialize_op_order(order: XboxOrder) -> OperatorOrderOut:
         sale_date=order.sale_date.isoformat() if order.sale_date else None,
         status=order.status,
         product_name=order.product_name,
+        operator_name=order.operator_name,
         sale_price=str(order.sale_price) if order.sale_price is not None else None,
         sale_currency=order.sale_currency,
         wallet_method_id=order.wallet_method_id,
+        wallet_method_label=(
+            (method_label_map or {}).get(order.wallet_method_id)
+            if order.wallet_method_id is not None
+            else None
+        ),
         wallet_item_id=order.wallet_item_id,
+        wallet_item_label=(
+            (item_label_map or {}).get(order.wallet_item_id)
+            if order.wallet_item_id is not None
+            else None
+        ),
+        remark=order.remark,
     )
 
 
@@ -574,20 +602,51 @@ def _serialize_op_order(order: XboxOrder) -> OperatorOrderOut:
 def operator_list_orders_endpoint(
     account_id: int,
     operator_id: int = Query(..., alias="operatorId"),
-    only_pending: bool = Query(True, alias="onlyPending"),
+    only_pending: bool = Query(False, alias="onlyPending"),
     db: Session = Depends(get_db),
 ) -> list[OperatorOrderOut]:
-    """客服看该账号的订单列表(默认只看待补销售的)。"""
-    _require_holding(db, account_id, operator_id)
+    """客服看该账号的订单列表。
+
+    CEO 2026-05-12: 默认返回**所有历史订单**(pending + converted),展示在工作台
+    主表里;只看待补可传 onlyPending=true。
+    """
+    account, _ = _require_holding(db, account_id, operator_id)
     stmt = select(XboxOrder).where(XboxOrder.account_id == account_id)
     if only_pending:
         stmt = stmt.where(XboxOrder.status == XboxOrderStatus.PENDING_COMPLETE.value)
     stmt = stmt.order_by(XboxOrder.order_at.desc())
-    return [_serialize_op_order(o) for o in db.scalars(stmt)]
+    orders = list(db.scalars(stmt))
+
+    # 一次性查 method/item labels(避免每行 query)
+    from src.models.xbox import XboxWalletItem, XboxWalletMethod
+
+    method_ids = {o.wallet_method_id for o in orders if o.wallet_method_id is not None}
+    item_ids = {o.wallet_item_id for o in orders if o.wallet_item_id is not None}
+    method_label_map: dict[int, str] = {}
+    item_label_map: dict[int, str] = {}
+    if method_ids:
+        for m in db.scalars(select(XboxWalletMethod).where(XboxWalletMethod.id.in_(method_ids))):
+            method_label_map[m.id] = m.label
+    if item_ids:
+        for it in db.scalars(select(XboxWalletItem).where(XboxWalletItem.id.in_(item_ids))):
+            item_label_map[it.id] = it.label
+
+    account_no_map = {account.id: account.account_no}
+    return [
+        _serialize_op_order(
+            o,
+            account_no_map=account_no_map,
+            method_label_map=method_label_map,
+            item_label_map=item_label_map,
+        )
+        for o in orders
+    ]
 
 
 class OperatorOrderCompletion(BaseModel):
-    """客服补销售信息。销售日期 + 经办人系统自动填,客服只填商品/售价/币种/收款方式/备注模板。"""
+    """客服补销售信息。销售日期 + 经办人系统自动填,
+    客服填: 商品 / 售价 / 币种 / 收款方式 / 备注模板 / 备注(可自由填写)。
+    """
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
 
@@ -597,6 +656,7 @@ class OperatorOrderCompletion(BaseModel):
     sale_currency: str
     wallet_method_id: int
     wallet_item_id: int
+    remark: Optional[str] = None  # CEO 2026-05-12: 客服自由填写
 
 
 @router.patch(
@@ -617,7 +677,7 @@ def operator_complete_order_endpoint(
     order = db.get(XboxOrder, order_id)
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="订单不存在")
-    _account, operator = _require_holding(db, order.account_id, request.operator_id)
+    account, operator = _require_holding(db, order.account_id, request.operator_id)
 
     try:
         update_order_completion(
@@ -632,9 +692,31 @@ def operator_complete_order_endpoint(
             wallet_method_id=request.wallet_method_id,
             wallet_item_id=request.wallet_item_id,
         )
+        # CEO 2026-05-12: 备注独立字段, 不走 update_order_completion (它不管 remark)
+        if request.remark is not None:
+            order.remark = request.remark.strip() or None
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     db.commit()
     db.refresh(order)
-    return _serialize_op_order(order)
+
+    # 序列化时填 labels 给前端
+    from src.models.xbox import XboxWalletItem, XboxWalletMethod
+
+    method_label_map = {}
+    item_label_map = {}
+    if order.wallet_method_id is not None:
+        m = db.get(XboxWalletMethod, order.wallet_method_id)
+        if m:
+            method_label_map[m.id] = m.label
+    if order.wallet_item_id is not None:
+        it = db.get(XboxWalletItem, order.wallet_item_id)
+        if it:
+            item_label_map[it.id] = it.label
+    return _serialize_op_order(
+        order,
+        account_no_map={account.id: account.account_no},
+        method_label_map=method_label_map,
+        item_label_map=item_label_map,
+    )
