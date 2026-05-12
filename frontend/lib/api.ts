@@ -16,8 +16,12 @@ import {
 import { decimalToMinor } from "@/lib/money";
 import type {
   AssetTransaction,
+  AvailableAccount,
   Currency,
   DashboardData,
+  Operator,
+  OperatorClaim,
+  OperatorTotpSetup,
   StoreAlipayType,
   TaiwanSummary,
   TaiwanTransaction,
@@ -345,6 +349,9 @@ type XboxAccountResponse = {
   statusMessage?: string | null;
   last_synced_at?: string | null;
   lastSyncedAt?: string | null;
+  // CEO 2026-05-11 新字段
+  is_available_for_claim?: boolean;
+  isAvailableForClaim?: boolean;
 };
 
 type XboxAccountAuditLogResponse = {
@@ -399,7 +406,10 @@ function normalizeXboxAccount(account: XboxAccountResponse): XboxAccount {
         : Number(exchangeRateRaw),
     status: ((account.status as XboxAccount["status"]) ?? "active"),
     statusMessage: account.status_message ?? account.statusMessage ?? null,
-    lastSyncedAt: account.last_synced_at ?? account.lastSyncedAt ?? null
+    lastSyncedAt: account.last_synced_at ?? account.lastSyncedAt ?? null,
+    isAvailableForClaim: Boolean(
+      account.is_available_for_claim ?? account.isAvailableForClaim ?? false
+    )
   };
 }
 
@@ -1645,4 +1655,236 @@ export async function getTaiwanSummary(): Promise<TaiwanSummary> {
   } catch {
     return mockTaiwanSummary;
   }
+}
+
+// ---------------------------------------------------------------------------
+// XBOX Account availability (CEO 2026-05-11) - 标"可被客服领取"
+// ---------------------------------------------------------------------------
+
+export async function patchXboxAccountAvailability(
+  accountId: string,
+  isAvailableForClaim: boolean
+): Promise<XboxAccount> {
+  const data = (await sendJson(
+    `/api/xbox/accounts/${accountId}/availability`,
+    "PATCH",
+    { isAvailableForClaim }
+  )) as XboxAccountResponse;
+  return normalizeXboxAccount(data);
+}
+
+// ---------------------------------------------------------------------------
+// Operator (客服认证 + 账号领取) - CEO 2026-05-11
+// ---------------------------------------------------------------------------
+
+type OperatorResponse = {
+  id: number | string;
+  loginName?: string;
+  login_name?: string;
+  displayName?: string;
+  display_name?: string;
+  totpConfirmed?: boolean;
+  totp_confirmed?: boolean;
+  isActive?: boolean;
+  is_active?: boolean;
+  remark?: string | null;
+  createdAt?: string;
+  created_at?: string;
+  lastLoginAt?: string | null;
+  last_login_at?: string | null;
+};
+
+type OperatorTotpSetupResponse = {
+  operatorId: number | string;
+  operator_id?: number | string;
+  totpSecret?: string;
+  totp_secret?: string;
+  totpUri?: string;
+  totp_uri?: string;
+  totpQrPngBase64?: string;
+  totp_qr_png_base64?: string;
+};
+
+type OperatorClaimResponse = {
+  id: number | string;
+  accountId?: number | string;
+  account_id?: number | string;
+  operatorId?: number | string;
+  operator_id?: number | string;
+  claimedAt?: string;
+  claimed_at?: string;
+  returnedAt?: string | null;
+  returned_at?: string | null;
+  isActive?: boolean;
+  is_active?: boolean;
+  returnReason?: string | null;
+  return_reason?: string | null;
+};
+
+type AvailableAccountResponse = {
+  id: number | string;
+  accountNo?: string | null;
+  account_no?: string | null;
+  name: string;
+  country: string;
+  loginEmail?: string | null;
+  login_email?: string | null;
+  exchangeRate?: string | null;
+  exchange_rate?: string | null;
+};
+
+function _normalizeOperator(o: OperatorResponse): Operator {
+  return {
+    id: Number(o.id),
+    loginName: o.loginName ?? o.login_name ?? "",
+    displayName: o.displayName ?? o.display_name ?? "",
+    totpConfirmed: Boolean(o.totpConfirmed ?? o.totp_confirmed ?? false),
+    isActive: Boolean(o.isActive ?? o.is_active ?? false),
+    remark: o.remark ?? null,
+    createdAt: o.createdAt ?? o.created_at ?? "",
+    lastLoginAt: o.lastLoginAt ?? o.last_login_at ?? null
+  };
+}
+
+function _normalizeOperatorTotpSetup(o: OperatorTotpSetupResponse): OperatorTotpSetup {
+  return {
+    operatorId: Number(o.operatorId ?? o.operator_id ?? 0),
+    totpSecret: o.totpSecret ?? o.totp_secret ?? "",
+    totpUri: o.totpUri ?? o.totp_uri ?? "",
+    totpQrPngBase64: o.totpQrPngBase64 ?? o.totp_qr_png_base64 ?? ""
+  };
+}
+
+function _normalizeClaim(c: OperatorClaimResponse): OperatorClaim {
+  return {
+    id: Number(c.id),
+    accountId: Number(c.accountId ?? c.account_id ?? 0),
+    operatorId: Number(c.operatorId ?? c.operator_id ?? 0),
+    claimedAt: c.claimedAt ?? c.claimed_at ?? "",
+    returnedAt: c.returnedAt ?? c.returned_at ?? null,
+    isActive: Boolean(c.isActive ?? c.is_active ?? false),
+    returnReason: c.returnReason ?? c.return_reason ?? null
+  };
+}
+
+function _normalizeAvailableAccount(a: AvailableAccountResponse): AvailableAccount {
+  return {
+    id: Number(a.id),
+    accountNo: a.accountNo ?? a.account_no ?? null,
+    name: a.name,
+    country: a.country,
+    loginEmail: a.loginEmail ?? a.login_email ?? null,
+    exchangeRate: a.exchangeRate ?? a.exchange_rate ?? null
+  };
+}
+
+export async function getOperators(): Promise<Operator[]> {
+  try {
+    const data = await fetchJson<OperatorResponse[]>("/api/operator/operators");
+    return data.map(_normalizeOperator);
+  } catch {
+    return [];
+  }
+}
+
+export async function createOperator(payload: {
+  loginName: string;
+  displayName: string;
+  password: string;
+  remark?: string;
+}): Promise<OperatorTotpSetup> {
+  const data = (await postJson("/api/operator/operators", payload)) as OperatorTotpSetupResponse;
+  return _normalizeOperatorTotpSetup(data);
+}
+
+export async function getOperatorTotpQr(operatorId: number): Promise<OperatorTotpSetup> {
+  const data = await fetchJson<OperatorTotpSetupResponse>(
+    `/api/operator/operators/${operatorId}/totp-qr`
+  );
+  return _normalizeOperatorTotpSetup(data);
+}
+
+export async function confirmOperatorTotp(
+  operatorId: number,
+  code: string
+): Promise<Operator> {
+  const data = (await postJson(
+    `/api/operator/operators/${operatorId}/confirm-totp`,
+    { code }
+  )) as OperatorResponse;
+  return _normalizeOperator(data);
+}
+
+export async function deactivateOperator(operatorId: number): Promise<Operator> {
+  const data = (await sendJson(
+    `/api/operator/operators/${operatorId}/deactivate`,
+    "PATCH"
+  )) as OperatorResponse;
+  return _normalizeOperator(data);
+}
+
+export async function reactivateOperator(operatorId: number): Promise<Operator> {
+  const data = (await sendJson(
+    `/api/operator/operators/${operatorId}/reactivate`,
+    "PATCH"
+  )) as OperatorResponse;
+  return _normalizeOperator(data);
+}
+
+export async function getAvailableAccounts(): Promise<AvailableAccount[]> {
+  try {
+    const data = await fetchJson<AvailableAccountResponse[]>(
+      "/api/operator/available-accounts"
+    );
+    return data.map(_normalizeAvailableAccount);
+  } catch {
+    return [];
+  }
+}
+
+export async function getAllClaims(onlyActive = true): Promise<OperatorClaim[]> {
+  try {
+    const data = await fetchJson<OperatorClaimResponse[]>(
+      `/api/operator/claims?only_active=${onlyActive}`
+    );
+    return data.map(_normalizeClaim);
+  } catch {
+    return [];
+  }
+}
+
+export async function getOperatorClaims(operatorId: number): Promise<OperatorClaim[]> {
+  try {
+    const data = await fetchJson<OperatorClaimResponse[]>(
+      `/api/operator/operators/${operatorId}/claims`
+    );
+    return data.map(_normalizeClaim);
+  } catch {
+    return [];
+  }
+}
+
+export async function claimXboxAccount(
+  accountId: number,
+  operatorId: number
+): Promise<OperatorClaim> {
+  const data = (await postJson("/api/operator/claims", {
+    accountId,
+    operatorId
+  })) as OperatorClaimResponse;
+  return _normalizeClaim(data);
+}
+
+export async function returnClaim(
+  claimId: number,
+  payload: { operatorId?: number; forceRecall?: boolean }
+): Promise<OperatorClaim> {
+  const body: Record<string, unknown> = {};
+  if (payload.operatorId !== undefined) body.operatorId = payload.operatorId;
+  if (payload.forceRecall !== undefined) body.forceRecall = payload.forceRecall;
+  const data = (await postJson(
+    `/api/operator/claims/${claimId}/return`,
+    body
+  )) as OperatorClaimResponse;
+  return _normalizeClaim(data);
 }

@@ -301,7 +301,8 @@ const _xboxStubExtra = {
   exchangeRate: null,
   status: "active" as const,
   statusMessage: null,
-  lastSyncedAt: null
+  lastSyncedAt: null,
+  isAvailableForClaim: false
 };
 
 export const mockXboxAccounts: XboxAccount[] = [

@@ -72,6 +72,8 @@ export type XboxAccount = {
   status: XboxAccountStatus;
   statusMessage: string | null;
   lastSyncedAt: string | null;
+  // CEO 2026-05-11: 是否标为"可被客服领取"
+  isAvailableForClaim: boolean;
 };
 
 // 账号变更审计日志
@@ -338,6 +340,48 @@ export type TaobaoFlowReport = {
   toWalletId: string;
   toWalletBalanceMinor: number;
   remark: string;
+};
+
+// ---------------------------------------------------------------------------
+// Operator (客服认证 + 账号领取) - PR #operator-auth-and-account-claim
+// ---------------------------------------------------------------------------
+
+export type Operator = {
+  id: number;
+  loginName: string;
+  displayName: string;
+  totpConfirmed: boolean;
+  isActive: boolean;
+  remark: string | null;
+  createdAt: string;
+  lastLoginAt: string | null;
+};
+
+// 创建客服后返回的 TOTP 绑定信息(二维码 + secret + URI)
+export type OperatorTotpSetup = {
+  operatorId: number;
+  totpSecret: string;
+  totpUri: string;
+  totpQrPngBase64: string;
+};
+
+export type OperatorClaim = {
+  id: number;
+  accountId: number;
+  operatorId: number;
+  claimedAt: string;
+  returnedAt: string | null;
+  isActive: boolean;
+  returnReason: string | null;
+};
+
+export type AvailableAccount = {
+  id: number;
+  accountNo: string | null;
+  name: string;
+  country: string;
+  loginEmail: string | null;
+  exchangeRate: string | null;
 };
 
 export type ModuleSection = {

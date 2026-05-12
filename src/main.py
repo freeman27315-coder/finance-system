@@ -33,6 +33,7 @@ _load_dotenv_basic()
 
 from src import database  # noqa: E402  必须在 _load_dotenv_basic 之后
 from src.routers.assets import router as assets_router
+from src.routers.operator import router as operator_router
 from src.routers.vendors import router as vendors_router
 from src.routers.xbox import router as xbox_router
 from src.routers.taobao import router as taobao_router
@@ -75,6 +76,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Finance System API", lifespan=lifespan)
 app.include_router(assets_router)
+app.include_router(operator_router)
 app.include_router(vendors_router)
 app.include_router(xbox_router)
 app.include_router(taobao_router)

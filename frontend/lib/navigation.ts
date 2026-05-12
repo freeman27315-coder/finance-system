@@ -42,6 +42,13 @@ export const sections: ModuleSection[] = [
     href: "/taiwan",
     description: "8591余额、银行卡、超商代收金流余额。",
     walletTypes: ["TAIWAN"]
+  },
+  {
+    id: "operators",
+    title: "客服管理",
+    href: "/operators",
+    description: "客服账号 / TOTP 二步绑定 / 账号领取状态。",
+    walletTypes: []
   }
 ];
 

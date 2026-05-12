@@ -41,11 +41,13 @@ def init_db() -> None:
     from src.models import vendor  # noqa: F401
     from src.models import xbox  # noqa: F401
     from src.models import taobao  # noqa: F401
+    from src.models import operator  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     _ensure_wallet_is_group_column()
     _ensure_wallet_transaction_business_date_column()
     _ensure_xbox_account_extended_columns()
+    _ensure_xbox_account_is_available_for_claim_column()
 
 
 def _ensure_wallet_is_group_column() -> None:
@@ -104,6 +106,25 @@ def _ensure_xbox_account_extended_columns() -> None:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_xbox_accounts_account_no "
                 "ON xbox_accounts(account_no) WHERE account_no IS NOT NULL"
             )
+        )
+
+
+def _ensure_xbox_account_is_available_for_claim_column() -> None:
+    """加 XBOX 账号"可出库"字段（CEO 2026-05-11 客服领取流转）。"""
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+
+    inspector = inspect(engine)
+    if "xbox_accounts" not in inspector.get_table_names():
+        return
+
+    column_names = {column["name"] for column in inspector.get_columns("xbox_accounts")}
+    if "is_available_for_claim" in column_names:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(
+            text("ALTER TABLE xbox_accounts ADD COLUMN is_available_for_claim BOOLEAN NOT NULL DEFAULT 0")
         )
 
 

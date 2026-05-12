@@ -146,8 +146,15 @@ class XboxAccountOut(BaseModel):
     status: str
     status_message: Optional[str] = None
     last_synced_at: Optional[str] = None
+    is_available_for_claim: bool = False  # CEO 2026-05-11
     remark: Optional[str]
     created_at: str
+
+
+class XboxAccountAvailabilityUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    is_available_for_claim: bool
 
 
 class XboxAccountAuditLogOut(BaseModel):
@@ -213,6 +220,7 @@ def serialize_account(account: XboxAccount) -> XboxAccountOut:
         status=account.status,
         status_message=account.status_message,
         last_synced_at=account.last_synced_at.isoformat() if account.last_synced_at else None,
+        is_available_for_claim=bool(account.is_available_for_claim),
         remark=account.remark,
         created_at=account.created_at.isoformat() if account.created_at else "",
     )
@@ -383,6 +391,32 @@ def patch_account_status(
         change_status(db, account, request.status, status_message=request.status_message)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(account)
+    return serialize_account(account)
+
+
+@router.patch(
+    "/accounts/{account_id}/availability",
+    response_model=XboxAccountOut,
+    response_model_by_alias=True,
+)
+def patch_account_availability(
+    account_id: int,
+    request: XboxAccountAvailabilityUpdate,
+    db: Session = Depends(get_db),
+) -> XboxAccountOut:
+    """CEO 后台: 标记账号是否"可出库"（客服可领取的开关）。"""
+    account = get_account_or_404(db, account_id)
+    account.is_available_for_claim = bool(request.is_available_for_claim)
+    db.add(
+        XboxAccountAuditLog(
+            account_id=account.id,
+            action="updated",
+            detail=f"is_available_for_claim → {request.is_available_for_claim}",
+            operator="admin",
+        )
+    )
     db.commit()
     db.refresh(account)
     return serialize_account(account)
