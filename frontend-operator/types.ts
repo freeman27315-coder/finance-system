@@ -65,20 +65,27 @@ export type SyncOrdersResult = {
 };
 
 // 客服 exe 看的订单
+// CEO 2026-05-12: 历史订单表 9 列 (账号编号 / 订单编号 / 类型 / 日期 / 商品名 /
+//   经办人 / 收款方式 / 收款金额 / 备注) — 字段全部映射在这。
 export type OperatorOrder = {
   id: number;
   accountId: number;
-  orderNo: string;
-  amountLocal: string;
-  currencyLocal: string;
-  orderAt: string;
-  saleDate: string | null;
-  status: string;
-  productName: string | null;
-  salePrice: string | null;
+  accountNo: string | null;        // 账号编号
+  orderNo: string;                  // 订单编号
+  amountLocal: string;              // 本币金额(微软订单原始金额)
+  currencyLocal: string;            // 本币币种 USD/GBP
+  orderAt: string;                  // 订单时间(=日期, 精确到秒)
+  saleDate: string | null;          // 销售日期(自动=orderAt)
+  status: string;                   // 类型: pending_complete / converted
+  productName: string | null;       // 商品名
+  operatorName: string | null;      // 经办人
+  salePrice: string | null;         // 收款金额
   saleCurrency: string | null;
   walletMethodId: number | null;
+  walletMethodLabel: string | null; // 收款方式 label
   walletItemId: number | null;
+  walletItemLabel: string | null;   // 备注模板 label
+  remark: string | null;            // CEO 2026-05-12: 可自由填写
 };
 
 // 钱包设置 (复用 /xbox/wallet-settings)

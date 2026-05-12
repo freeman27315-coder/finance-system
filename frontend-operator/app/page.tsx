@@ -1,6 +1,6 @@
 "use client";
 
-import { OperatorDashboard } from "@/components/dashboard";
+import { OperatorWorkbench } from "@/components/workbench";
 import { useRequireAuth } from "@/lib/auth";
 
 export default function Home() {
@@ -14,5 +14,5 @@ export default function Home() {
     );
   }
 
-  return <OperatorDashboard operator={operator} />;
+  return <OperatorWorkbench operator={operator} />;
 }

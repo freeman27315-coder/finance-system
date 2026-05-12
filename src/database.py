@@ -49,6 +49,7 @@ def init_db() -> None:
     _ensure_xbox_account_extended_columns()
     _ensure_xbox_account_is_available_for_claim_column()
     _ensure_xbox_account_country_identified_column()
+    _ensure_xbox_order_remark_column()
     _migrate_xbox_sale_date_to_datetime()
 
 
@@ -157,6 +158,20 @@ def _ensure_xbox_account_country_identified_column() -> None:
                 "BOOLEAN NOT NULL DEFAULT 0"
             )
         )
+
+
+def _ensure_xbox_order_remark_column() -> None:
+    """加 XBOX 订单"备注"字段(CEO 2026-05-12: 客服补销售可自由填写)。"""
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    inspector = inspect(engine)
+    if "xbox_orders" not in inspector.get_table_names():
+        return
+    column_names = {column["name"] for column in inspector.get_columns("xbox_orders")}
+    if "remark" in column_names:
+        return
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE xbox_orders ADD COLUMN remark TEXT"))
 
 
 def _migrate_xbox_sale_date_to_datetime() -> None:

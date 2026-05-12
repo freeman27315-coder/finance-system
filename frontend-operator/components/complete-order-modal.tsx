@@ -35,6 +35,7 @@ export function CompleteOrderModal({
   const [walletItemId, setWalletItemId] = useState<number | "">(
     order.walletItemId ?? ""
   );
+  const [remark, setRemark] = useState(order.remark ?? "");
   const [error, setError] = useState<string | null>(null);
 
   const methodsQuery = useQuery({
@@ -67,11 +68,12 @@ export function CompleteOrderModal({
         salePrice: salePrice.trim(),
         saleCurrency,
         walletMethodId,
-        walletItemId
+        walletItemId,
+        remark: remark.trim() || undefined
       });
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["operator-orders", order.accountId] });
+      await queryClient.invalidateQueries({ queryKey: ["operator-orders"] });
       onClose();
     },
     onError: (err) => setError(err instanceof Error ? err.message : "提交失败")
@@ -200,6 +202,18 @@ export function CompleteOrderModal({
                   </option>
                 ))}
             </select>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs font-medium">
+              备注（可自由填写）
+            </label>
+            <textarea
+              className="min-h-[60px] w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={remark}
+              onChange={(e) => setRemark(e.target.value)}
+              placeholder="如: 客户加急 / 续费 / 特殊情况备忘"
+            />
           </div>
 
           {error ? (

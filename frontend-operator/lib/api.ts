@@ -128,7 +128,7 @@ export function syncOrders(
 export function getAccountOrders(
   accountId: number,
   operatorId: number,
-  onlyPending = true
+  onlyPending = false // CEO 2026-05-12: 默认返回全部历史订单
 ): Promise<OperatorOrder[]> {
   return request<OperatorOrder[]>(
     `/api/operator/accounts/${accountId}/orders?operatorId=${operatorId}&onlyPending=${onlyPending}`
@@ -144,6 +144,7 @@ export function completeOrder(
     saleCurrency: SaleCurrency;
     walletMethodId: number;
     walletItemId: number;
+    remark?: string;
   }
 ): Promise<OperatorOrder> {
   return request<OperatorOrder>(

@@ -202,7 +202,8 @@ def test_sync_orders_invalid_count_400(client):
 # ---------------- 订单列表 ----------------
 
 
-def test_list_pending_orders_returns_synced_orders(client):
+def test_list_orders_returns_synced_orders_with_labels(client):
+    """CEO 2026-05-12: 默认返回所有订单(pending + converted),并带 labels。"""
     op = _create_operator(client, "lister")
     acc = _create_xbox_account(client, "LIST-1")
     _mark_available(client, acc["id"])
@@ -219,11 +220,37 @@ def test_list_pending_orders_returns_synced_orders(client):
     assert r.status_code == 200
     orders = r.json()
     assert len(orders) >= 1
-    # 默认只看待补的
+    # 默认返回全部 (CEO 2026-05-12 改了默认值 onlyPending=False)
+    # 这时还没补销售,所以全部 pending
     assert all(o["status"] == "pending_complete" for o in orders)
     # sale_date 已经自动 = order_at (CEO 2026-05-12 PR-A)
+    # 同时新字段都在 response 里
     for o in orders:
         assert o["saleDate"] == o["orderAt"]
+        assert "accountNo" in o
+        assert o["accountNo"] == "LIST-1"
+        assert "remark" in o  # 新字段
+        assert "operatorName" in o
+        assert "walletMethodLabel" in o
+        assert "walletItemLabel" in o
+
+
+def test_list_orders_only_pending_query_works(client):
+    """传 onlyPending=true 时只返回 pending_complete 订单。"""
+    op = _create_operator(client, "only_pending_test")
+    acc = _create_xbox_account(client, "OP-1")
+    _mark_available(client, acc["id"])
+    _claim(client, acc["id"], op["operatorId"])
+    client.post(
+        f"/operator/accounts/{acc['id']}/sync-orders",
+        json={"operatorId": op["operatorId"], "count": 10},
+    )
+    r = client.get(
+        f"/operator/accounts/{acc['id']}/orders"
+        f"?operatorId={op['operatorId']}&onlyPending=true"
+    )
+    assert r.status_code == 200
+    assert all(o["status"] == "pending_complete" for o in r.json())
 
 
 def test_list_orders_forbidden_if_not_holder(client):
@@ -240,6 +267,50 @@ def test_list_orders_forbidden_if_not_holder(client):
 
 
 # ---------------- 补销售信息 ----------------
+
+
+def test_complete_order_with_remark_persists(client):
+    """CEO 2026-05-12: 客服补销售时填 remark, 后续读出来还在。"""
+    op = _create_operator(client, "remarker", display_name="备注客服")
+    acc = _create_xbox_account(client, "REMARK-1")
+    _mark_available(client, acc["id"])
+    _claim(client, acc["id"], op["operatorId"])
+
+    client.post(
+        f"/operator/accounts/{acc['id']}/sync-orders",
+        json={"operatorId": op["operatorId"], "count": 10},
+    )
+    orders = client.get(
+        f"/operator/accounts/{acc['id']}/orders?operatorId={op['operatorId']}"
+    ).json()
+    order_id = orders[0]["id"]
+    _pool, method_id, item_id = _ensure_wallet_setting(client)
+
+    r = client.patch(
+        f"/operator/orders/{order_id}/completion",
+        json={
+            "operatorId": op["operatorId"],
+            "productName": "5350 档",
+            "salePrice": "5350",
+            "saleCurrency": "CNY",
+            "walletMethodId": method_id,
+            "walletItemId": item_id,
+            "remark": "客户加急 / 老板娘要的",
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["remark"] == "客户加急 / 老板娘要的"
+    assert body["operatorName"] == "备注客服"
+    assert body["walletMethodLabel"]  # 新字段, 不该为空
+    assert body["walletItemLabel"]
+
+    # 再 GET 一次, 备注还在
+    all_orders = client.get(
+        f"/operator/accounts/{acc['id']}/orders?operatorId={op['operatorId']}"
+    ).json()
+    matching = next(o for o in all_orders if o["id"] == order_id)
+    assert matching["remark"] == "客户加急 / 老板娘要的"
 
 
 def test_complete_order_auto_fills_operator_name(client):
