@@ -646,17 +646,21 @@ def operator_list_orders_endpoint(
 class OperatorOrderCompletion(BaseModel):
     """客服补销售信息。销售日期 + 经办人系统自动填,
     客服填: 商品 / 售价 / 币种 / 收款方式 / 备注模板 / 备注(可自由填写)。
+
+    CEO 2026-05-12 (inline 编辑): 所有字段全部 Optional,客服改哪个传哪个;
+    后端只更新传过来的字段。全部到位时自动转销售记录(底层 update_order_completion
+    自带 auto_convert 逻辑)。
     """
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
 
     operator_id: int
-    product_name: str = Field(..., min_length=1, max_length=255)
-    sale_price: Decimal
-    sale_currency: str
-    wallet_method_id: int
-    wallet_item_id: int
-    remark: Optional[str] = None  # CEO 2026-05-12: 客服自由填写
+    product_name: Optional[str] = Field(None, min_length=1, max_length=255)
+    sale_price: Optional[Decimal] = None
+    sale_currency: Optional[str] = None
+    wallet_method_id: Optional[int] = None
+    wallet_item_id: Optional[int] = None
+    remark: Optional[str] = None
 
 
 @router.patch(
@@ -680,19 +684,21 @@ def operator_complete_order_endpoint(
     account, operator = _require_holding(db, order.account_id, request.operator_id)
 
     try:
+        # CEO 2026-05-12 inline 编辑: 全部字段可选, 客服只传改的字段。
+        # update_order_completion 内部对每个字段 None 检查,所以不需要预过滤。
         update_order_completion(
             db,
             order,
             # sale_date 不传 → 保持自动填的 order_at
-            product_name=request.product_name.strip(),
-            # 经办人系统自动填(CEO 2026-05-11: 自动填客服名字)
+            product_name=request.product_name.strip() if request.product_name else None,
+            # 经办人系统自动填(CEO 2026-05-11: 自动填客服名字), 仅在补销售相关字段动时刷新
             operator_name=operator.display_name,
             sale_price=request.sale_price,
             sale_currency=request.sale_currency,
             wallet_method_id=request.wallet_method_id,
             wallet_item_id=request.wallet_item_id,
         )
-        # CEO 2026-05-12: 备注独立字段, 不走 update_order_completion (它不管 remark)
+        # 备注独立字段, 不走 update_order_completion (它不管 remark)
         if request.remark is not None:
             order.remark = request.remark.strip() or None
     except ValueError as exc:

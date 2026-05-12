@@ -269,6 +269,65 @@ def test_list_orders_forbidden_if_not_holder(client):
 # ---------------- 补销售信息 ----------------
 
 
+def test_complete_order_supports_partial_updates(client):
+    """CEO 2026-05-12 inline 编辑: 单字段独立 PATCH 也能存。
+
+    场景: 客服点了商品名输入框,改完失焦 → 只 PATCH productName,其他字段不传。
+    后端应允许这种部分更新,订单 status 保持 pending_complete(未集齐字段不转销售)。
+    """
+    op = _create_operator(client, "partial_user", display_name="部分客服")
+    acc = _create_xbox_account(client, "PARTIAL-1")
+    _mark_available(client, acc["id"])
+    _claim(client, acc["id"], op["operatorId"])
+
+    client.post(
+        f"/operator/accounts/{acc['id']}/sync-orders",
+        json={"operatorId": op["operatorId"], "count": 10},
+    )
+    orders = client.get(
+        f"/operator/accounts/{acc['id']}/orders?operatorId={op['operatorId']}"
+    ).json()
+    order_id = orders[0]["id"]
+
+    # 单独改商品名
+    r = client.patch(
+        f"/operator/orders/{order_id}/completion",
+        json={"operatorId": op["operatorId"], "productName": "5350 档"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["productName"] == "5350 档"
+    assert body["status"] == "pending_complete"  # 未集齐,不转销售
+    assert body["salePrice"] is None  # 没传
+
+    # 单独改 remark
+    r = client.patch(
+        f"/operator/orders/{order_id}/completion",
+        json={"operatorId": op["operatorId"], "remark": "客户加急"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["remark"] == "客户加急"
+    assert body["productName"] == "5350 档"  # 之前改的不丢
+
+    # 一次性补齐剩下字段 → 自动转销售
+    _pool, method_id, item_id = _ensure_wallet_setting(client)
+    r = client.patch(
+        f"/operator/orders/{order_id}/completion",
+        json={
+            "operatorId": op["operatorId"],
+            "salePrice": "5350",
+            "saleCurrency": "CNY",
+            "walletMethodId": method_id,
+            "walletItemId": item_id,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "converted"
+    assert body["remark"] == "客户加急"  # 之前的 remark 保留
+
+
 def test_complete_order_with_remark_persists(client):
     """CEO 2026-05-12: 客服补销售时填 remark, 后续读出来还在。"""
     op = _create_operator(client, "remarker", display_name="备注客服")
