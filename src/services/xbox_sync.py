@@ -34,6 +34,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.models.operator import Operator, XboxAccountClaim
 from src.models.xbox import (
     XboxAccount,
     XboxAccountAuditLog,
@@ -346,6 +347,19 @@ def trigger_sync(
         }
 
     # 成功 → 写订单(去重)
+    # CEO 2026-05-13: 同步时如果该账号正被某客服领着,
+    # **新订单**自动写经办人 = 该客服 display_name。
+    # 仅作用于"新插入"的订单(已存在订单的 operator_name 不动,保持现状)。
+    # 历史订单不回填(CEO 2026-05-13 Q1=A)。
+    claim_operator_name: Optional[str] = session.scalar(
+        select(Operator.display_name)
+        .join(XboxAccountClaim, XboxAccountClaim.operator_id == Operator.id)
+        .where(
+            XboxAccountClaim.account_id == account.id,
+            XboxAccountClaim.is_active.is_(True),
+        )
+    )
+
     orders_added = 0
     orders_skipped = 0
     for fetched in result.orders:
@@ -380,6 +394,8 @@ def trigger_sync(
             sale_date=fetched.order_at,
             # CEO 2026-05-12: 商品名(如 "80 Robux"),从 Microsoft 卡片解析
             product_name=fetched.product_name,
+            # CEO 2026-05-13: 经办人 = 当前领取该账号的客服(没人领→留空)
+            operator_name=claim_operator_name,
             raw_data=fetched.raw_data,
             status=XboxOrderStatus.PENDING_COMPLETE.value,
         )

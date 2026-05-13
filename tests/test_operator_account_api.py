@@ -445,3 +445,95 @@ def test_complete_order_forbidden_if_not_holder(client):
         },
     )
     assert r.status_code == 403
+
+
+# ---------------- 经办人自动写入 (CEO 2026-05-13) ----------------
+
+
+def test_sync_orders_auto_fills_operator_name_from_active_claim(client):
+    """账号被某客服领取时, 该账号新同步出来的订单 operator_name 自动 = 该客服的 displayName。"""
+    from src.models.xbox import XboxOrder
+
+    op = _create_operator(client, "auto_fill_op", display_name="张三")
+    acc = _create_xbox_account(client, "AUTO-FILL-1")
+    _mark_available(client, acc["id"])
+    _claim(client, acc["id"], op["operatorId"])
+
+    r = client.post(
+        f"/operator/accounts/{acc['id']}/sync-orders",
+        json={"operatorId": op["operatorId"], "count": 10},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is True
+    assert body["ordersAdded"] >= 1
+
+    # 查数据库, 新订单的 operator_name 必须 = "张三"
+    db = database.SessionLocal()
+    try:
+        orders = list(
+            db.scalars(
+                db.query(XboxOrder).filter(XboxOrder.account_id == acc["id"]).statement
+            )
+        )
+        assert len(orders) >= 1
+        for o in orders:
+            assert o.operator_name == "张三", (
+                f"订单 {o.order_no} 经办人 = {o.operator_name!r}, 期望 '张三'"
+            )
+    finally:
+        db.close()
+
+
+def test_sync_orders_existing_operator_name_not_overwritten(client):
+    """已经填过经办人的订单, 再次同步不被覆盖 (CEO 2026-05-13 Q3)。
+
+    场景: 同步出订单 → 客服 A 持有时 operator_name = '张三' →
+          归还 → 客服 B 领取 → 再同步 → 因 order_no 已存在, 走 skip 分支,
+          operator_name 应保持 '张三' 不变。
+    """
+    from src.models.xbox import XboxOrder
+
+    op_a = _create_operator(client, "first_holder", display_name="张三")
+    op_b = _create_operator(client, "second_holder", display_name="李四")
+    acc = _create_xbox_account(client, "NO-OVERWRITE-1")
+    _mark_available(client, acc["id"])
+
+    # 第一轮: 张三领, 同步出订单
+    claim_a = _claim(client, acc["id"], op_a["operatorId"])
+    r = client.post(
+        f"/operator/accounts/{acc['id']}/sync-orders",
+        json={"operatorId": op_a["operatorId"], "count": 10},
+    )
+    assert r.status_code == 200
+    assert r.json()["ordersAdded"] >= 1
+
+    # 张三归还
+    r = client.post(
+        f"/operator/claims/{claim_a['id']}/return",
+        json={"operatorId": op_a["operatorId"], "forceRecall": False},
+    )
+    assert r.status_code == 200, r.text
+
+    # 第二轮: 李四领同一账号, 再同步 (stub 会产生新订单号, 但已存在的会 skip)
+    _claim(client, acc["id"], op_b["operatorId"])
+    r = client.post(
+        f"/operator/accounts/{acc['id']}/sync-orders",
+        json={"operatorId": op_b["operatorId"], "count": 10},
+    )
+    assert r.status_code == 200
+
+    # 验证第一轮订单的 operator_name 仍是张三, 没被覆盖
+    db = database.SessionLocal()
+    try:
+        first_round_orders = list(
+            db.scalars(
+                db.query(XboxOrder)
+                .filter(XboxOrder.account_id == acc["id"])
+                .filter(XboxOrder.operator_name == "张三")
+                .statement
+            )
+        )
+        assert len(first_round_orders) >= 1, "张三领时同步的订单应仍标记张三"
+    finally:
+        db.close()
