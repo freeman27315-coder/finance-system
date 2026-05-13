@@ -447,7 +447,17 @@ def _parse_orders(page: Page, limit: int) -> list[FetchedOrder]:
 
 
 def _parse_one_card(text: str) -> Optional[FetchedOrder]:
-    """从单个卡片纯文本里抓出订单字段。"""
+    """从单个卡片纯文本里抓出订单字段。
+
+    CEO 2026-05-12 截图卡片结构:
+        May 11, 2026 | Order number 8035392088
+        80 Robux                ← 商品名(独占一行)
+        USD$0.99                ← 价格
+        Completed
+        Total USD$0.99
+        Paid with Microsoft account
+        Show details
+    """
     order_no_m = _ORDER_NO_RE.search(text)
     if not order_no_m:
         return None
@@ -474,13 +484,51 @@ def _parse_one_card(text: str) -> Optional[FetchedOrder]:
     else:
         currency = "USD"  # 兜底
 
+    # 商品名: 找 "Order number XXX" 那一行后面、价格行之前的非空行
+    product_name = _extract_product_name(text, price_m.start())
+
     return FetchedOrder(
         order_no=order_no,
         amount_local=amount,
         currency_local=currency,
         order_at=order_at,
+        product_name=product_name,
         raw_data={"source": "playwright", "card_text_preview": text[:200]},
     )
+
+
+# 不应作为商品名的关键字(排除掉)
+_NON_PRODUCT_NAME_TOKENS = {
+    "Completed", "Pending", "Refunded", "Canceled", "Cancelled",
+    "Show details", "Hide details", "Paid with", "Total",
+}
+
+
+def _extract_product_name(card_text: str, price_index: int) -> Optional[str]:
+    """从卡片文本里提取商品名。
+
+    策略: "Order number XXX" 行之后,价格 (USD$/GBP£) 之前的第一个非空行。
+    通常就是商品名(如 "80 Robux" / "500 Robux")。
+    """
+    # 取"Order number"行 → 价格之间的片段
+    order_idx = card_text.find("Order number")
+    if order_idx < 0:
+        return None
+    # "Order number XXX\n" 后面到 price_index 之间的文本
+    after_order_line_end = card_text.find("\n", order_idx)
+    if after_order_line_end < 0:
+        return None
+    segment = card_text[after_order_line_end + 1 : price_index]
+    for raw_line in segment.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        # 排除状态/操作类文字
+        if any(token in line for token in _NON_PRODUCT_NAME_TOKENS):
+            continue
+        # 取第一个有效行作为商品名
+        return line
+    return None
 
 
 def _parse_orders_fallback(page: Page, limit: int) -> list[FetchedOrder]:

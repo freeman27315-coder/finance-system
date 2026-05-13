@@ -183,6 +183,7 @@ class FetchedOrder:
     amount_local: Decimal
     currency_local: str  # USD / GBP
     order_at: datetime
+    product_name: Optional[str] = None  # CEO 2026-05-12: Microsoft 商品名 (如 "80 Robux")
     raw_data: Optional[dict] = None
 
 
@@ -352,6 +353,10 @@ def trigger_sync(
             select(XboxOrder).where(XboxOrder.order_no == fetched.order_no)
         )
         if existing is not None:
+            # CEO 2026-05-12: 旧订单可能缺商品名(早期抓取没解析), 补上来
+            if fetched.product_name and not existing.product_name:
+                existing.product_name = fetched.product_name
+                existing.last_updated_at = china_now()
             orders_skipped += 1
             continue
         used_rate = account.exchange_rate
@@ -373,6 +378,8 @@ def trigger_sync(
             order_at=fetched.order_at,
             # CEO 2026-05-12: 销售日期 = 微软订单时间(中国时区精确到秒),自动填
             sale_date=fetched.order_at,
+            # CEO 2026-05-12: 商品名(如 "80 Robux"),从 Microsoft 卡片解析
+            product_name=fetched.product_name,
             raw_data=fetched.raw_data,
             status=XboxOrderStatus.PENDING_COMPLETE.value,
         )

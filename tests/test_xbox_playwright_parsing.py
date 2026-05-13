@@ -75,6 +75,14 @@ def test_parse_one_card_usd():
     assert order.amount_local == Decimal("0.99")
     assert order.currency_local == "USD"
     assert order.order_at == datetime(2026, 5, 11, 12, 0, 0)
+    # CEO 2026-05-12: 商品名也要抓到
+    assert order.product_name == "80 Robux"
+
+
+def test_parse_one_card_extracts_500_robux_product_name():
+    order = _parse_one_card(SAMPLE_CARD_USD_500)
+    assert order is not None
+    assert order.product_name == "500 Robux"
 
 
 def test_parse_one_card_gbp():
@@ -84,6 +92,7 @@ def test_parse_one_card_gbp():
     assert order.amount_local == Decimal("8.49")
     assert order.currency_local == "GBP"
     assert order.order_at == datetime(2026, 7, 15, 12, 0, 0)
+    assert order.product_name == "1000 Robux"
 
 
 def test_parse_one_card_500_robux():
