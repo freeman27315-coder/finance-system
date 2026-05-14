@@ -616,9 +616,9 @@ function HistoryOrdersTable({
           <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">经办人</TableHead>
           <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[150px]">收款方式</TableHead>
           <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[150px]">备注模板</TableHead>
-          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[180px]">收款金额</TableHead>
+          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[140px]">收款金额</TableHead>
           <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[160px]">备注</TableHead>
-          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap w-[100px] text-center">状态</TableHead>
+          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap w-[112px] text-center">状态</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -723,9 +723,9 @@ function HistoryOrdersTable({
                 />
               </TableCell>
 
-              {/* 收款金额 + 锁定币种 */}
+              {/* 收款金额 + 锁定币种(币种紧贴金额后缀) */}
               <TableCell className="px-2 py-2">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center">
                   <EditableTextCell
                     value={stripTrailingZeros(merged.salePrice)}
                     placeholder={stripTrailingZeros(order.amountLocal)}
@@ -738,8 +738,7 @@ function HistoryOrdersTable({
                   />
                   <span
                     className={
-                      "inline-flex h-9 min-w-[56px] shrink-0 items-center justify-center " +
-                      "rounded-md border border-border bg-muted/50 px-2 text-xs font-semibold tracking-wide " +
+                      "ml-0.5 shrink-0 whitespace-nowrap px-1 text-xs font-semibold tracking-wide " +
                       (lockedCurrency ? "text-foreground" : "text-muted-foreground/60")
                     }
                     title={
@@ -809,16 +808,16 @@ function RowStatusBadge({
 }) {
   if (saving) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-md bg-blue-100 px-2 py-1 text-[11px] font-medium text-blue-700">
-        <Loader2 className="h-3 w-3 animate-spin" />
+      <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-blue-100 px-2 py-1 text-[11px] font-medium text-blue-700">
+        <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
         保存中
       </span>
     );
   }
   if (justSaved) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-2 py-1 text-[11px] font-medium text-emerald-700">
-        <CheckCircle2 className="h-3 w-3" />
+      <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-emerald-100 px-2 py-1 text-[11px] font-medium text-emerald-700">
+        <CheckCircle2 className="h-3 w-3 shrink-0" />
         已保存
       </span>
     );
@@ -828,7 +827,7 @@ function RowStatusBadge({
     return (
       <span
         className={
-          "inline-flex h-6 w-12 items-center justify-center gap-1 rounded-md px-2 text-[11px] font-semibold tabular-nums " +
+          "inline-flex h-6 min-w-[48px] items-center justify-center whitespace-nowrap rounded-md px-2 text-[11px] font-semibold tabular-nums " +
           (isComplete
             ? "bg-emerald-100 text-emerald-700"
             : "bg-amber-100 text-amber-700")
@@ -846,8 +845,8 @@ function RowStatusBadge({
   if (isComplete) {
     // 完整 + 没草稿 = 已保存到 DB
     return (
-      <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700">
-        <CheckCircle2 className="h-3 w-3" />
+      <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700">
+        <CheckCircle2 className="h-3 w-3 shrink-0" />
         完成
       </span>
     );
@@ -855,7 +854,7 @@ function RowStatusBadge({
   // 不完整 (草稿停了 / 从来没碰过) → 提示缺啥
   return (
     <span
-      className="inline-flex items-center gap-1 rounded-md bg-rose-100 px-2 py-1 text-[11px] font-medium text-rose-700"
+      className="inline-flex items-center gap-1 whitespace-nowrap rounded-md bg-rose-100 px-2 py-1 text-[11px] font-medium text-rose-700"
       title={hasDraft ? `还差: ${missing.join(" / ")}` : `请补: ${missing.join(" / ")}`}
     >
       待补 {missing.length}
