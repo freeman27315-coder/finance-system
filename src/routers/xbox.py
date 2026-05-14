@@ -713,9 +713,15 @@ def serialize_sale_record(record: XboxSaleRecord, order_ids: list[int]) -> XboxS
 def serialize_method(
     method: XboxWalletMethod,
     currency_map: Optional[dict[int, str]] = None,
+    only_active_items: bool = False,
 ) -> XboxWalletMethodOut:
-    items = sorted(method.items, key=lambda i: i.id)
-    # CEO 2026-05-14: 推导 method 币种 = 第一个 item 的 wallet currency
+    # CEO 2026-05-14: only_active_items=True 时, 过滤被软删除(is_active=False) 的
+    # 备注模板, 避免编辑钱包设置页删了之后还看见。
+    raw_items = sorted(method.items, key=lambda i: i.id)
+    items = (
+        [it for it in raw_items if it.is_active] if only_active_items else raw_items
+    )
+    # 推导 method 币种 = 第一个 item 的 wallet currency
     method_currency: Optional[str] = None
     if currency_map and items:
         method_currency = currency_map.get(items[0].wallet_pool_id)
@@ -943,14 +949,19 @@ def list_wallet_settings_endpoint(
 
     methods = list_wallet_methods(db, only_active=only_active)
     # CEO 2026-05-14: 预加载所有 item 对应钱包的币种, 注入 method.currency
-    wallet_ids = {it.wallet_pool_id for m in methods for it in m.items}
+    # 同时把 only_active 透传给 serialize_method, 一并过滤掉软删除的备注模板
+    # (避免 CEO 在编辑钱包设置页删了之后刷新还看见)。
+    wallet_ids = {it.wallet_pool_id for m in methods for it in m.items if it.is_active or not only_active}
     currency_map: dict[int, str] = {}
     if wallet_ids:
         wallets = db.scalars(select(Wallet).where(Wallet.id.in_(wallet_ids))).all()
         for w in wallets:
             cur = w.currency.value if hasattr(w.currency, "value") else w.currency
             currency_map[w.id] = cur
-    return [serialize_method(m, currency_map) for m in methods]
+    return [
+        serialize_method(m, currency_map, only_active_items=only_active)
+        for m in methods
+    ]
 
 
 # ----- 资金池可选钱包列表（CEO 2026-05-08 Q1A：全部钱包大类都能当资金池）-----
