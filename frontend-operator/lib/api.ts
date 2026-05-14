@@ -1,5 +1,10 @@
 // API 客户端 (连后端 /operator/* + /xbox/*)
-// 通过 next.config.js 的 rewrites 把 /api/* 代理到 localhost:8000
+//
+// CEO 2026-05-14: 改为直连后端 (绕过 Next.js dev proxy 的 30s 默认超时,
+// Playwright 同步会跑 60s+)。后端开了 CORS 允许 :3100 直连。
+// API_BASE 默认 http://localhost:8002, 后端换端口时改 NEXT_PUBLIC_API_BASE。
+//
+// 路径上原本带 /api 前缀的(经 Next.js rewrites 代理),现在直接打到 BASE。
 
 import type {
   AvailableAccount,
@@ -13,12 +18,22 @@ import type {
 } from "@/types";
 import { clearSession, getToken } from "./auth";
 
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE?.trim() || "http://localhost:8002";
+
 class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
     super(message);
     this.status = status;
   }
+}
+
+function _resolveUrl(path: string): string {
+  // 兼容历史代码: 把 /api/xxx 改写到 BASE/xxx; 已是绝对 URL 不动
+  if (/^https?:\/\//i.test(path)) return path;
+  const stripped = path.replace(/^\/api(\/|$)/, "/");
+  return `${API_BASE}${stripped}`;
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -32,7 +47,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers.set("authorization", `Bearer ${token}`);
   }
 
-  const res = await fetch(path, { ...init, headers });
+  const res = await fetch(_resolveUrl(path), { ...init, headers });
   const text = await res.text();
 
   if (!res.ok) {

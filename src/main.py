@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 
 def _load_dotenv_basic() -> None:
@@ -75,6 +76,18 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Finance System API", lifespan=lifespan)
+
+# CEO 2026-05-14: 允许前端 (Next.js dev :3000 / :3100, Electron file://)
+# 直连后端,绕过 Next.js dev proxy 的 30s 默认超时 (Playwright 同步可能
+# 走到 60s+)。本地开发环境放开全部 origin,生产打包时再收紧。
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,  # allow_origins="*" 时必须 False
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(assets_router)
 app.include_router(operator_router)
 app.include_router(vendors_router)
