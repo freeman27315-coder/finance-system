@@ -48,7 +48,7 @@ import {
   syncOrders
 } from "@/lib/api";
 import { clearSession, type StoredOperator } from "@/lib/auth";
-import { formatDateTimeSeconds } from "@/lib/utils";
+import { formatDateTimeSeconds, stripTrailingZeros } from "@/lib/utils";
 import type { OperatorOrder, SaleCurrency, WalletMethod } from "@/types";
 
 // CEO 2026-05-14: 币种由"收款方式"自动锁定,客服不再手填。下拉框已移除。
@@ -319,7 +319,7 @@ export function OperatorWorkbench({ operator }: { operator: StoredOperator }) {
                 </div>
                 <FieldMini
                   label={`本币余额 (${claimedAccount.currency})`}
-                  value={`${claimedAccount.localBalance} ${claimedAccount.currency}`}
+                  value={`${stripTrailingZeros(claimedAccount.localBalance)} ${claimedAccount.currency}`}
                   mono
                 />
                 <div className="space-y-1">
@@ -727,8 +727,8 @@ function HistoryOrdersTable({
               <TableCell className="px-2 py-2">
                 <div className="flex items-center gap-2">
                   <EditableTextCell
-                    value={merged.salePrice}
-                    placeholder={order.amountLocal}
+                    value={stripTrailingZeros(merged.salePrice)}
+                    placeholder={stripTrailingZeros(order.amountLocal)}
                     inputMode="decimal"
                     onSave={(v) => {
                       onFieldChange(order.id, { salePrice: v });

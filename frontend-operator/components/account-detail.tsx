@@ -34,7 +34,7 @@ import {
   syncOrders
 } from "@/lib/api";
 import type { StoredOperator } from "@/lib/auth";
-import { formatDateTimeSeconds } from "@/lib/utils";
+import { formatDateTimeSeconds, stripTrailingZeros } from "@/lib/utils";
 import type { OperatorOrder } from "@/types";
 
 const SYNC_COUNTS = [10, 20, 30, 50] as const;
@@ -272,7 +272,7 @@ export function AccountDetail({
             </div>
             <div className="text-right">
               <div className="text-3xl font-semibold tabular-nums text-blue-700">
-                {detail.localBalance} {detail.currency}
+                {stripTrailingZeros(detail.localBalance)} {detail.currency}
               </div>
             </div>
           </CardHeader>
@@ -341,7 +341,7 @@ export function AccountDetail({
                       {order.orderNo}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {order.amountLocal} {order.currencyLocal}
+                      {stripTrailingZeros(order.amountLocal)} {order.currencyLocal}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground tabular-nums">
                       {formatDateTimeSeconds(order.orderAt)}

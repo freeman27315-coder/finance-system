@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { completeOrder, getWalletMethods } from "@/lib/api";
-import { formatDateTimeSeconds } from "@/lib/utils";
+import { formatDateTimeSeconds, stripTrailingZeros } from "@/lib/utils";
 import type { OperatorOrder, SaleCurrency } from "@/types";
 
 // CEO 2026-05-14: 币种由"收款方式"自动锁定,客服不再手填。
@@ -26,7 +26,9 @@ export function CompleteOrderModal({
 }) {
   const queryClient = useQueryClient();
   const [productName, setProductName] = useState(order.productName ?? "");
-  const [salePrice, setSalePrice] = useState(order.salePrice ?? "");
+  const [salePrice, setSalePrice] = useState(
+    stripTrailingZeros(order.salePrice)
+  );
   const [walletMethodId, setWalletMethodId] = useState<number | "">(
     order.walletMethodId ?? ""
   );
@@ -91,7 +93,7 @@ export function CompleteOrderModal({
           <div>
             <CardTitle>补销售信息 · {order.orderNo}</CardTitle>
             <div className="mt-1 text-xs text-muted-foreground">
-              本币 {order.amountLocal} {order.currencyLocal} · 订单时间{" "}
+              本币 {stripTrailingZeros(order.amountLocal)} {order.currencyLocal} · 订单时间{" "}
               {formatDateTimeSeconds(order.orderAt)}
             </div>
           </div>
