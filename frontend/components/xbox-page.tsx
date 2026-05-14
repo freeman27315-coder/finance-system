@@ -2690,10 +2690,13 @@ function WalletSettingsEditModal({
 
 function WalletSettingsTab() {
   const [showEdit, setShowEdit] = useState(false);
+  // CEO 2026-05-14: 默认只看启用的(跟 modal 一致), 删过的从视野消失。
+  // 想看历史(含停用)可点开关。
+  const [showInactive, setShowInactive] = useState(false);
 
   const { data: methods = [], isFetching, refetch } = useQuery({
-    queryKey: ["xbox-wallet-settings"],
-    queryFn: () => getXboxWalletSettings(false)
+    queryKey: ["xbox-wallet-settings", showInactive],
+    queryFn: () => getXboxWalletSettings(!showInactive)
   });
   const { data: poolGroups = [] } = useQuery({
     queryKey: ["xbox-wallet-pool-options"],
@@ -2708,7 +2711,16 @@ function WalletSettingsTab() {
         <div className="text-xs text-muted-foreground">
           财务系统钱包设置:收款方式 → 备注模板 → 资金池(可挂任何钱包：资产/淘宝/台湾/...)
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showInactive}
+              onChange={(e) => setShowInactive(e.target.checked)}
+              className="h-3.5 w-3.5"
+            />
+            显示已停用(历史)
+          </label>
           <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
             <RefreshCcw className={cn("h-4 w-4", isFetching && "animate-spin")} />
             刷新
