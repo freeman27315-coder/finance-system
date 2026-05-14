@@ -608,17 +608,17 @@ function HistoryOrdersTable({
     <Table>
       <TableHeader>
         <TableRow className="hover:bg-transparent">
-          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground">账号编号</TableHead>
-          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground">订单编号</TableHead>
-          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground">类型</TableHead>
-          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground">日期(秒)</TableHead>
-          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground w-[130px]">商品名称</TableHead>
-          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[100px]">经办人</TableHead>
-          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[150px]">收款方式</TableHead>
-          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[150px]">备注模板</TableHead>
-          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[170px]">收款金额</TableHead>
-          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[160px]">备注</TableHead>
-          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground w-[88px] text-center">状态</TableHead>
+          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">账号编号</TableHead>
+          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">订单编号</TableHead>
+          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">类型</TableHead>
+          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">日期(秒)</TableHead>
+          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">商品名称</TableHead>
+          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">经办人</TableHead>
+          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[150px]">收款方式</TableHead>
+          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[150px]">备注模板</TableHead>
+          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[180px]">收款金额</TableHead>
+          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[160px]">备注</TableHead>
+          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap w-[100px] text-center">状态</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -645,34 +645,36 @@ function HistoryOrdersTable({
               key={order.id}
               className={"align-middle transition-colors " + rowBg}
             >
-              <TableCell className="px-3 py-2.5 font-mono text-xs text-muted-foreground">
+              <TableCell className="px-3 py-3 font-mono text-xs whitespace-nowrap text-muted-foreground">
                 {order.accountNo ?? `#${order.accountId}`}
               </TableCell>
-              <TableCell className="px-3 py-2.5 font-mono text-xs text-muted-foreground">
+              <TableCell className="px-3 py-3 font-mono text-xs whitespace-nowrap text-muted-foreground">
                 {order.orderNo}
               </TableCell>
-              <TableCell className="px-3 py-2.5">
+              <TableCell className="px-3 py-3 whitespace-nowrap">
                 {/* CEO 2026-05-12: 类型暂定只有"上号", 后续给区分逻辑 */}
                 <Badge tone="transfer">上号</Badge>
               </TableCell>
-              <TableCell className="px-3 py-2.5 text-xs tabular-nums whitespace-nowrap text-muted-foreground">
+              <TableCell className="px-3 py-3 text-xs tabular-nums whitespace-nowrap text-muted-foreground">
                 {formatDateTimeSeconds(order.orderAt)}
               </TableCell>
 
-              {/* 商品名 - 可编辑 (非必填; 抓取时自动) */}
-              <TableCell className="px-2 py-1.5">
-                <EditableTextCell
-                  value={merged.productName}
-                  placeholder="如: 5350 档"
-                  onSave={(v) => {
-                    onFieldChange(order.id, { productName: v });
-                    return Promise.resolve();
-                  }}
-                />
+              {/* 商品名 - 只读 (系统抓取, 客服不可改), 完整显示不截断 */}
+              <TableCell className="px-3 py-3 text-sm whitespace-nowrap">
+                {order.productName ? (
+                  <span className="font-medium">{order.productName}</span>
+                ) : (
+                  <span
+                    className="italic text-muted-foreground"
+                    title="同步时未抓到商品名"
+                  >
+                    —
+                  </span>
+                )}
               </TableCell>
 
               {/* 经办人 - 只读, 系统自动填 */}
-              <TableCell className="px-3 py-2.5 text-xs whitespace-nowrap">
+              <TableCell className="px-3 py-3 text-sm whitespace-nowrap">
                 {order.operatorName ? (
                   <span className="font-medium">{order.operatorName}</span>
                 ) : (
@@ -686,7 +688,7 @@ function HistoryOrdersTable({
               </TableCell>
 
               {/* 收款方式 - 选完自动锁币种 */}
-              <TableCell className="px-2 py-1.5">
+              <TableCell className="px-2 py-2">
                 <EditableSelectCell<number>
                   value={merged.walletMethodId}
                   options={methods
@@ -705,7 +707,7 @@ function HistoryOrdersTable({
               </TableCell>
 
               {/* 备注模板 */}
-              <TableCell className="px-2 py-1.5">
+              <TableCell className="px-2 py-2">
                 <EditableSelectCell<number>
                   value={merged.walletItemId}
                   options={itemOptions.map((it) => ({
@@ -722,7 +724,7 @@ function HistoryOrdersTable({
               </TableCell>
 
               {/* 收款金额 + 锁定币种 */}
-              <TableCell className="px-2 py-1.5">
+              <TableCell className="px-2 py-2">
                 <div className="flex items-center gap-2">
                   <EditableTextCell
                     value={merged.salePrice}
@@ -752,7 +754,7 @@ function HistoryOrdersTable({
               </TableCell>
 
               {/* 备注 - 必填 */}
-              <TableCell className="px-2 py-1.5">
+              <TableCell className="px-2 py-2">
                 <EditableTextCell
                   value={merged.remark}
                   placeholder="必填"
@@ -764,7 +766,7 @@ function HistoryOrdersTable({
               </TableCell>
 
               {/* 状态: 倒计时 / 保存中 / 已保存 / 完整 / 缺字段 */}
-              <TableCell className="px-2 py-1.5 text-center">
+              <TableCell className="px-2 py-2 text-center">
                 <RowStatusBadge
                   countdown={countdown}
                   saving={isSaving}
