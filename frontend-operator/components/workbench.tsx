@@ -611,7 +611,7 @@ function HistoryOrdersTable({
           <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">账号编号</TableHead>
           <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">订单编号</TableHead>
           <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">类型</TableHead>
-          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">日期(秒)</TableHead>
+          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">同步时间</TableHead>
           <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">商品名称</TableHead>
           <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">经办人</TableHead>
           <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[150px]">收款方式</TableHead>
@@ -655,8 +655,11 @@ function HistoryOrdersTable({
                 {/* CEO 2026-05-12: 类型暂定只有"上号", 后续给区分逻辑 */}
                 <Badge tone="transfer">上号</Badge>
               </TableCell>
-              <TableCell className="px-3 py-3 text-xs tabular-nums whitespace-nowrap text-muted-foreground">
-                {formatDateTimeSeconds(order.orderAt)}
+              <TableCell
+                className="px-3 py-3 text-xs tabular-nums whitespace-nowrap text-muted-foreground"
+                title={`Microsoft 订单时间: ${formatDateTimeSeconds(order.orderAt)}`}
+              >
+                {formatDateTimeSeconds(order.createdAt)}
               </TableCell>
 
               {/* 商品名 - 只读 (系统抓取, 客服不可改), 完整显示不截断 */}

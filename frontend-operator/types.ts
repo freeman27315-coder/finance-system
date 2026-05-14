@@ -74,7 +74,8 @@ export type OperatorOrder = {
   orderNo: string;                  // 订单编号
   amountLocal: string;              // 本币金额(微软订单原始金额)
   currencyLocal: string;            // 本币币种 USD/GBP
-  orderAt: string;                  // 订单时间(=日期, 精确到秒)
+  orderAt: string;                  // Microsoft 报告的下单时间(只精确到日, 补 12:00:00)
+  createdAt: string;                // CEO 2026-05-14: 同步落库的中国时间(精确到秒, 表格"日期"列显示这个)
   saleDate: string | null;          // 销售日期(自动=orderAt)
   status: string;                   // 类型: pending_complete / converted
   productName: string | null;       // 商品名

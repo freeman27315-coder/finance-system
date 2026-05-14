@@ -543,6 +543,9 @@ class OperatorOrderOut(BaseModel):
     amount_local: str
     currency_local: str
     order_at: str
+    # CEO 2026-05-14: 同步成功落库的中国时区时刻(精确到秒),
+    # 历史订单表的"日期"列用这个,而不是 Microsoft 报告的 order_at(只精确到天)。
+    created_at: str
     sale_date: Optional[str]
     status: str
     product_name: Optional[str]
@@ -572,6 +575,7 @@ def _serialize_op_order(
         amount_local=str(order.amount_local),
         currency_local=order.currency_local,
         order_at=order.order_at.isoformat() if order.order_at else "",
+        created_at=order.created_at.isoformat() if order.created_at else "",
         sale_date=order.sale_date.isoformat() if order.sale_date else None,
         status=order.status,
         product_name=order.product_name,
