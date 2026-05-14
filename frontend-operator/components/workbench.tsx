@@ -457,8 +457,8 @@ function HistoryOrdersTable({
           <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground">订单编号</TableHead>
           <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground">类型</TableHead>
           <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground">日期(秒)</TableHead>
-          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[150px]">商品名称</TableHead>
-          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground">经办人</TableHead>
+          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground w-[130px]">商品名称</TableHead>
+          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[100px]">经办人</TableHead>
           <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[150px]">收款方式</TableHead>
           <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[150px]">备注模板</TableHead>
           <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[170px]">收款金额</TableHead>
@@ -499,11 +499,16 @@ function HistoryOrdersTable({
               </TableCell>
 
               {/* 经办人 - 只读, 系统自动填(补销售时取 operator.display_name) */}
-              <TableCell className="px-3 py-2.5 text-xs">
+              <TableCell className="px-3 py-2.5 text-xs whitespace-nowrap">
                 {order.operatorName ? (
                   <span className="font-medium">{order.operatorName}</span>
                 ) : (
-                  <span className="italic text-muted-foreground">(待补销售时自动)</span>
+                  <span
+                    className="italic text-muted-foreground"
+                    title="补销售时自动填写当前领取该账号的客服"
+                  >
+                    —
+                  </span>
                 )}
               </TableCell>
 
