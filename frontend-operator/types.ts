@@ -89,11 +89,14 @@ export type OperatorOrder = {
 };
 
 // 钱包设置 (复用 /xbox/wallet-settings)
+// CEO 2026-05-14: 后端推 method.currency 出来(该方式下所有 item 同币种),
+// 前端选完方式自动锁币种,客服只填金额。
 export type WalletMethod = {
   id: number;
   code: string;
   label: string;
   isActive: boolean;
+  currency: SaleCurrency | null;
   items: {
     id: number;
     code: string;

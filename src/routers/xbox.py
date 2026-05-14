@@ -659,6 +659,10 @@ class XboxWalletMethodOut(BaseModel):
     label: str
     is_active: bool
     items: list[XboxWalletItemOut]
+    # CEO 2026-05-14: 该方式下所有 item 对应 wallet 的币种统一(业务约定)。
+    # 客服补销售时选完方式自动锁定币种,无需手填。
+    # 取第一个 item 的 wallet_pool.currency; items 为空时 None。
+    currency: Optional[str] = None
 
 
 # ----- Serializers -----
@@ -706,13 +710,21 @@ def serialize_sale_record(record: XboxSaleRecord, order_ids: list[int]) -> XboxS
     )
 
 
-def serialize_method(method: XboxWalletMethod) -> XboxWalletMethodOut:
+def serialize_method(
+    method: XboxWalletMethod,
+    currency_map: Optional[dict[int, str]] = None,
+) -> XboxWalletMethodOut:
     items = sorted(method.items, key=lambda i: i.id)
+    # CEO 2026-05-14: 推导 method 币种 = 第一个 item 的 wallet currency
+    method_currency: Optional[str] = None
+    if currency_map and items:
+        method_currency = currency_map.get(items[0].wallet_pool_id)
     return XboxWalletMethodOut(
         id=method.id,
         code=method.code,
         label=method.label,
         is_active=method.is_active,
+        currency=method_currency,
         items=[
             XboxWalletItemOut(
                 id=it.id,
@@ -927,8 +939,18 @@ def list_wallet_settings_endpoint(
     only_active: bool = Query(True, alias="onlyActive"),
     db: Session = Depends(get_db),
 ) -> list[XboxWalletMethodOut]:
+    from src.models.wallet import Wallet  # 局部 import 避免循环
+
     methods = list_wallet_methods(db, only_active=only_active)
-    return [serialize_method(m) for m in methods]
+    # CEO 2026-05-14: 预加载所有 item 对应钱包的币种, 注入 method.currency
+    wallet_ids = {it.wallet_pool_id for m in methods for it in m.items}
+    currency_map: dict[int, str] = {}
+    if wallet_ids:
+        wallets = db.scalars(select(Wallet).where(Wallet.id.in_(wallet_ids))).all()
+        for w in wallets:
+            cur = w.currency.value if hasattr(w.currency, "value") else w.currency
+            currency_map[w.id] = cur
+    return [serialize_method(m, currency_map) for m in methods]
 
 
 # ----- 资金池可选钱包列表（CEO 2026-05-08 Q1A：全部钱包大类都能当资金池）-----

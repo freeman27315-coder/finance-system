@@ -50,7 +50,8 @@ import { clearSession, type StoredOperator } from "@/lib/auth";
 import { formatDateTimeSeconds } from "@/lib/utils";
 import type { OperatorOrder, SaleCurrency, WalletMethod } from "@/types";
 
-const SALE_CURRENCIES: SaleCurrency[] = ["CNY", "USD", "USDT", "TWD"];
+// CEO 2026-05-14: 币种由"收款方式"自动锁定,客服不再手填。下拉框已移除。
+// 类型 SaleCurrency 仍保留,用于 save() payload 类型标注 + 后续可能的新映射。
 
 const MAX_CLAIMS = 3;
 const SYNC_COUNTS = [10, 20, 30, 50] as const;
@@ -451,39 +452,45 @@ function HistoryOrdersTable({
   return (
     <Table>
       <TableHeader>
-        <TableRow>
-          <TableHead>账号编号</TableHead>
-          <TableHead>订单编号</TableHead>
-          <TableHead>类型</TableHead>
-          <TableHead>日期(秒)</TableHead>
-          <TableHead className="min-w-[140px]">商品名称</TableHead>
-          <TableHead>经办人</TableHead>
-          <TableHead className="min-w-[140px]">收款方式</TableHead>
-          <TableHead className="min-w-[140px]">备注模板</TableHead>
-          <TableHead className="min-w-[140px] text-right">收款金额</TableHead>
-          <TableHead className="min-w-[160px]">备注</TableHead>
+        <TableRow className="hover:bg-transparent">
+          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground">账号编号</TableHead>
+          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground">订单编号</TableHead>
+          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground">类型</TableHead>
+          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground">日期(秒)</TableHead>
+          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[150px]">商品名称</TableHead>
+          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground">经办人</TableHead>
+          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[150px]">收款方式</TableHead>
+          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[150px]">备注模板</TableHead>
+          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[170px]">收款金额</TableHead>
+          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[170px]">备注</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {orders.map((order) => {
           const selectedMethod = methods.find((m) => m.id === order.walletMethodId);
           const itemOptions = (selectedMethod?.items ?? []).filter((it) => it.isActive);
+          // CEO 2026-05-14: 客服补销售时, 显示币种 = 已绑定方式的币种 (优先)
+          // 后端若已存了 saleCurrency 走 saleCurrency, 否则 fallback method.currency。
+          const lockedCurrency =
+            order.saleCurrency ?? selectedMethod?.currency ?? null;
           return (
-            <TableRow key={order.id}>
-              <TableCell className="font-mono text-xs">
+            <TableRow key={order.id} className="align-middle">
+              <TableCell className="px-3 py-2.5 font-mono text-xs text-muted-foreground">
                 {order.accountNo ?? `#${order.accountId}`}
               </TableCell>
-              <TableCell className="font-mono text-xs">{order.orderNo}</TableCell>
-              <TableCell>
+              <TableCell className="px-3 py-2.5 font-mono text-xs text-muted-foreground">
+                {order.orderNo}
+              </TableCell>
+              <TableCell className="px-3 py-2.5">
                 {/* CEO 2026-05-12: 类型暂定只有"上号", 后续给区分逻辑 */}
                 <Badge tone="transfer">上号</Badge>
               </TableCell>
-              <TableCell className="text-xs tabular-nums whitespace-nowrap">
+              <TableCell className="px-3 py-2.5 text-xs tabular-nums whitespace-nowrap text-muted-foreground">
                 {formatDateTimeSeconds(order.orderAt)}
               </TableCell>
 
               {/* 商品名 - 可编辑 */}
-              <TableCell className="p-1">
+              <TableCell className="px-2 py-1.5">
                 <EditableTextCell
                   value={order.productName}
                   placeholder="如: 5350 档"
@@ -492,29 +499,36 @@ function HistoryOrdersTable({
               </TableCell>
 
               {/* 经办人 - 只读, 系统自动填(补销售时取 operator.display_name) */}
-              <TableCell className="text-xs text-muted-foreground">
-                {order.operatorName ?? <span className="italic">(待补销售时自动)</span>}
+              <TableCell className="px-3 py-2.5 text-xs">
+                {order.operatorName ? (
+                  <span className="font-medium">{order.operatorName}</span>
+                ) : (
+                  <span className="italic text-muted-foreground">(待补销售时自动)</span>
+                )}
               </TableCell>
 
-              {/* 收款方式 - 可编辑 select */}
-              <TableCell className="p-1">
+              {/* 收款方式 - 可编辑 select; 选定后自动锁币种 */}
+              <TableCell className="px-2 py-1.5">
                 <EditableSelectCell<number>
                   value={order.walletMethodId}
                   options={methods
                     .filter((m) => m.isActive)
                     .map((m) => ({ value: m.id, label: m.label }))}
-                  onSave={(v) =>
-                    save(order.id, {
+                  onSave={(v) => {
+                    const m = v != null ? methods.find((mm) => mm.id === v) : null;
+                    return save(order.id, {
                       walletMethodId: v ?? undefined,
                       // 换方式时,清空旧 item(防止跨方式的 item 残留)
-                      walletItemId: undefined
-                    })
-                  }
+                      walletItemId: undefined,
+                      // CEO 2026-05-14: 自动锁币种 = 该方式的币种
+                      saleCurrency: (m?.currency as SaleCurrency | null) ?? undefined
+                    });
+                  }}
                 />
               </TableCell>
 
               {/* 备注模板 - 可编辑 select, 依赖 method */}
-              <TableCell className="p-1">
+              <TableCell className="px-2 py-1.5">
                 <EditableSelectCell<number>
                   value={order.walletItemId}
                   options={itemOptions.map((it) => ({
@@ -527,9 +541,9 @@ function HistoryOrdersTable({
                 />
               </TableCell>
 
-              {/* 收款金额 + 币种 - 两个可编辑控件并排 */}
-              <TableCell className="p-1">
-                <div className="flex items-center gap-1">
+              {/* 收款金额 - 客服只填数字, 币种自动跟随收款方式 */}
+              <TableCell className="px-2 py-1.5">
+                <div className="flex items-center gap-2">
                   <EditableTextCell
                     value={order.salePrice}
                     placeholder={order.amountLocal}
@@ -537,20 +551,25 @@ function HistoryOrdersTable({
                     onSave={(v) => save(order.id, { salePrice: v })}
                     className="flex-1"
                   />
-                  <EditableSelectCell<string>
-                    value={order.saleCurrency}
-                    options={SALE_CURRENCIES.map((c) => ({ value: c, label: c }))}
-                    placeholder="币"
-                    onSave={(v) =>
-                      save(order.id, { saleCurrency: v ?? undefined })
+                  <span
+                    className={
+                      "inline-flex h-9 min-w-[56px] shrink-0 items-center justify-center " +
+                      "rounded-md border border-border bg-muted/50 px-2 text-xs font-semibold tracking-wide " +
+                      (lockedCurrency ? "text-foreground" : "text-muted-foreground/60")
                     }
-                    className="w-[68px]"
-                  />
+                    title={
+                      lockedCurrency
+                        ? `币种由收款方式自动锁定: ${lockedCurrency}`
+                        : "选好收款方式后, 币种会自动填上"
+                    }
+                  >
+                    {lockedCurrency ?? "—"}
+                  </span>
                 </div>
               </TableCell>
 
               {/* 备注 - 可编辑 */}
-              <TableCell className="p-1">
+              <TableCell className="px-2 py-1.5">
                 <EditableTextCell
                   value={order.remark}
                   placeholder="可自由填写"

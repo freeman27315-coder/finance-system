@@ -10,7 +10,8 @@ import { completeOrder, getWalletMethods } from "@/lib/api";
 import { formatDateTimeSeconds } from "@/lib/utils";
 import type { OperatorOrder, SaleCurrency } from "@/types";
 
-const SALE_CURRENCIES: SaleCurrency[] = ["CNY", "USD", "USDT", "TWD"];
+// CEO 2026-05-14: 币种由"收款方式"自动锁定,客服不再手填。
+// 类型 SaleCurrency 保留供 payload 类型标注。
 
 export function CompleteOrderModal({
   order,
@@ -26,9 +27,6 @@ export function CompleteOrderModal({
   const queryClient = useQueryClient();
   const [productName, setProductName] = useState(order.productName ?? "");
   const [salePrice, setSalePrice] = useState(order.salePrice ?? "");
-  const [saleCurrency, setSaleCurrency] = useState<SaleCurrency>(
-    (order.saleCurrency as SaleCurrency) ?? "CNY"
-  );
   const [walletMethodId, setWalletMethodId] = useState<number | "">(
     order.walletMethodId ?? ""
   );
@@ -47,6 +45,12 @@ export function CompleteOrderModal({
   const selectedMethod = methods.find((m) => m.id === walletMethodId);
   const items = selectedMethod?.items ?? [];
 
+  // CEO 2026-05-14: 币种 = 收款方式自带的币种(后端推 method.currency)。
+  // 没选方式时 fallback 到 order 现存的 saleCurrency(老数据兼容)。
+  const saleCurrency: SaleCurrency | null =
+    (selectedMethod?.currency as SaleCurrency | null) ??
+    ((order.saleCurrency as SaleCurrency | null) ?? null);
+
   // 切方式时清空旧的 item
   useEffect(() => {
     if (selectedMethod && walletItemId !== "") {
@@ -62,6 +66,7 @@ export function CompleteOrderModal({
       if (!salePrice.trim()) throw new Error("售价不能为空");
       if (typeof walletMethodId !== "number") throw new Error("请选收款方式");
       if (typeof walletItemId !== "number") throw new Error("请选备注模板");
+      if (!saleCurrency) throw new Error("收款方式未配置币种,请联系管理员");
       return completeOrder(order.id, {
         operatorId,
         productName: productName.trim(),
@@ -139,20 +144,19 @@ export function CompleteOrderModal({
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-medium">
-                币种 <span className="text-red-600">*</span>
+              <label className="text-xs font-medium text-muted-foreground">
+                币种 (自动)
               </label>
-              <select
-                className="h-10 w-full rounded-md border border-border bg-card px-2 text-sm outline-none focus:ring-2 focus:ring-primary"
-                value={saleCurrency}
-                onChange={(e) => setSaleCurrency(e.target.value as SaleCurrency)}
+              <div
+                className="flex h-10 items-center justify-center rounded-md border border-border bg-muted px-3 text-sm font-semibold tracking-wide"
+                title={
+                  saleCurrency
+                    ? `币种由收款方式自动锁定: ${saleCurrency}`
+                    : "选好收款方式后自动填上"
+                }
               >
-                {SALE_CURRENCIES.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
+                {saleCurrency ?? <span className="text-xs text-muted-foreground/60">先选方式</span>}
+              </div>
             </div>
           </div>
 
