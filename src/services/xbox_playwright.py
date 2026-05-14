@@ -416,8 +416,23 @@ def _do_login(page: Page, email: str, password: str) -> Optional[FetchResult]:
 
     CEO 2026-05-14: 提交按钮 selector 抽到 _click_submit 统一处理,
     多 selector 兜底 + Enter 键 fallback (Microsoft 改按钮 markup 时不挂)。
+
+    CEO 2026-05-14 (二改): cookies 完全有效时 Microsoft 会走"静默 SSO"
+    一连串 redirect (silent → sso → login.srf → /billing/orders),
+    全程不需要填邮箱密码。进入 _do_login 不代表非要输密码; 先用 10s
+    探一下是否已直达订单页, 是就直接 return None 走人。
     """
     try:
+        # 静默 SSO 通过探测: 如果在 10s 内 URL 跳到了 /billing/orders
+        # → 已经登录上, 不用填邮箱密码, 直接返回。
+        try:
+            page.wait_for_url(
+                "**/billing/orders**", timeout=10_000
+            )
+            return None
+        except PlaywrightTimeout:
+            pass
+
         # 邮箱(可选 — 账号被记住时 Microsoft 会跳过)
         loginfmt_visible = False
         try:
@@ -431,6 +446,15 @@ def _do_login(page: Page, email: str, password: str) -> Optional[FetchResult]:
         if loginfmt_visible:
             page.fill('input[name="loginfmt"]', email)
             _click_submit(page)
+
+        # 邮箱填完后, 再次探一下 SSO 是否在邮箱提交后直接跳过密码页
+        try:
+            page.wait_for_url(
+                "**/billing/orders**", timeout=5_000
+            )
+            return None
+        except PlaywrightTimeout:
+            pass
 
         # 密码(必填)
         page.wait_for_selector(
