@@ -516,6 +516,14 @@ function HistoryOrdersTable({
     };
   };
 
+  // 把 null / 空字符串 / 只有空白的字符串都视为"未填", 不传给后端
+  // (避免后端把 DB 中已存内容清成 null)
+  const _trimOrUndef = (v: string | null | undefined): string | undefined => {
+    if (v == null) return undefined;
+    const t = v.trim();
+    return t.length > 0 ? t : undefined;
+  };
+
   // 真发请求保存 draft → DB
   const commitDraft = async (orderId: number) => {
     const original = orders.find((o) => o.id === orderId);
@@ -528,12 +536,12 @@ function HistoryOrdersTable({
     try {
       await completeOrder(orderId, {
         operatorId,
-        productName: merged.productName ?? undefined,
-        salePrice: merged.salePrice ?? undefined,
+        productName: _trimOrUndef(merged.productName),
+        salePrice: _trimOrUndef(merged.salePrice),
         saleCurrency: (merged.saleCurrency as SaleCurrency | null) ?? undefined,
         walletMethodId: merged.walletMethodId ?? undefined,
         walletItemId: merged.walletItemId ?? undefined,
-        remark: merged.remark ?? undefined
+        remark: _trimOrUndef(merged.remark)
       });
       // 清掉这一行的 draft
       setDrafts((prev) => {
@@ -630,15 +638,21 @@ function HistoryOrdersTable({
             (merged.saleCurrency as SaleCurrency | null | undefined) ??
             (selectedMethod?.currency as SaleCurrency | null | undefined) ??
             null;
-          const isComplete = _isRowComplete(merged);
+          // CEO 2026-05-14: 区分 "DB 实际存了"(savedComplete) 和 "客户端看到的合并状态"(mergedComplete)
+          // 行颜色只看 savedComplete (是否真存到 DB), 防止"绿色但其实是草稿"误导客服。
+          const savedComplete = _isRowComplete(order);
+          const mergedComplete = _isRowComplete(merged);
           const missing = _missingFields(merged);
           const countdown = countdowns.get(order.id);
           const isSaving = savingIds.has(order.id);
           const justSaved = justSavedIds.has(order.id);
           const hasDraft = drafts.has(order.id);
 
-          // 行底色: 完整 → 浅绿; 不完整 → 浅红
-          const rowBg = isComplete ? "bg-emerald-50/50" : "bg-rose-50/40";
+          // 行底色: 真存到 DB 且必填齐 → 浅绿; 其他(草稿中 / 不完整) → 浅红
+          // 这样客服一眼看出"绿 = 安全, 红 = 没存"。
+          const rowBg = savedComplete && !hasDraft
+            ? "bg-emerald-50/50"
+            : "bg-rose-50/40";
 
           return (
             <TableRow
@@ -774,7 +788,7 @@ function HistoryOrdersTable({
                   saving={isSaving}
                   justSaved={justSaved}
                   hasDraft={hasDraft}
-                  isComplete={isComplete}
+                  isComplete={mergedComplete}
                   missing={missing}
                 />
               </TableCell>

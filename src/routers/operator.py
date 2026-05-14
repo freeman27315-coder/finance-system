@@ -703,8 +703,12 @@ def operator_complete_order_endpoint(
             wallet_item_id=request.wallet_item_id,
         )
         # 备注独立字段, 不走 update_order_completion (它不管 remark)
+        # CEO 2026-05-14: 空字符串视为"未传", 不清空数据库已有备注。
+        # 真清空场景目前不存在(备注必填), 这里防御性处理避免误传清掉数据。
         if request.remark is not None:
-            order.remark = request.remark.strip() or None
+            cleaned = request.remark.strip()
+            if cleaned:
+                order.remark = cleaned
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
