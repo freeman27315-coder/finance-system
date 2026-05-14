@@ -491,6 +491,19 @@ function HistoryOrdersTable({
   const [justSavedIds, setJustSavedIds] = useState<Set<number>>(new Set());
   const timersRef = useRef<Map<number, ReturnType<typeof setInterval>>>(new Map());
 
+  // CEO 2026-05-14 bug fix: setInterval 的回调里读 React state 会
+  // 出现 stale closure (定时器启动那一刻的快照, 3 秒后还是旧的)。
+  // 用 ref 持续指向最新 drafts / orders, commitDraft 通过 ref 读
+  // 保证拿到最新草稿和最新 DB 数据。
+  const draftsRef = useRef(drafts);
+  const ordersRef = useRef(orders);
+  useEffect(() => {
+    draftsRef.current = drafts;
+  }, [drafts]);
+  useEffect(() => {
+    ordersRef.current = orders;
+  }, [orders]);
+
   // 卸载时清掉所有计时器, 防止 setInterval 泄露
   useEffect(() => {
     return () => {
@@ -525,11 +538,35 @@ function HistoryOrdersTable({
   };
 
   // 真发请求保存 draft → DB
+  // CEO 2026-05-14: 通过 ref 读最新 drafts/orders, 避免 setInterval
+  // closure 拿到 3 秒前的旧快照, 导致看到的草稿"还差字段"提前 return。
   const commitDraft = async (orderId: number) => {
-    const original = orders.find((o) => o.id === orderId);
-    const draft = drafts.get(orderId);
+    const latestOrders = ordersRef.current;
+    const latestDrafts = draftsRef.current;
+    const original = latestOrders.find((o) => o.id === orderId);
+    const draft = latestDrafts.get(orderId);
     if (!original || !draft) return;
-    const merged = merge(original);
+    // inline merge (不能调外层 merge, 因 merge 闭包里仍是旧 drafts)
+    const merged: OperatorOrder = {
+      ...original,
+      productName:
+        draft.productName !== undefined ? draft.productName : original.productName,
+      salePrice:
+        draft.salePrice !== undefined ? draft.salePrice : original.salePrice,
+      saleCurrency:
+        draft.saleCurrency !== undefined
+          ? (draft.saleCurrency as string | null)
+          : original.saleCurrency,
+      walletMethodId:
+        draft.walletMethodId !== undefined
+          ? draft.walletMethodId
+          : original.walletMethodId,
+      walletItemId:
+        draft.walletItemId !== undefined
+          ? draft.walletItemId
+          : original.walletItemId,
+      remark: draft.remark !== undefined ? draft.remark : original.remark
+    };
     if (!_isRowComplete(merged)) return; // 必填没齐, 不存
 
     setSavingIds((prev) => new Set(prev).add(orderId));
