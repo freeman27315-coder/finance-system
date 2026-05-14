@@ -381,6 +381,30 @@ def _do_fetch(
     return FetchResult(success=True, orders=orders, balance=None)
 
 
+def _click_submit(page: Page, timeout_per_try: int = 8_000) -> None:
+    """点击 Microsoft 登录页的"下一步 / 提交"按钮。
+
+    CEO 2026-05-14: Microsoft 登录页按钮形态会变 (input[type=submit] /
+    button[type=submit] / id=idSIButton9 等)。按优先级试,最后兜底按
+    Enter 提交表单,避免单一 selector 没找到就整次同步失败。
+    """
+    selectors = (
+        "#idSIButton9",            # Microsoft 老版标准 id (蓝色 Sign in)
+        'button[type="submit"]',
+        'input[type="submit"]',
+        'button:has-text("Sign in")',
+        'button:has-text("Next")',
+    )
+    for sel in selectors:
+        try:
+            page.click(sel, timeout=timeout_per_try)
+            return
+        except PlaywrightTimeout:
+            continue
+    # 所有 selector 都没找到 → 兜底按 Enter 触发表单 submit
+    page.keyboard.press("Enter")
+
+
 def _do_login(page: Page, email: str, password: str) -> Optional[FetchResult]:
     """登录流程。成功返回 None,失败返回 FetchResult(success=False)。
 
@@ -389,6 +413,9 @@ def _do_login(page: Page, email: str, password: str) -> Optional[FetchResult]:
     导致原先 ``wait_for_selector(loginfmt, state=visible)`` 永远超时。
     修正:先用短超时探一下邮箱框是否可见 — 可见就走完整两步,
     不可见就只走密码步骤。
+
+    CEO 2026-05-14: 提交按钮 selector 抽到 _click_submit 统一处理,
+    多 selector 兜底 + Enter 键 fallback (Microsoft 改按钮 markup 时不挂)。
     """
     try:
         # 邮箱(可选 — 账号被记住时 Microsoft 会跳过)
@@ -403,14 +430,14 @@ def _do_login(page: Page, email: str, password: str) -> Optional[FetchResult]:
 
         if loginfmt_visible:
             page.fill('input[name="loginfmt"]', email)
-            page.click('input[type="submit"]')
+            _click_submit(page)
 
         # 密码(必填)
         page.wait_for_selector(
             'input[name="passwd"]', state="visible", timeout=15_000
         )
         page.fill('input[name="passwd"]', password)
-        page.click('input[type="submit"]')
+        _click_submit(page)
 
         # 检测密码错(URL 不变 + 出现错误提示)
         try:
