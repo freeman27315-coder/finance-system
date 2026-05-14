@@ -11,6 +11,7 @@ import {
   EyeOff,
   Gamepad2,
   Globe2,
+  Loader2,
   LogOut,
   PackageOpen,
   RefreshCcw,
@@ -19,7 +20,7 @@ import {
   Zap
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -413,6 +414,56 @@ export function OperatorWorkbench({ operator }: { operator: StoredOperator }) {
 // - 只读: 账号编号 / 订单编号 / 类型 / 日期 / 经办人(系统自动)
 // ===================================================================
 
+// CEO 2026-05-14: 草稿模式 + 3 秒去抖自动保存
+// - 客服改任一字段进入"草稿"(不立刻发请求)
+// - 改完 3 秒不动 + 必填齐 → 自动 POST → 行变绿
+// - 改完 3 秒不动 + 必填没齐 → 不保存, 行保持红, 草稿仍在内存
+// - 关 Electron / 切账号 → 内存草稿全丢(已保存的 DB 数据保留)
+type RowDraft = {
+  productName?: string | null;
+  salePrice?: string | null;
+  saleCurrency?: SaleCurrency | null;
+  walletMethodId?: number | null;
+  walletItemId?: number | null;
+  remark?: string | null;
+};
+
+const AUTOSAVE_COUNTDOWN_SECONDS = 3;
+
+// CEO 2026-05-14: 必填 4 项 — 收款方式 / 备注模板 / 收款金额(>0) / 备注
+// 商品名是抓取自动填的,经办人 / 币种 系统自动,均不算客服必填。
+function _isRowComplete(o: {
+  walletMethodId: number | null;
+  walletItemId: number | null;
+  salePrice: string | null;
+  remark: string | null;
+}): boolean {
+  const priceNum = o.salePrice ? Number(o.salePrice) : 0;
+  return (
+    o.walletMethodId != null &&
+    o.walletItemId != null &&
+    Number.isFinite(priceNum) &&
+    priceNum > 0 &&
+    !!o.remark &&
+    o.remark.trim().length > 0
+  );
+}
+
+function _missingFields(o: {
+  walletMethodId: number | null;
+  walletItemId: number | null;
+  salePrice: string | null;
+  remark: string | null;
+}): string[] {
+  const m: string[] = [];
+  if (o.walletMethodId == null) m.push("收款方式");
+  if (o.walletItemId == null) m.push("备注模板");
+  const priceNum = o.salePrice ? Number(o.salePrice) : 0;
+  if (!(Number.isFinite(priceNum) && priceNum > 0)) m.push("收款金额");
+  if (!o.remark || o.remark.trim().length === 0) m.push("备注");
+  return m;
+}
+
 function HistoryOrdersTable({
   orders,
   loading,
@@ -433,21 +484,125 @@ function HistoryOrdersTable({
   });
   const methods: WalletMethod[] = methodsQuery.data ?? [];
 
-  // 通用保存函数: 调 PATCH 后刷订单列表
-  const save = async (orderId: number, payload: Record<string, unknown>) => {
-    await completeOrder(orderId, {
-      operatorId,
-      ...(payload as {
-        productName?: string;
-        salePrice?: string;
-        saleCurrency?: SaleCurrency;
-        walletMethodId?: number;
-        walletItemId?: number;
-        remark?: string;
-      })
-    });
-    await queryClient.invalidateQueries({ queryKey: ["operator-orders"] });
+  // === 草稿状态(每行独立) ===
+  const [drafts, setDrafts] = useState<Map<number, RowDraft>>(new Map());
+  const [countdowns, setCountdowns] = useState<Map<number, number>>(new Map());
+  const [savingIds, setSavingIds] = useState<Set<number>>(new Set());
+  const [justSavedIds, setJustSavedIds] = useState<Set<number>>(new Set());
+  const timersRef = useRef<Map<number, ReturnType<typeof setInterval>>>(new Map());
+
+  // 卸载时清掉所有计时器, 防止 setInterval 泄露
+  useEffect(() => {
+    return () => {
+      timersRef.current.forEach((t) => clearInterval(t));
+      timersRef.current.clear();
+    };
+  }, []);
+
+  // 把 draft 覆盖到原 order 上, 得到"当前看到的状态"
+  const merge = (o: OperatorOrder): OperatorOrder => {
+    const d = drafts.get(o.id);
+    if (!d) return o;
+    return {
+      ...o,
+      productName: d.productName !== undefined ? d.productName : o.productName,
+      salePrice: d.salePrice !== undefined ? d.salePrice : o.salePrice,
+      saleCurrency: d.saleCurrency !== undefined ? d.saleCurrency : o.saleCurrency,
+      walletMethodId:
+        d.walletMethodId !== undefined ? d.walletMethodId : o.walletMethodId,
+      walletItemId:
+        d.walletItemId !== undefined ? d.walletItemId : o.walletItemId,
+      remark: d.remark !== undefined ? d.remark : o.remark
+    };
   };
+
+  // 真发请求保存 draft → DB
+  const commitDraft = async (orderId: number) => {
+    const original = orders.find((o) => o.id === orderId);
+    const draft = drafts.get(orderId);
+    if (!original || !draft) return;
+    const merged = merge(original);
+    if (!_isRowComplete(merged)) return; // 必填没齐, 不存
+
+    setSavingIds((prev) => new Set(prev).add(orderId));
+    try {
+      await completeOrder(orderId, {
+        operatorId,
+        productName: merged.productName ?? undefined,
+        salePrice: merged.salePrice ?? undefined,
+        saleCurrency: (merged.saleCurrency as SaleCurrency | null) ?? undefined,
+        walletMethodId: merged.walletMethodId ?? undefined,
+        walletItemId: merged.walletItemId ?? undefined,
+        remark: merged.remark ?? undefined
+      });
+      // 清掉这一行的 draft
+      setDrafts((prev) => {
+        const next = new Map(prev);
+        next.delete(orderId);
+        return next;
+      });
+      // 闪 1.5s "已保存" 标识
+      setJustSavedIds((prev) => new Set(prev).add(orderId));
+      setTimeout(() => {
+        setJustSavedIds((prev) => {
+          const n = new Set(prev);
+          n.delete(orderId);
+          return n;
+        });
+      }, 1500);
+      await queryClient.invalidateQueries({ queryKey: ["operator-orders"] });
+    } catch (e) {
+      console.error("auto-save failed", e);
+    } finally {
+      setSavingIds((prev) => {
+        const n = new Set(prev);
+        n.delete(orderId);
+        return n;
+      });
+    }
+  };
+
+  // 启 / 重置 这一行的 3 秒倒计时
+  const scheduleSave = (orderId: number) => {
+    const old = timersRef.current.get(orderId);
+    if (old) clearInterval(old);
+
+    let remaining = AUTOSAVE_COUNTDOWN_SECONDS;
+    setCountdowns((prev) => new Map(prev).set(orderId, remaining));
+
+    const interval = setInterval(() => {
+      remaining -= 1;
+      if (remaining > 0) {
+        setCountdowns((prev) => new Map(prev).set(orderId, remaining));
+      } else {
+        clearInterval(interval);
+        timersRef.current.delete(orderId);
+        setCountdowns((prev) => {
+          const n = new Map(prev);
+          n.delete(orderId);
+          return n;
+        });
+        void commitDraft(orderId);
+      }
+    }, 1000);
+
+    timersRef.current.set(orderId, interval);
+  };
+
+  // 客服在某字段改了值 → 入 draft + 重置 3 秒倒计时
+  const onFieldChange = (orderId: number, patch: RowDraft) => {
+    setDrafts((prev) => {
+      const next = new Map(prev);
+      const cur = next.get(orderId) ?? {};
+      next.set(orderId, { ...cur, ...patch });
+      return next;
+    });
+    scheduleSave(orderId);
+  };
+
+  // 留作兼容: 之前 EditableCell 调用 save() 是 fire-and-forget,
+  // 现在改成把改动塞进 draft, 立刻 resolve(EditableCell 仍会闪 ✓)。
+  // 真正提交由 commitDraft 在 3s 倒计时结束时发起。
 
   return (
     <Table>
@@ -462,19 +617,34 @@ function HistoryOrdersTable({
           <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[150px]">收款方式</TableHead>
           <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[150px]">备注模板</TableHead>
           <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[170px]">收款金额</TableHead>
-          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[170px]">备注</TableHead>
+          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground min-w-[160px]">备注</TableHead>
+          <TableHead className="h-11 px-3 text-xs font-medium text-muted-foreground w-[88px] text-center">状态</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {orders.map((order) => {
-          const selectedMethod = methods.find((m) => m.id === order.walletMethodId);
+          const merged = merge(order);
+          const selectedMethod = methods.find((m) => m.id === merged.walletMethodId);
           const itemOptions = (selectedMethod?.items ?? []).filter((it) => it.isActive);
-          // CEO 2026-05-14: 客服补销售时, 显示币种 = 已绑定方式的币种 (优先)
-          // 后端若已存了 saleCurrency 走 saleCurrency, 否则 fallback method.currency。
           const lockedCurrency =
-            order.saleCurrency ?? selectedMethod?.currency ?? null;
+            (merged.saleCurrency as SaleCurrency | null | undefined) ??
+            (selectedMethod?.currency as SaleCurrency | null | undefined) ??
+            null;
+          const isComplete = _isRowComplete(merged);
+          const missing = _missingFields(merged);
+          const countdown = countdowns.get(order.id);
+          const isSaving = savingIds.has(order.id);
+          const justSaved = justSavedIds.has(order.id);
+          const hasDraft = drafts.has(order.id);
+
+          // 行底色: 完整 → 浅绿; 不完整 → 浅红
+          const rowBg = isComplete ? "bg-emerald-50/50" : "bg-rose-50/40";
+
           return (
-            <TableRow key={order.id} className="align-middle">
+            <TableRow
+              key={order.id}
+              className={"align-middle transition-colors " + rowBg}
+            >
               <TableCell className="px-3 py-2.5 font-mono text-xs text-muted-foreground">
                 {order.accountNo ?? `#${order.accountId}`}
               </TableCell>
@@ -489,16 +659,19 @@ function HistoryOrdersTable({
                 {formatDateTimeSeconds(order.orderAt)}
               </TableCell>
 
-              {/* 商品名 - 可编辑 */}
+              {/* 商品名 - 可编辑 (非必填; 抓取时自动) */}
               <TableCell className="px-2 py-1.5">
                 <EditableTextCell
-                  value={order.productName}
+                  value={merged.productName}
                   placeholder="如: 5350 档"
-                  onSave={(v) => save(order.id, { productName: v })}
+                  onSave={(v) => {
+                    onFieldChange(order.id, { productName: v });
+                    return Promise.resolve();
+                  }}
                 />
               </TableCell>
 
-              {/* 经办人 - 只读, 系统自动填(补销售时取 operator.display_name) */}
+              {/* 经办人 - 只读, 系统自动填 */}
               <TableCell className="px-3 py-2.5 text-xs whitespace-nowrap">
                 {order.operatorName ? (
                   <span className="font-medium">{order.operatorName}</span>
@@ -512,48 +685,53 @@ function HistoryOrdersTable({
                 )}
               </TableCell>
 
-              {/* 收款方式 - 可编辑 select; 选定后自动锁币种 */}
+              {/* 收款方式 - 选完自动锁币种 */}
               <TableCell className="px-2 py-1.5">
                 <EditableSelectCell<number>
-                  value={order.walletMethodId}
+                  value={merged.walletMethodId}
                   options={methods
                     .filter((m) => m.isActive)
                     .map((m) => ({ value: m.id, label: m.label }))}
                   onSave={(v) => {
                     const m = v != null ? methods.find((mm) => mm.id === v) : null;
-                    return save(order.id, {
-                      walletMethodId: v ?? undefined,
-                      // 换方式时,清空旧 item(防止跨方式的 item 残留)
-                      walletItemId: undefined,
-                      // CEO 2026-05-14: 自动锁币种 = 该方式的币种
-                      saleCurrency: (m?.currency as SaleCurrency | null) ?? undefined
+                    onFieldChange(order.id, {
+                      walletMethodId: v ?? null,
+                      walletItemId: null, // 换方式时清空旧 item
+                      saleCurrency: (m?.currency as SaleCurrency | null) ?? null
                     });
+                    return Promise.resolve();
                   }}
                 />
               </TableCell>
 
-              {/* 备注模板 - 可编辑 select, 依赖 method */}
+              {/* 备注模板 */}
               <TableCell className="px-2 py-1.5">
                 <EditableSelectCell<number>
-                  value={order.walletItemId}
+                  value={merged.walletItemId}
                   options={itemOptions.map((it) => ({
                     value: it.id,
                     label: it.label
                   }))}
                   disabled={!selectedMethod}
                   placeholder={selectedMethod ? "请选择" : "先选收款方式"}
-                  onSave={(v) => save(order.id, { walletItemId: v ?? undefined })}
+                  onSave={(v) => {
+                    onFieldChange(order.id, { walletItemId: v ?? null });
+                    return Promise.resolve();
+                  }}
                 />
               </TableCell>
 
-              {/* 收款金额 - 客服只填数字, 币种自动跟随收款方式 */}
+              {/* 收款金额 + 锁定币种 */}
               <TableCell className="px-2 py-1.5">
                 <div className="flex items-center gap-2">
                   <EditableTextCell
-                    value={order.salePrice}
+                    value={merged.salePrice}
                     placeholder={order.amountLocal}
                     inputMode="decimal"
-                    onSave={(v) => save(order.id, { salePrice: v })}
+                    onSave={(v) => {
+                      onFieldChange(order.id, { salePrice: v });
+                      return Promise.resolve();
+                    }}
                     className="flex-1"
                   />
                   <span
@@ -573,12 +751,27 @@ function HistoryOrdersTable({
                 </div>
               </TableCell>
 
-              {/* 备注 - 可编辑 */}
+              {/* 备注 - 必填 */}
               <TableCell className="px-2 py-1.5">
                 <EditableTextCell
-                  value={order.remark}
-                  placeholder="可自由填写"
-                  onSave={(v) => save(order.id, { remark: v })}
+                  value={merged.remark}
+                  placeholder="必填"
+                  onSave={(v) => {
+                    onFieldChange(order.id, { remark: v });
+                    return Promise.resolve();
+                  }}
+                />
+              </TableCell>
+
+              {/* 状态: 倒计时 / 保存中 / 已保存 / 完整 / 缺字段 */}
+              <TableCell className="px-2 py-1.5 text-center">
+                <RowStatusBadge
+                  countdown={countdown}
+                  saving={isSaving}
+                  justSaved={justSaved}
+                  hasDraft={hasDraft}
+                  isComplete={isComplete}
+                  missing={missing}
                 />
               </TableCell>
             </TableRow>
@@ -586,13 +779,85 @@ function HistoryOrdersTable({
         })}
         {orders.length === 0 ? (
           <TableRow>
-            <TableCell colSpan={10} className="py-8 text-center text-xs text-muted-foreground">
+            <TableCell colSpan={11} className="py-8 text-center text-xs text-muted-foreground">
               {loading ? "加载中…" : empty}
             </TableCell>
           </TableRow>
         ) : null}
       </TableBody>
     </Table>
+  );
+}
+
+// 状态徽章: 显示在每行最右侧, 反映当前行处于哪个阶段
+function RowStatusBadge({
+  countdown,
+  saving,
+  justSaved,
+  hasDraft,
+  isComplete,
+  missing
+}: {
+  countdown: number | undefined;
+  saving: boolean;
+  justSaved: boolean;
+  hasDraft: boolean;
+  isComplete: boolean;
+  missing: string[];
+}) {
+  if (saving) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md bg-blue-100 px-2 py-1 text-[11px] font-medium text-blue-700">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        保存中
+      </span>
+    );
+  }
+  if (justSaved) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md bg-emerald-100 px-2 py-1 text-[11px] font-medium text-emerald-700">
+        <CheckCircle2 className="h-3 w-3" />
+        已保存
+      </span>
+    );
+  }
+  if (countdown != null && countdown > 0) {
+    // 改了字段、倒计时中
+    return (
+      <span
+        className={
+          "inline-flex h-6 w-12 items-center justify-center gap-1 rounded-md px-2 text-[11px] font-semibold tabular-nums " +
+          (isComplete
+            ? "bg-emerald-100 text-emerald-700"
+            : "bg-amber-100 text-amber-700")
+        }
+        title={
+          isComplete
+            ? `${countdown} 秒后自动保存`
+            : `${countdown} 秒…还差: ${missing.join(" / ")}`
+        }
+      >
+        {countdown}s
+      </span>
+    );
+  }
+  if (isComplete) {
+    // 完整 + 没草稿 = 已保存到 DB
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700">
+        <CheckCircle2 className="h-3 w-3" />
+        完成
+      </span>
+    );
+  }
+  // 不完整 (草稿停了 / 从来没碰过) → 提示缺啥
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-md bg-rose-100 px-2 py-1 text-[11px] font-medium text-rose-700"
+      title={hasDraft ? `还差: ${missing.join(" / ")}` : `请补: ${missing.join(" / ")}`}
+    >
+      待补 {missing.length}
+    </span>
   );
 }
 
