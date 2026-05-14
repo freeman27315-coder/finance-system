@@ -342,15 +342,33 @@ def _do_fetch(
 
 
 def _do_login(page: Page, email: str, password: str) -> Optional[FetchResult]:
-    """登录流程。成功返回 None,失败返回 FetchResult(success=False)。"""
-    try:
-        # 邮箱
-        page.wait_for_selector('input[name="loginfmt"]', timeout=15_000)
-        page.fill('input[name="loginfmt"]', email)
-        page.click('input[type="submit"]')
+    """登录流程。成功返回 None,失败返回 FetchResult(success=False)。
 
-        # 密码
-        page.wait_for_selector('input[name="passwd"]', timeout=15_000)
+    CEO 2026-05-13: Microsoft 有时会"记住账号"(cookies 仍存了登录身份),
+    登录页直接跳到密码输入界面,邮箱 input 变成 ``type=hidden``,
+    导致原先 ``wait_for_selector(loginfmt, state=visible)`` 永远超时。
+    修正:先用短超时探一下邮箱框是否可见 — 可见就走完整两步,
+    不可见就只走密码步骤。
+    """
+    try:
+        # 邮箱(可选 — 账号被记住时 Microsoft 会跳过)
+        loginfmt_visible = False
+        try:
+            page.wait_for_selector(
+                'input[name="loginfmt"]', state="visible", timeout=3_000
+            )
+            loginfmt_visible = True
+        except PlaywrightTimeout:
+            loginfmt_visible = False
+
+        if loginfmt_visible:
+            page.fill('input[name="loginfmt"]', email)
+            page.click('input[type="submit"]')
+
+        # 密码(必填)
+        page.wait_for_selector(
+            'input[name="passwd"]', state="visible", timeout=15_000
+        )
         page.fill('input[name="passwd"]', password)
         page.click('input[type="submit"]')
 
