@@ -2519,59 +2519,116 @@ function WalletSettingsEditModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <Card className="w-full max-w-3xl max-h-[90vh] flex flex-col">
+      <Card className="w-full max-w-4xl max-h-[90vh] flex flex-col">
         <CardHeader>
           <CardTitle>编辑钱包设置</CardTitle>
           <div className="mt-1 text-xs text-muted-foreground">
             收款方式 → 备注模板 → 资金池(具体钱包)。保存即全量同步。
           </div>
+          {/* CEO 2026-05-14: 把字段含义讲清楚, 不让 CEO 看着像"代码" */}
+          <div className="mt-3 rounded-md border border-blue-200 bg-blue-50/60 p-3 text-xs leading-relaxed text-blue-900">
+            <div className="mb-1 font-semibold">这张表是什么?</div>
+            客服在补销售时, 先选 <span className="font-semibold">收款方式</span>(如「淘宝渠道」),
+            再选 <span className="font-semibold">备注模板</span>(如「丙火网络」), 系统就知道这单的钱要落到哪个
+            <span className="font-semibold">资金池</span>(理论值钱包)。
+            <div className="mt-2 font-semibold">两个名字的区别:</div>
+            <ul className="ml-4 list-disc">
+              <li>
+                <span className="font-semibold">英文简称</span> = 系统内部识别用,
+                客服界面看不到。建议用拼音首字母或英文短词(如 <code className="rounded bg-blue-100 px-1">taobao_channel</code>、
+                <code className="rounded bg-blue-100 px-1">binghuo</code>)。保存后**不建议改**,改了对账历史可能会乱。
+              </li>
+              <li>
+                <span className="font-semibold">显示名称</span> = 客服在 Electron 看到的中文名。
+                随时改, 不影响数据。
+              </li>
+            </ul>
+          </div>
         </CardHeader>
         <CardContent className="flex-1 overflow-y-auto space-y-4">
           {methods.map((m, mIdx) => (
             <Card key={mIdx} className="border-2">
-              <CardContent className="p-3 space-y-2">
-                <div className="grid grid-cols-3 gap-2">
-                  <input
-                    className="h-9 rounded-md border border-border bg-card px-3 text-sm outline-none"
-                    value={m.code}
-                    onChange={(e) => updateMethod(mIdx, "code", e.target.value)}
-                    placeholder="code 如 agent"
-                  />
-                  <input
-                    className="h-9 rounded-md border border-border bg-card px-3 text-sm outline-none col-span-1"
-                    value={m.label}
-                    onChange={(e) => updateMethod(mIdx, "label", e.target.value)}
-                    placeholder="label 如 代理"
-                  />
+              <CardContent className="p-4 space-y-3">
+                {/* 收款方式标题区 */}
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold text-foreground">
+                    收款方式 #{mIdx + 1}
+                  </div>
                   <Button variant="ghost" size="sm" onClick={() => removeMethod(mIdx)} className="text-red-600">
-                    删除收款方式
+                    删除整个收款方式
                   </Button>
                 </div>
-                <div className="ml-4 space-y-1">
-                  <div className="text-xs text-muted-foreground">备注模板</div>
+                {/* 收款方式的两个名字 */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground">
+                      显示名称(客服看到的中文)
+                    </label>
+                    <input
+                      className="h-9 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+                      value={m.label}
+                      onChange={(e) => updateMethod(mIdx, "label", e.target.value)}
+                      placeholder="例如:淘宝渠道 / 台湾渠道 / 代理"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-muted-foreground">
+                      英文简称(系统内部用,客服看不到)
+                    </label>
+                    <input
+                      className="h-9 w-full rounded-md border border-border bg-card px-3 text-sm font-mono outline-none focus:ring-2 focus:ring-primary"
+                      value={m.code}
+                      onChange={(e) => updateMethod(mIdx, "code", e.target.value)}
+                      placeholder="例如:taobao_channel"
+                    />
+                  </div>
+                </div>
+
+                {/* 备注模板区 */}
+                <div className="rounded-md border border-border bg-muted/30 p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-semibold text-muted-foreground">
+                      下属备注模板(客服第二步会选这个)
+                    </div>
+                    <span className="text-[10px] text-muted-foreground">
+                      共 {m.items.length} 个
+                    </span>
+                  </div>
+
+                  {/* 表头(只显示一次, 不是每行都重复) */}
+                  {m.items.length > 0 ? (
+                    <div className="grid grid-cols-12 gap-2 px-1 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                      <div className="col-span-3">显示名称</div>
+                      <div className="col-span-3">英文简称</div>
+                      <div className="col-span-4">对应资金池(钱算到哪)</div>
+                      <div className="col-span-1 text-center">币种</div>
+                      <div className="col-span-1 text-center">操作</div>
+                    </div>
+                  ) : null}
+
                   {m.items.map((it, iIdx) => {
                     const idx = buildPoolWalletIndex(poolGroups);
                     const pool = idx.get(it.walletPoolId);
                     return (
-                      <div key={iIdx} className="grid grid-cols-12 gap-1 items-center">
+                      <div key={iIdx} className="grid grid-cols-12 gap-2 items-center">
                         <input
-                          className="col-span-2 h-8 rounded-md border border-border bg-card px-2 text-xs"
-                          value={it.code}
-                          onChange={(e) => updateItem(mIdx, iIdx, "code", e.target.value)}
-                          placeholder="code"
-                        />
-                        <input
-                          className="col-span-3 h-8 rounded-md border border-border bg-card px-2 text-xs"
+                          className="col-span-3 h-9 rounded-md border border-border bg-card px-2 text-sm outline-none focus:ring-2 focus:ring-primary"
                           value={it.label}
                           onChange={(e) => updateItem(mIdx, iIdx, "label", e.target.value)}
-                          placeholder="label"
+                          placeholder="如 丙火网络"
+                        />
+                        <input
+                          className="col-span-3 h-9 rounded-md border border-border bg-card px-2 text-xs font-mono outline-none focus:ring-2 focus:ring-primary"
+                          value={it.code}
+                          onChange={(e) => updateItem(mIdx, iIdx, "code", e.target.value)}
+                          placeholder="如 binghuo"
                         />
                         <select
-                          className="col-span-5 h-8 rounded-md border border-border bg-card px-2 text-xs"
+                          className="col-span-4 h-9 rounded-md border border-border bg-card px-2 text-xs outline-none focus:ring-2 focus:ring-primary"
                           value={it.walletPoolId}
                           onChange={(e) => updateItem(mIdx, iIdx, "walletPoolId", e.target.value)}
                         >
-                          <option value="">-- 资金池 --</option>
+                          <option value="">-- 请选资金池 --</option>
                           {poolGroups.map((g) => (
                             <optgroup key={g.groupCode} label={`── ${g.groupLabel} ──`}>
                               {g.wallets.map((w) => (
@@ -2582,26 +2639,34 @@ function WalletSettingsEditModal({
                             </optgroup>
                           ))}
                         </select>
-                        <span className="col-span-1 text-xs text-muted-foreground truncate">
-                          {pool?.currency ?? ""}
-                        </span>
-                        <Button variant="ghost" size="sm" onClick={() => removeItem(mIdx, iIdx)} className="col-span-1 text-red-600">
+                        <div className="col-span-1 flex items-center justify-center">
+                          <span className="inline-flex h-6 min-w-[40px] items-center justify-center rounded bg-muted px-1 text-[11px] font-semibold tracking-wide text-muted-foreground">
+                            {pool?.currency ?? "—"}
+                          </span>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeItem(mIdx, iIdx)}
+                          title="删除此备注模板"
+                          className="col-span-1 h-8 px-1 text-[11px] text-red-600 hover:bg-red-50"
+                        >
                           删
                         </Button>
                       </div>
                     );
                   })}
-                  <Button variant="outline" size="sm" onClick={() => addItem(mIdx)}>
+                  <Button variant="outline" size="sm" onClick={() => addItem(mIdx)} className="w-full">
                     <Plus className="h-3 w-3" />
-                    加备注模板
+                    加一个备注模板
                   </Button>
                 </div>
               </CardContent>
             </Card>
           ))}
-          <Button variant="outline" onClick={addMethod}>
+          <Button variant="outline" onClick={addMethod} className="w-full">
             <Plus className="h-4 w-4" />
-            加收款方式
+            加一个新的收款方式
           </Button>
 
           {error ? (
