@@ -34,6 +34,7 @@ import os
 import re
 import sys
 import threading
+import time
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -269,6 +270,43 @@ def _launch_context(p: Playwright) -> BrowserContext:
     return ctx
 
 
+# CEO 2026-05-14: 网络瞬时抖动错误(WiFi 切换 / VPN 重连 / 短暂断网) -
+# Chromium 抛 net::ERR_NETWORK_CHANGED 等错误码。
+# page.goto 时遇到这类**瞬态**错误,自动重试,不直接整次同步失败。
+_TRANSIENT_NET_ERRORS = (
+    "ERR_NETWORK_CHANGED",
+    "ERR_NETWORK_IO_SUSPENDED",
+    "ERR_INTERNET_DISCONNECTED",
+    "ERR_CONNECTION_RESET",
+    "ERR_CONNECTION_CLOSED",
+    "ERR_TIMED_OUT",
+    "ERR_NAME_NOT_RESOLVED",
+)
+
+
+def _is_transient_net_error(exc: BaseException) -> bool:
+    msg = str(exc)
+    return any(code in msg for code in _TRANSIENT_NET_ERRORS)
+
+
+def _goto_with_retry(
+    page: Page,
+    url: str,
+    *,
+    retries: int = 2,
+    sleep_seconds: float = 1.5,
+    **kwargs,
+):
+    """``page.goto`` 包裹瞬态网络错误自动重试(总尝试次数 = retries + 1)。"""
+    for attempt in range(retries + 1):
+        try:
+            return page.goto(url, **kwargs)
+        except Exception as exc:
+            if attempt >= retries or not _is_transient_net_error(exc):
+                raise
+            time.sleep(sleep_seconds)
+
+
 def _do_fetch(
     page: Page,
     login_email: str,
@@ -279,8 +317,10 @@ def _do_fetch(
     - 不用 networkidle (Microsoft 页面 XHR 永不停, 等满超时)
     - 直接等订单卡片 selector 出现
     - 资源拦截在 _launch_context 里 (图片/字体/广告)
+
+    CEO 2026-05-14: page.goto 自动重试 ERR_NETWORK_CHANGED 等瞬态错误。
     """
-    page.goto(_ORDERS_URL, wait_until="commit", timeout=30_000)
+    _goto_with_retry(page, _ORDERS_URL, wait_until="commit", timeout=30_000)
 
     # "Is your security info still accurate?" 提示页 - 自动点 Looks good
     # 用短超时检测(没出现就跳过, 不阻塞主流程)
@@ -300,11 +340,11 @@ def _do_fetch(
         if login_result is not None:
             return login_result
         if "account.microsoft.com/billing/orders" not in page.url:
-            page.goto(_ORDERS_URL, wait_until="commit", timeout=30_000)
+            _goto_with_retry(page, _ORDERS_URL, wait_until="commit", timeout=30_000)
 
     # 兜底再 goto 一次(如果中间跳到首页等)
     if "account.microsoft.com/billing/orders" not in page.url:
-        page.goto(_ORDERS_URL, wait_until="commit", timeout=30_000)
+        _goto_with_retry(page, _ORDERS_URL, wait_until="commit", timeout=30_000)
 
     # 直接等订单卡片 — 不用 networkidle (Microsoft 后台 XHR 永不停)
     try:
