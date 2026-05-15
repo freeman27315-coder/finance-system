@@ -398,6 +398,12 @@ def _try_fetch_balance(page: Page) -> Optional[FetchedBalance]:
     CEO 2026-05-14 截图: "Microsoft 帐户余额: 0.28 USD"
     — 币种 USD 在数字**后**, 不是前。
     """
+    debug_dir = _user_data_dir().parent / "debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    debug_path = debug_dir / "balance_fetch.txt"
+    body_text = ""
+    final_url = ""
+
     try:
         _goto_with_retry(
             page,
@@ -412,8 +418,17 @@ def _try_fetch_balance(page: Page) -> Optional[FetchedBalance]:
                 break
             except PlaywrightTimeout:
                 continue
+        final_url = page.url
         body_text = page.inner_text("body", timeout=10_000)
-    except Exception:
+    except Exception as exc:
+        try:
+            debug_path.write_text(
+                f"EXCEPTION during balance fetch: {type(exc).__name__}: {exc}\n"
+                f"final_url={final_url}\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
         return None
 
     # 两步匹配:
@@ -427,6 +442,14 @@ def _try_fetch_balance(page: Page) -> Optional[FetchedBalance]:
     )
     m = keyword_re.search(body_text)
     if not m:
+        try:
+            debug_path.write_text(
+                f"NO KEYWORD MATCH\nfinal_url={final_url}\n"
+                f"---body_text (first 3000 chars)---\n{body_text[:3000]}\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
         return None
 
     segment = body_text[m.end() : m.end() + 100]
@@ -444,6 +467,17 @@ def _try_fetch_balance(page: Page) -> Optional[FetchedBalance]:
     )
     m2 = amount_re.search(segment)
     if not m2:
+        try:
+            debug_path.write_text(
+                f"KEYWORD HIT BUT NO AMOUNT MATCH\nfinal_url={final_url}\n"
+                f"keyword='{m.group(0)}' at pos {m.start()}-{m.end()}\n"
+                f"segment(100chars)={segment!r}\n"
+                f"---body_text (3000 chars around keyword)---\n"
+                f"{body_text[max(0, m.start()-200) : m.end()+800]}\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
         return None
 
     num = (
@@ -458,7 +492,16 @@ def _try_fetch_balance(page: Page) -> Optional[FetchedBalance]:
     if not num:
         return None
     try:
-        return FetchedBalance(currency=cur, balance=Decimal(num))
+        result = FetchedBalance(currency=cur, balance=Decimal(num))
+        try:
+            debug_path.write_text(
+                f"OK balance={result.balance} {result.currency}\n"
+                f"final_url={final_url}\nkeyword='{m.group(0)}' segment={segment!r}\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+        return result
     except Exception:
         return None
 
