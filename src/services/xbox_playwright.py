@@ -405,16 +405,26 @@ def _try_fetch_balance(page: Page) -> Optional[FetchedBalance]:
     final_url = ""
 
     try:
+        # CEO 2026-05-14 调试发现: /billing 会被 Microsoft 301 redirect 回
+        # /billing/orders, 跑根本没拉到余额页。CEO 截图的余额徽章在
+        # /billing/payments (付款选项页), 这里直接进它。
         _goto_with_retry(
             page,
-            "https://account.microsoft.com/billing",
+            "https://account.microsoft.com/billing/payments",
             wait_until="commit",
             timeout=30_000,
         )
-        # 等出现"余额"字样(中英文任一)
-        for sel in ("text=余额", "text=Microsoft account balance", "text=Balance"):
+        # 等出现"余额"字样(中英文任一); 任意一个命中即可
+        for sel in (
+            "text=Microsoft account balance",
+            "text=Microsoft 帐户余额",
+            "text=Microsoft 账户余额",
+            "text=Account balance",
+            "text=余额",
+            "text=Balance",
+        ):
             try:
-                page.wait_for_selector(sel, timeout=8_000)
+                page.wait_for_selector(sel, timeout=6_000)
                 break
             except PlaywrightTimeout:
                 continue
