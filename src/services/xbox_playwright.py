@@ -902,19 +902,23 @@ def _handle_login_prompts(page: Page) -> str:
 def _full_login(page: Page, email: str, password: str) -> bool:
     """完整登录流程。cookies 失效 / 首次时调。
     流程:邮箱 → 选密码方式 → 密码 → 处理所有弹窗。返回是否成功。
-    """
-    # 0. 起点: login.live.com 或 page.url 已经在 login 流程
-    if "login.live.com" not in page.url and "login.microsoftonline.com" not in page.url:
-        try:
-            page.goto(
-                "https://login.live.com/",
-                wait_until="domcontentloaded",
-                timeout=20_000,
-            )
-        except Exception:
-            pass
 
-    # 1. 邮箱(若邮箱框可见)
+    CEO 2026-05-15: 强制跳 login.live.com 标准入口(避开 OAuth authorize
+    中间页 — 那种页面 body 里只有"登录/登录选项"几个字, 没邮箱框)。
+    login.live.com 是 Microsoft 个人账号标准入口, 一定有 loginfmt 邮箱框。
+    """
+    # 0. 强制跳标准登录入口
+    try:
+        page.goto(
+            "https://login.live.com/",
+            wait_until="domcontentloaded",
+            timeout=20_000,
+        )
+        page.wait_for_timeout(1_500)
+    except Exception:
+        pass
+
+    # 1. 邮箱(login.live.com 标准入口必有)
     try:
         page.wait_for_selector(
             'input[name="loginfmt"], input[type="email"]',
@@ -927,8 +931,28 @@ def _full_login(page: Page, email: str, password: str) -> bool:
         _click_submit(page)
         page.wait_for_timeout(2_000)
     except PlaywrightTimeout:
-        # 邮箱框不可见 - 可能账号已被记住, 直接进密码页或选方式页
-        pass
+        # 极少数情况邮箱框还是不可见 — 试点"登录"按钮唤出再试一次
+        _click_first(page, [
+            "button:has-text('登录')",
+            "button:has-text('Sign in')",
+            "a[href*='login']",
+            "text=登录",
+            "text=Sign in",
+        ])
+        page.wait_for_timeout(2_000)
+        try:
+            page.wait_for_selector(
+                'input[name="loginfmt"], input[type="email"]',
+                state="visible",
+                timeout=8_000,
+            )
+            page.locator(
+                'input[name="loginfmt"], input[type="email"]'
+            ).first.fill(email)
+            _click_submit(page)
+            page.wait_for_timeout(2_000)
+        except PlaywrightTimeout:
+            pass  # 让后续步骤兜底, 不直接放弃
 
     # 2. 选择登录方式(若 Microsoft 推 passkey 而非密码)
     _select_password_option(page, email)
