@@ -47,7 +47,10 @@ from src.models.xbox import (
 from src.utils.time import china_now
 
 
-VALID_SYNC_COUNTS = (10, 20, 30, 50)
+# CEO 2026-05-15: 200 = "抓 Microsoft 过去 3 个月全部" 的语义值
+# (实际 _scroll_load_orders 抓到没更多就停, 200 只是上限保险)。
+# 客服 UI 上的 10/20/30/50 已改为"每页显示条数", 不再传给后端。
+VALID_SYNC_COUNTS = (10, 20, 30, 50, 200)
 
 
 # CEO 2026-05-12 Q1-A: 同步爬到 balance.currency 后自动识别国家

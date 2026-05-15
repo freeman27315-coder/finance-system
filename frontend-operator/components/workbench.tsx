@@ -55,7 +55,12 @@ import type { OperatorOrder, SaleCurrency, WalletMethod } from "@/types";
 // 类型 SaleCurrency 仍保留,用于 save() payload 类型标注 + 后续可能的新映射。
 
 const MAX_CLAIMS = 3;
-const SYNC_COUNTS = [10, 20, 30, 50] as const;
+// CEO 2026-05-15: 这组数字原本是"同步条数"(决定每次同步从 Microsoft 抓多少单),
+// 已改为"每页显示条数"(纯前端分页, 不传给后端)。
+// 同步永远抓 Microsoft 过去 3 个月全部 → 后端 count 写死 200 (实际由
+// _scroll_load_orders 滚到没更多自动停)。
+const PAGE_SIZES = [10, 20, 30, 50] as const;
+const SYNC_ALL_COUNT = 200; // 给后端的"抓所有"上限保险值
 const MICROSOFT_LOGIN_URL = "https://login.live.com/";
 
 // ===================================================================
@@ -67,7 +72,7 @@ export function OperatorWorkbench({ operator }: { operator: StoredOperator }) {
   const queryClient = useQueryClient();
 
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
-  const [syncCount, setSyncCount] = useState<10 | 20 | 30 | 50>(20);
+  const [pageSize, setPageSize] = useState<10 | 20 | 30 | 50>(20);
   const [error, setError] = useState<string | null>(null);
   const [syncSummary, setSyncSummary] = useState<string | null>(null);
   const [claimPanelOpen, setClaimPanelOpen] = useState(false);
@@ -114,7 +119,8 @@ export function OperatorWorkbench({ operator }: { operator: StoredOperator }) {
   }, [activeClaims, selectedAccountId]);
 
   const syncMut = useMutation({
-    mutationFn: () => syncOrders(selectedAccountId!, operator.id, syncCount),
+    // CEO 2026-05-15: 同步永远抓 Microsoft 过去 3 个月全部, 不再受 UI 影响
+    mutationFn: () => syncOrders(selectedAccountId!, operator.id, SYNC_ALL_COUNT),
     onSuccess: async (data) => {
       setError(null);
       const balanceText = data.balance
@@ -226,18 +232,18 @@ export function OperatorWorkbench({ operator }: { operator: StoredOperator }) {
                   </select>
                 </div>
 
-                {/* 同步条数 */}
+                {/* CEO 2026-05-15: 改为"每页显示条数", 控制下方历史订单表分页, 不传后端 */}
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-muted-foreground">
-                    同步条数
+                    每页显示
                   </label>
                   <div className="flex gap-1">
-                    {SYNC_COUNTS.map((n) => (
+                    {PAGE_SIZES.map((n) => (
                       <Button
                         key={n}
                         size="sm"
-                        variant={syncCount === n ? "default" : "outline"}
-                        onClick={() => setSyncCount(n)}
+                        variant={pageSize === n ? "default" : "outline"}
+                        onClick={() => setPageSize(n)}
                         className="h-10 px-3"
                       >
                         {n}
@@ -374,6 +380,7 @@ export function OperatorWorkbench({ operator }: { operator: StoredOperator }) {
               }
               operatorId={operator.id}
               queryClient={queryClient}
+              pageSize={pageSize}
             />
           </CardContent>
         </Card>
@@ -469,13 +476,15 @@ function HistoryOrdersTable({
   loading,
   empty,
   operatorId,
-  queryClient
+  queryClient,
+  pageSize
 }: {
   orders: OperatorOrder[];
   loading: boolean;
   empty: string;
   operatorId: number;
   queryClient: ReturnType<typeof useQueryClient>;
+  pageSize: number;
 }) {
   // 加载钱包方式/模板用于 inline select
   const methodsQuery = useQuery({
@@ -483,6 +492,23 @@ function HistoryOrdersTable({
     queryFn: getWalletMethods
   });
   const methods: WalletMethod[] = methodsQuery.data ?? [];
+
+  // CEO 2026-05-15: 历史订单前端分页
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const totalPages = Math.max(1, Math.ceil(orders.length / pageSize));
+
+  // pageSize 变了 / 订单数变了 → 重置到第 1 页, 避免越界
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(1);
+  }, [totalPages, currentPage]);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [pageSize]);
+
+  const pagedOrders = orders.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize
+  );
 
   // === 草稿状态(每行独立) ===
   const [drafts, setDrafts] = useState<Map<number, RowDraft>>(new Map());
@@ -650,6 +676,7 @@ function HistoryOrdersTable({
   // 真正提交由 commitDraft 在 3s 倒计时结束时发起。
 
   return (
+    <>
     <Table>
       <TableHeader>
         <TableRow className="hover:bg-transparent">
@@ -667,7 +694,7 @@ function HistoryOrdersTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {orders.map((order) => {
+        {pagedOrders.map((order) => {
           const merged = merge(order);
           const selectedMethod = methods.find((m) => m.id === merged.walletMethodId);
           const itemOptions = (selectedMethod?.items ?? []).filter((it) => it.isActive);
@@ -841,6 +868,64 @@ function HistoryOrdersTable({
         ) : null}
       </TableBody>
     </Table>
+    {/* CEO 2026-05-15: 底部分页器 */}
+    {orders.length > pageSize ? (
+      <div className="flex items-center justify-between border-t border-border px-4 py-3 text-xs">
+        <div className="text-muted-foreground">
+          共 <span className="font-medium text-foreground">{orders.length}</span> 单
+          ,第 <span className="font-medium text-foreground">{currentPage}</span>
+          {" / "}
+          <span className="font-medium text-foreground">{totalPages}</span> 页
+          ,本页显示{" "}
+          <span className="font-medium text-foreground">
+            {pagedOrders.length}
+          </span>{" "}
+          条
+        </div>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage(1)}
+            disabled={currentPage <= 1}
+            className="h-8 px-2"
+          >
+            首页
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+            disabled={currentPage <= 1}
+            className="h-8 px-2"
+          >
+            上一页
+          </Button>
+          <span className="px-2 tabular-nums">
+            {currentPage} / {totalPages}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+            disabled={currentPage >= totalPages}
+            className="h-8 px-2"
+          >
+            下一页
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage(totalPages)}
+            disabled={currentPage >= totalPages}
+            className="h-8 px-2"
+          >
+            末页
+          </Button>
+        </div>
+      </div>
+    ) : null}
+    </>
   );
 }
 
