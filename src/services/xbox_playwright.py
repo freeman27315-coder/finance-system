@@ -407,72 +407,60 @@ def _try_fetch_balance(page: Page, password_plain: str) -> Optional[FetchedBalan
     final_url = ""
 
     try:
-        # CEO 2026-05-14 调试发现:
-        # (1) /billing 会被 301 redirect 回 /billing/orders, 不显示余额
-        # (2) /billing/payments 有余额徽章, 但 Microsoft 视为高敏感页,
-        #     会要求 reauth (即使 cookies 有效, 也跳到 login.live.com 让
-        #     再次输密码)
+        # CEO 2026-05-14 调试 + 截图证据:
+        #   /billing → 301 redirect 回 /billing/orders, 不显示余额
+        #   /billing/payments → Microsoft reauth(高敏感页)
+        #   ✅ 账户主页 / 直接显示 "Microsoft account balance (USD 0.28)"
+        #     在"付款选项"折叠区, 不需要 reauth
         _goto_with_retry(
             page,
-            "https://account.microsoft.com/billing/payments",
+            "https://account.microsoft.com/",
             wait_until="commit",
             timeout=30_000,
         )
 
-        # 处理 reauth: 若 URL 被弹到登录页, 再过一次密码
+        # 兜底: 万一主页也被 reauth 拦住 (不该出现, 留作防御)
         if "login.live.com" in page.url or "login.microsoftonline.com" in page.url:
             try:
                 page.wait_for_selector(
-                    'input[name="passwd"]', state="visible", timeout=8_000
+                    'input[name="passwd"]', state="visible", timeout=6_000
                 )
                 page.fill('input[name="passwd"]', password_plain)
                 _click_submit(page)
-                # 等回到 billing/payments (或者其他 account.microsoft.com 页)
                 try:
-                    page.wait_for_url(
-                        "**/billing/payments**", timeout=20_000
-                    )
+                    page.wait_for_url("**account.microsoft.com**", timeout=15_000)
                 except PlaywrightTimeout:
-                    # 可能跳到了 /billing/orders 等, 不强求, 继续往下抓
-                    pass
-                # "Stay signed in?" 二次确认 - 点 Yes
-                try:
-                    yes_btn = page.locator(
-                        'input[id="idSIButton9"], input[value="Yes"]'
-                    )
-                    if yes_btn.count() > 0:
-                        yes_btn.first.click(timeout=3_000)
-                except Exception:
                     pass
             except PlaywrightTimeout:
                 pass
 
-        # 如果仍在 login 页, 再 goto 一次目标
-        if "account.microsoft.com" not in page.url:
-            try:
-                _goto_with_retry(
-                    page,
-                    "https://account.microsoft.com/billing/payments",
-                    wait_until="commit",
-                    timeout=20_000,
-                )
-            except Exception:
-                pass
-
-        # 等出现"余额"字样(中英文任一); 任意一个命中即可
+        # 等"账户余额"字样出现(中英文任一)
         for sel in (
             "text=Microsoft account balance",
             "text=Microsoft 帐户余额",
             "text=Microsoft 账户余额",
             "text=Account balance",
-            "text=余额",
-            "text=Balance",
         ):
             try:
-                page.wait_for_selector(sel, timeout=6_000)
+                page.wait_for_selector(sel, timeout=8_000)
                 break
             except PlaywrightTimeout:
                 continue
+
+        # 如果"付款选项"是折叠状态, 展开一下让余额可见
+        try:
+            for btn_label in ("付款选项", "Payment options", "Payment & billing"):
+                btn = page.get_by_role("button", name=btn_label, exact=False)
+                if btn.count() > 0:
+                    try:
+                        btn.first.click(timeout=2_000)
+                        page.wait_for_timeout(800)
+                    except Exception:
+                        pass
+                    break
+        except Exception:
+            pass
+
         final_url = page.url
         body_text = page.inner_text("body", timeout=10_000)
     except Exception as exc:
