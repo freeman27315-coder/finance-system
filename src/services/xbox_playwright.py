@@ -393,9 +393,10 @@ def _do_fetch(
 def _try_fetch_balance(page: Page) -> Optional[FetchedBalance]:
     """爬 Microsoft 账户余额。失败返回 None, 不阻塞主流程。
 
-    Microsoft 把账户余额(Microsoft account balance / Account credit)
-    放在 https://account.microsoft.com/billing 概览页。我们跳过去,
-    用正则在整页文本里匹配"余额关键字 + 金额"模式。
+    Microsoft 把账户余额(Microsoft account balance / Microsoft 帐户余额)
+    放在 https://account.microsoft.com/billing 概览页/付款页右上角徽章里。
+    CEO 2026-05-14 截图: "Microsoft 帐户余额: 0.28 USD"
+    — 币种 USD 在数字**后**, 不是前。
     """
     try:
         _goto_with_retry(
@@ -404,44 +405,62 @@ def _try_fetch_balance(page: Page) -> Optional[FetchedBalance]:
             wait_until="commit",
             timeout=30_000,
         )
-        # 等页面有内容(任意带 $/£/€/¥ 的金额)出现
-        try:
-            page.wait_for_selector(
-                'text=/[\\$£€¥]\\s*\\d/',
-                timeout=10_000,
-            )
-        except PlaywrightTimeout:
-            pass
+        # 等出现"余额"字样(中英文任一)
+        for sel in ("text=余额", "text=Microsoft account balance", "text=Balance"):
+            try:
+                page.wait_for_selector(sel, timeout=8_000)
+                break
+            except PlaywrightTimeout:
+                continue
         body_text = page.inner_text("body", timeout=10_000)
     except Exception:
         return None
 
-    # 优先匹配带余额关键字的金额(英文 / 中文)
-    keyword_pat = re.compile(
-        r"(?:Microsoft account balance|Account balance|Account credit"
-        r"|Available credit|Balance|账户余额|账号余额|余额)"
-        r"[\s\S]{0,60}?"
-        r"(USD|GBP|EUR|TWD|JPY|CNY)?\s*[\$£€¥]?\s*([\d,]+\.\d{2})",
+    # 两步匹配:
+    # 1) 先用关键字定位到"余额"那一小段
+    # 2) 在关键字之后 100 字符内, 匹配金额 + 币种(币种可在前或后)
+    keyword_re = re.compile(
+        r"(?:Microsoft account balance|Microsoft 帐户余额|Microsoft 账户余额"
+        r"|Account balance|Account credit|Available credit"
+        r"|账户余额|账号余额|帐户余额|余额)",
         re.IGNORECASE,
     )
-    m = keyword_pat.search(body_text)
-    if m:
-        cur = (m.group(1) or "").upper()
-        amt = m.group(2).replace(",", "")
-        if not cur:
-            # 从原始匹配的符号推币种 (粗糙兜底)
-            raw = m.group(0)
-            if "£" in raw:
-                cur = "GBP"
-            elif "€" in raw:
-                cur = "EUR"
-            else:
-                cur = "USD"
-        try:
-            return FetchedBalance(currency=cur, balance=Decimal(amt))
-        except Exception:
-            return None
-    return None
+    m = keyword_re.search(body_text)
+    if not m:
+        return None
+
+    segment = body_text[m.end() : m.end() + 100]
+
+    # 在段里找金额+币种 (币种 USD/GBP/EUR/TWD/JPY/CNY 在数字前后都行)
+    amount_re = re.compile(
+        r"(?:"
+        r"(?P<cur_before>USD|GBP|EUR|TWD|JPY|CNY)\s*[\$£€¥]?\s*(?P<num_a>[\d,]+\.\d{1,2})"
+        r"|"
+        r"[\$£€¥]\s*(?P<num_b>[\d,]+\.\d{1,2})\s*(?P<cur_b>USD|GBP|EUR|TWD|JPY|CNY)?"
+        r"|"
+        r"(?P<num_c>[\d,]+\.\d{1,2})\s*(?P<cur_after>USD|GBP|EUR|TWD|JPY|CNY)"
+        r")",
+        re.IGNORECASE,
+    )
+    m2 = amount_re.search(segment)
+    if not m2:
+        return None
+
+    num = (
+        m2.group("num_a") or m2.group("num_b") or m2.group("num_c") or ""
+    ).replace(",", "")
+    cur = (
+        m2.group("cur_before")
+        or m2.group("cur_after")
+        or m2.group("cur_b")
+        or "USD"
+    ).upper()
+    if not num:
+        return None
+    try:
+        return FetchedBalance(currency=cur, balance=Decimal(num))
+    except Exception:
+        return None
 
 
 def _scroll_load_orders(
