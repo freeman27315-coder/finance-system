@@ -376,9 +376,86 @@ def _do_fetch(
             ),
         )
 
+    # CEO 2026-05-14: Microsoft 订单页懒加载, 默认只渲染前 10~20 单。
+    # 滚动 + 点 Show more 让卡片数量达到目标, 否则会漏单
+    # (CEO 反馈: 实际 28 单, 之前只抓出 9 单)。
+    _scroll_load_orders(page, target_count=count)
+
     orders = _parse_orders(page, limit=count)
     # 余额: 截图未显示余额, billing 余额可能在 /billing 主页 或者跳过(暂不抓)
     return FetchResult(success=True, orders=orders, balance=None)
+
+
+def _scroll_load_orders(
+    page: Page, target_count: int, max_iters: int = 20
+) -> None:
+    """滚动到底并点击 "Show more" 按钮, 直到加载够 target_count 条订单卡片
+    或确认没更多可加载了。
+
+    CEO 2026-05-14: Microsoft `/billing/orders` 页是懒加载, 首屏只渲染
+    前 10~20 条订单卡, 必须滚动 / 点扩展按钮才能拉出剩下的。
+
+    停止条件(任一满足即返回):
+      - 已加载卡片数 >= target_count
+      - 连续 3 次滚动后卡片数不再增长, 且没找到可点的"加载更多"按钮
+      - 超过 max_iters 次迭代(防死循环)
+    """
+    last_count = 0
+    stagnant = 0
+    more_button_labels = (
+        "Show more",
+        "Load more",
+        "See more",
+        "More orders",
+        "查看更多",
+        "加载更多",
+        "显示更多",
+    )
+
+    for _ in range(max_iters):
+        current = page.locator("text=Order number").count()
+        if current >= target_count:
+            return
+
+        # 滚动到页面底部触发懒加载
+        try:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        except Exception:
+            pass
+        page.wait_for_timeout(1_500)
+
+        # 看一下卡片数有没有增加
+        new_count = page.locator("text=Order number").count()
+        if new_count > current:
+            last_count = new_count
+            stagnant = 0
+            continue
+
+        # 滚动没新增 → 试点 Show more / Load more 按钮
+        clicked = False
+        for label in more_button_labels:
+            try:
+                btn = page.get_by_role("button", name=label, exact=False)
+                if btn.count() > 0 and btn.first.is_visible():
+                    btn.first.click(timeout=2_000)
+                    page.wait_for_timeout(2_000)
+                    clicked = True
+                    break
+            except Exception:
+                continue
+
+        if clicked:
+            stagnant = 0
+            continue
+
+        # 既没新增也没按钮可点 → 认为没更多了, 累计停滞次数
+        if new_count == last_count:
+            stagnant += 1
+            if stagnant >= 3:
+                return
+        else:
+            last_count = new_count
+            stagnant = 0
 
 
 def _click_submit(page: Page, timeout_per_try: int = 8_000) -> None:
