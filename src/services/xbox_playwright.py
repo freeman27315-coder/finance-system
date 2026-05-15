@@ -24,12 +24,14 @@ Q3 截图已对照 / Q4 直接上真实抓取(不再 mock)。
 如果详情页有更精确时间, 后续补丁迭代。
 
 环境变量:
-- XBOX_PLAYWRIGHT_USER_DATA_DIR (默认 ./.playwright-user-data/xbox)
+- XBOX_PLAYWRIGHT_COOKIE_DIR (默认 ./.playwright-cookies)
+  每账号 cookies 存 cookies/account_{account_id}.json (CEO 2026-05-15)
 - XBOX_PLAYWRIGHT_HEADLESS (默认 true; 首次手动登录时设 false 看着完成 2FA)
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import sys
@@ -80,16 +82,81 @@ _MONTH_NAMES = {
 # ---------------------------------------------------------------------------
 
 
-def _user_data_dir() -> Path:
-    """返回 Playwright user_data 目录的**绝对路径**(必须绝对; Edge 启动后 CWD 不同
-    导致相对路径解析失败,会报"无法创建数据目录")。"""
-    raw = os.environ.get("XBOX_PLAYWRIGHT_USER_DATA_DIR")
+def _cookie_dir() -> Path:
+    """CEO 2026-05-15: 每账号一个 cookies/{account_id}.json 文件。
+    不再用 launch_persistent_context 共享 Chrome profile, 避免账号 A 的
+    cookies 污染账号 B 的同步。
+    """
+    raw = os.environ.get("XBOX_PLAYWRIGHT_COOKIE_DIR")
     if raw:
         p = Path(raw).expanduser().resolve()
     else:
-        p = (Path.cwd() / ".playwright-user-data" / "xbox").resolve()
+        p = (Path.cwd() / ".playwright-cookies").resolve()
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def _cookie_path(account_id: int) -> Path:
+    return _cookie_dir() / f"account_{account_id}.json"
+
+
+def _save_cookies(context: BrowserContext, account_id: int) -> None:
+    """登录成功后调一次, 把 context 当前 cookies 序列化写盘。"""
+    try:
+        cookies = context.cookies()
+        _cookie_path(account_id).write_text(
+            json.dumps(cookies, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass  # 落盘失败不阻塞同步流程
+
+
+def _load_cookies(context: BrowserContext, account_id: int) -> bool:
+    """启动 context 后调一次, 把 cookies 注入。返回是否加载到内容。"""
+    path = _cookie_path(account_id)
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not data:
+            return False
+        context.add_cookies(data)
+        return True
+    except Exception:
+        return False
+
+
+def _is_logged_in(page: Page) -> bool:
+    """注入 cookies 后, 访问主页看是否还在登录域。
+    True = cookies 有效, 可直接抓订单;
+    False = 失效, 需要走完整登录。
+    """
+    try:
+        page.goto(
+            "https://account.microsoft.com/",
+            wait_until="domcontentloaded",
+            timeout=15_000,
+        )
+        page.wait_for_timeout(2_000)
+    except Exception:
+        return False
+    return (
+        "login.live.com" not in page.url
+        and "login.microsoftonline.com" not in page.url
+    )
+
+
+def _apply_stealth(page: Page) -> None:
+    """playwright-stealth 反检测脚本注入。headless 模式必备, 防 Microsoft
+    用 navigator.webdriver / chrome.runtime 等 40+ 检测点识别我们是自动化。
+    安装失败/版本不兼容 → 跳过, 不阻塞主流程。
+    """
+    try:
+        from playwright_stealth import Stealth
+        Stealth().apply_stealth_sync(page)
+    except Exception:
+        pass
 
 
 def _is_headless() -> bool:
@@ -135,10 +202,14 @@ def fetch_microsoft_orders_real(
             failure_message=f"密码解密失败: {exc}",
         )
 
-    return _run_in_worker_thread(account.login_email, password_plain, count)
+    return _run_in_worker_thread(
+        account.id, account.login_email, password_plain, count
+    )
 
 
-def _run_in_worker_thread(login_email: str, password_plain: str, count: int) -> FetchResult:
+def _run_in_worker_thread(
+    account_id: int, login_email: str, password_plain: str, count: int
+) -> FetchResult:
     """在独立 worker thread 里跑 Playwright,设 ProactorEventLoop(Windows)
     避免 FastAPI thread pool 的 SelectorEventLoop subprocess 报 NotImplementedError。
     """
@@ -154,15 +225,27 @@ def _run_in_worker_thread(login_email: str, password_plain: str, count: int) -> 
             asyncio.set_event_loop(loop)
             try:
                 with sync_playwright() as p:
-                    ctx = _launch_context(p)
+                    browser, ctx = _launch_context(p)
                     try:
-                        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                        # 注入本账号 cookies (如有), 让 Microsoft 看到老身份免 2FA
+                        _load_cookies(ctx, account_id)
+                        page = ctx.new_page()
+                        _apply_stealth(page)
                         result_holder["result"] = _do_fetch(
-                            page, login_email, password_plain, count
+                            page,
+                            ctx,
+                            account_id,
+                            login_email,
+                            password_plain,
+                            count,
                         )
                     finally:
                         try:
                             ctx.close()
+                        except Exception:
+                            pass
+                        try:
+                            browser.close()
                         except Exception:
                             pass
             finally:
@@ -209,54 +292,53 @@ def _run_in_worker_thread(login_email: str, password_plain: str, count: int) -> 
 # ---------------------------------------------------------------------------
 
 
-def _launch_context(p: Playwright) -> BrowserContext:
-    """启动持久化浏览器上下文(cookies 存在 user_data_dir)。
+def _launch_context(p: Playwright) -> tuple[Browser, BrowserContext]:
+    """启动 browser + 全新 context (CEO 2026-05-15 改造)。
 
-    Windows 下 Playwright 自带的 Chromium 偶发缺 VC++ 运行时报
-    "side-by-side configuration is incorrect"。
-    优先用 Windows 系统的 Chrome(同 Chromium 引擎,用系统 runtime)。
-    env XBOX_PLAYWRIGHT_BROWSER=chromium 强制走自带 Chromium。
+    旧版用 launch_persistent_context + user_data_dir, 所有账号共享一个
+    Chrome profile, 后果是账号 B 同步抓出了账号 A 的数据。现在每账号一
+    JSON cookie 文件, context 创建时 _load_cookies 各自注入, 互不干扰。
     """
-    # 默认用 Windows 系统的 Chrome (CEO 平时用 Chrome 登录 Microsoft, 视觉上一致)
     browser_pref = os.environ.get("XBOX_PLAYWRIGHT_BROWSER", "chrome").lower()
     want_headless = _is_headless()
     args = [
-        "--disable-blink-features=AutomationControlled",  # 降低 bot 特征
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        # 加速启动: 关掉不必要功能
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=WebAuthenticationConditionalUI,Translate,MediaRouter,OptimizationHints",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-default-apps",
         "--disable-extensions",
         "--disable-component-update",
         "--disable-sync",
-        "--disable-features=Translate,MediaRouter,OptimizationHints",
+        "--window-size=1280,800",
     ]
     if want_headless:
-        # Chrome 109+ 新版 headless, 反爬识别率比传统 headless 低
         args.append("--headless=new")
-    common_kwargs = dict(
-        user_data_dir=str(_user_data_dir()),
-        headless=False,  # 我们用 args=--headless=new 控制 (上面)
-        args=args,
-        viewport={"width": 1280, "height": 800},
-        locale="en-US",
-    )
-    if browser_pref in {"chrome", "msedge"}:
-        ctx = p.chromium.launch_persistent_context(channel=browser_pref, **common_kwargs)
-    else:
-        ctx = p.chromium.launch_persistent_context(**common_kwargs)
 
-    # 拦截不必要资源(图片/字体/媒体/广告/Google Analytics)— 速度提升 2-5x
+    launch_kwargs = dict(headless=False, args=args)
+    if browser_pref in {"chrome", "msedge"}:
+        browser = p.chromium.launch(channel=browser_pref, **launch_kwargs)
+    else:
+        browser = p.chromium.launch(**launch_kwargs)
+
+    context = browser.new_context(
+        locale="zh-CN",
+        timezone_id="Asia/Shanghai",
+        viewport={"width": 1280, "height": 800},
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        ),
+    )
+
+    # 拦截不必要资源(图片/字体/媒体/广告)— 速度提升 2-5x
     def _block_unwanted(route, request):
         rt = request.resource_type
         url = request.url.lower()
         if rt in {"image", "media", "font"}:
-            # 不拦 stylesheet (React 组件渲染时机依赖 CSS 加载)
             route.abort()
             return
-        # 第三方追踪 / 分析
         if any(d in url for d in (
             "google-analytics.com", "googletagmanager.com", "doubleclick.net",
             "bing.com/insightservice", "clarity.ms", "scorecardresearch.com",
@@ -266,8 +348,8 @@ def _launch_context(p: Playwright) -> BrowserContext:
             return
         route.continue_()
 
-    ctx.route("**/*", _block_unwanted)
-    return ctx
+    context.route("**/*", _block_unwanted)
+    return browser, context
 
 
 # CEO 2026-05-14: 网络瞬时抖动错误(WiFi 切换 / VPN 重连 / 短暂断网) -
@@ -309,21 +391,45 @@ def _goto_with_retry(
 
 def _do_fetch(
     page: Page,
+    context: BrowserContext,
+    account_id: int,
     login_email: str,
     password_plain: str,
     count: int,
 ) -> FetchResult:
-    """登录 + 拉订单。性能优化(CEO 2026-05-12):
-    - 不用 networkidle (Microsoft 页面 XHR 永不停, 等满超时)
-    - 直接等订单卡片 selector 出现
-    - 资源拦截在 _launch_context 里 (图片/字体/广告)
+    """登录(尽量复用 cookie)+ 拉订单 + 拉余额。
 
-    CEO 2026-05-14: page.goto 自动重试 ERR_NETWORK_CHANGED 等瞬态错误。
+    CEO 2026-05-15 流程改造:
+      1. cookies 已在外层 _load_cookies 注入(若 JSON 文件存在)
+      2. _is_logged_in 通过访问主页验证 — 不在 login 域 = 复用成功
+      3. 复用失败 → 走完整登录 _full_login(自动处理弹窗) → _save_cookies
+      4. 抓订单 (含懒加载滚动 + Show more)
+      5. 抓余额
     """
+    # Step 1: 验证 cookies 是否仍有效
+    logged_in = _is_logged_in(page)
+
+    # Step 2: cookies 失效 → 完整登录
+    if not logged_in:
+        login_ok = _full_login(page, login_email, password_plain)
+        if not login_ok:
+            return FetchResult(
+                success=False,
+                orders=[],
+                balance=None,
+                failure_category="login_failed",
+                failure_message=(
+                    "完整登录失败(账号密码 / 安全验证 / 弹窗未处理)。"
+                    f"final_url={page.url[:200]}"
+                ),
+            )
+        # 登录成功 → 把最新 cookies 落盘, 下次直接复用
+        _save_cookies(context, account_id)
+
+    # Step 3: 进订单页
     _goto_with_retry(page, _ORDERS_URL, wait_until="commit", timeout=30_000)
 
     # "Is your security info still accurate?" 提示页 - 自动点 Looks good
-    # 用短超时检测(没出现就跳过, 不阻塞主流程)
     if "proofs" in page.url:
         try:
             for label in ["Looks good!", "Looks good", "看起来不错"]:
@@ -334,15 +440,7 @@ def _do_fetch(
         except Exception:
             pass
 
-    # 处理登录(cookies 失效情况)
-    if page.url.startswith(_LOGIN_URL_PREFIX):
-        login_result = _do_login(page, login_email, password_plain)
-        if login_result is not None:
-            return login_result
-        if "account.microsoft.com/billing/orders" not in page.url:
-            _goto_with_retry(page, _ORDERS_URL, wait_until="commit", timeout=30_000)
-
-    # 兜底再 goto 一次(如果中间跳到首页等)
+    # 兜底再 goto 一次(若中途跳走)
     if "account.microsoft.com/billing/orders" not in page.url:
         _goto_with_retry(page, _ORDERS_URL, wait_until="commit", timeout=30_000)
 
@@ -351,7 +449,7 @@ def _do_fetch(
         page.wait_for_selector("text=Order number", timeout=20_000)
     except PlaywrightTimeout:
         # 调试: 把页面 URL + 截图 + body text 写文件
-        dbg_dir = _user_data_dir().parent / "debug"
+        dbg_dir = _cookie_dir() / "debug"
         dbg_dir.mkdir(parents=True, exist_ok=True)
         try:
             page.screenshot(path=str(dbg_dir / "no_orders.png"), full_page=True)
@@ -400,7 +498,7 @@ def _try_fetch_balance(page: Page, password_plain: str) -> Optional[FetchedBalan
     CEO 2026-05-14 截图: "Microsoft 帐户余额: 0.28 USD"
     — 币种 USD 在数字**后**, 不是前。
     """
-    debug_dir = _user_data_dir().parent / "debug"
+    debug_dir = _cookie_dir() / "debug"
     debug_dir.mkdir(parents=True, exist_ok=True)
     debug_path = debug_dir / "balance_fetch.txt"
     body_text = ""
@@ -645,110 +743,215 @@ def _click_submit(page: Page, timeout_per_try: int = 8_000) -> None:
     page.keyboard.press("Enter")
 
 
-def _do_login(page: Page, email: str, password: str) -> Optional[FetchResult]:
-    """登录流程。成功返回 None,失败返回 FetchResult(success=False)。
+def _click_first(page: Page, selectors: list[str]) -> bool:
+    """逐个尝试 selector, 找到第一个能点的就点。返回是否点到。"""
+    for sel in selectors:
+        try:
+            loc = page.locator(sel)
+            if loc.count() > 0:
+                loc.first.click(timeout=2_000)
+                return True
+        except Exception:
+            continue
+    return False
 
-    CEO 2026-05-13: Microsoft 有时会"记住账号"(cookies 仍存了登录身份),
-    登录页直接跳到密码输入界面,邮箱 input 变成 ``type=hidden``,
-    导致原先 ``wait_for_selector(loginfmt, state=visible)`` 永远超时。
-    修正:先用短超时探一下邮箱框是否可见 — 可见就走完整两步,
-    不可见就只走密码步骤。
 
-    CEO 2026-05-14: 提交按钮 selector 抽到 _click_submit 统一处理,
-    多 selector 兜底 + Enter 键 fallback (Microsoft 改按钮 markup 时不挂)。
-
-    CEO 2026-05-14 (二改): cookies 完全有效时 Microsoft 会走"静默 SSO"
-    一连串 redirect (silent → sso → login.srf → /billing/orders),
-    全程不需要填邮箱密码。进入 _do_login 不代表非要输密码; 先用 10s
-    探一下是否已直达订单页, 是就直接 return None 走人。
+def _select_password_option(page: Page, email: str) -> None:
+    """Microsoft 在某些账号上推 passkey, 进"选择登录方式"页, 没有密码框。
+    检测到时遍历"登录方式"选项, 找到能露出密码框的那个。
+    CEO 2026-05-15 文档实现, 优先 idx=1(密码通常在第二位)。
     """
+    pwd_sel = "input[type='password'], #i0118"
+    opts_sel = "span[role='button'], [role='option']"
+    if page.locator(pwd_sel).count() > 0:
+        return
     try:
-        # 静默 SSO 通过探测: 如果在 10s 内 URL 跳到了 /billing/orders
-        # → 已经登录上, 不用填邮箱密码, 直接返回。
+        total = page.locator(opts_sel).count()
+    except Exception:
+        return
+    if total == 0:
+        return
+    priority = [1] + [i for i in range(total) if i != 1]
+    for idx in priority:
         try:
-            page.wait_for_url(
-                "**/billing/orders**", timeout=10_000
-            )
-            return None
-        except PlaywrightTimeout:
-            pass
+            page.locator(opts_sel).nth(idx).click(timeout=2_000)
+            page.wait_for_timeout(1_800)
+            if page.locator(pwd_sel).count() > 0:
+                return
+            # 没出现密码框 → 回退重试
+            try:
+                page.go_back(wait_until="domcontentloaded", timeout=10_000)
+                page.wait_for_timeout(1_000)
+            except Exception:
+                pass
+            # 回退到邮箱页 → 重填提交
+            if page.locator("input[type='email']").count() > 0:
+                page.locator("input[type='email']").fill(email)
+                try:
+                    page.locator("input[type='submit']").first.click(timeout=3_000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(3_000)
+        except Exception:
+            continue
 
-        # 邮箱(可选 — 账号被记住时 Microsoft 会跳过)
-        loginfmt_visible = False
-        try:
-            page.wait_for_selector(
-                'input[name="loginfmt"]', state="visible", timeout=3_000
-            )
-            loginfmt_visible = True
-        except PlaywrightTimeout:
-            loginfmt_visible = False
 
-        if loginfmt_visible:
-            page.fill('input[name="loginfmt"]', email)
-            _click_submit(page)
-
-        # 邮箱填完后, 再次探一下 SSO 是否在邮箱提交后直接跳过密码页
-        try:
-            page.wait_for_url(
-                "**/billing/orders**", timeout=5_000
-            )
-            return None
-        except PlaywrightTimeout:
-            pass
-
-        # 密码(必填)
-        page.wait_for_selector(
-            'input[name="passwd"]', state="visible", timeout=15_000
-        )
-        page.fill('input[name="passwd"]', password)
-        _click_submit(page)
-
-        # 检测密码错(URL 不变 + 出现错误提示)
-        try:
-            page.wait_for_load_state("networkidle", timeout=8_000)
-        except PlaywrightTimeout:
-            pass
-
+def _handle_login_prompts(page: Page) -> str:
+    """Microsoft 登录后弹窗循环处理(最多 14 轮)。
+    Privacy Notice / KMSI / 安全信息绑定 / 挂起页 / 通用推进。
+    返回 'success' 或 'failed'。CEO 2026-05-15 文档实现。
+    """
+    for _ in range(14):
         url = page.url
-        body_text = page.content().lower()
 
-        if "your account or password is incorrect" in body_text or "incorrect" in body_text and "password" in body_text:
-            return FetchResult(
-                success=False,
-                orders=[],
-                balance=None,
-                failure_category="password_error",
-                failure_message="Microsoft 提示账号或密码错误",
-            )
+        # 1. Privacy Notice (隐私声明)
+        if "privacynotice.account.microsoft.com" in url:
+            _click_first(page, [
+                "button[type='submit']",
+                "button[autofocus]",
+                "#id__0",
+                "input[type='submit']",
+            ])
+            page.wait_for_timeout(2_000)
+            continue
 
-        # 2FA / 验证码
-        if "/proofs/" in url or "verify" in url or "two-step" in body_text:
-            return FetchResult(
-                success=False,
-                orders=[],
-                balance=None,
-                failure_category="verification_required",
-                failure_message="账号触发二步验证(请在 headed 模式手动完成一次,信任设备建立后再来)",
-            )
+        # 2. KMSI 保持登录 — 点 Yes 延长 cookie 寿命
+        if "ppsecure" in url or "kmsi" in url.lower():
+            try:
+                body = page.inner_text("body", timeout=3_000).lower()
+                if any(p in body for p in (
+                    "stay signed in", "keep me signed in",
+                    "保持登录", "保持登陆",
+                )):
+                    yes = page.locator("#idSIButton9, button[type='submit']")
+                    if yes.count() > 0:
+                        yes.first.click(timeout=3_000)
+                        page.wait_for_timeout(2_000)
+                        continue
+            except Exception:
+                pass
 
-        # "Stay signed in?" - 点 Yes 让 cookies 持久
+        # 3. 安全信息绑定弹窗 → 找 Skip / Cancel 跳过
         try:
-            yes_btn = page.locator('input[id="idSIButton9"], input[value="Yes"]')
-            if yes_btn.count() > 0:
-                yes_btn.first.click(timeout=5_000)
+            body_for_security = (
+                page.inner_text("body", timeout=2_000)
+                if page.locator("body").count() > 0
+                else ""
+            )
+        except Exception:
+            body_for_security = ""
+        security_page = any(ph in body_for_security for ph in (
+            "安全信息", "security info", "请补充", "验证方式",
+            "add security", "verify your identity", "补充验证",
+        ))
+        if security_page:
+            skipped = _click_first(page, [
+                "button[data-testid='iCancel']",
+                "#idBtn_Back",
+                "button[data-testid='skip']",
+                "#idA_SAASUI_Skip",
+                "a[id*='Skip']",
+                "a[id*='skip']",
+            ])
+            if skipped:
+                page.wait_for_timeout(2_500)
+                continue
+
+        # 4. 挂起的安全操作 — go_back 无效, 强制重导
+        try:
+            body_for_pending = (
+                page.inner_text("body", timeout=2_000)
+                if page.locator("body").count() > 0
+                else ""
+            )
+        except Exception:
+            body_for_pending = ""
+        if "挂起" in body_for_pending or "pending" in body_for_pending.lower():
+            try:
+                page.goto(
+                    "https://login.live.com/",
+                    wait_until="domcontentloaded",
+                    timeout=20_000,
+                )
+                page.wait_for_timeout(1_000)
+            except Exception:
+                pass
+            continue
+
+        # 5. 已离开登录域 → 登录完成
+        login_domains = ("login.live.com", "login.microsoftonline.com")
+        interrupter_path = re.search(
+            r"/(fido|secinfo|recovery|kmsi|add-info)", url
+        )
+        if not any(d in url for d in login_domains) and not interrupter_path:
+            if any(d in url for d in ("microsoft.com", "xbox.com", "live.com")):
+                return "success"
+
+        # 6. 无明显特征 → 通用推进按钮
+        _click_first(page, [
+            "#idSIButton9",
+            "input[type='submit']",
+            "button[type='submit']",
+            "button[autofocus]",
+        ])
+        page.wait_for_timeout(2_500)
+
+    return "failed"
+
+
+def _full_login(page: Page, email: str, password: str) -> bool:
+    """完整登录流程。cookies 失效 / 首次时调。
+    流程:邮箱 → 选密码方式 → 密码 → 处理所有弹窗。返回是否成功。
+    """
+    # 0. 起点: login.live.com 或 page.url 已经在 login 流程
+    if "login.live.com" not in page.url and "login.microsoftonline.com" not in page.url:
+        try:
+            page.goto(
+                "https://login.live.com/",
+                wait_until="domcontentloaded",
+                timeout=20_000,
+            )
         except Exception:
             pass
 
-        return None  # 成功
-
-    except PlaywrightTimeout as exc:
-        return FetchResult(
-            success=False,
-            orders=[],
-            balance=None,
-            failure_category="login_page_changed",
-            failure_message=f"登录页元素未找到(Microsoft 可能改了 DOM): {exc}",
+    # 1. 邮箱(若邮箱框可见)
+    try:
+        page.wait_for_selector(
+            'input[name="loginfmt"], input[type="email"]',
+            state="visible",
+            timeout=10_000,
         )
+        page.locator(
+            'input[name="loginfmt"], input[type="email"]'
+        ).first.fill(email)
+        _click_submit(page)
+        page.wait_for_timeout(2_000)
+    except PlaywrightTimeout:
+        # 邮箱框不可见 - 可能账号已被记住, 直接进密码页或选方式页
+        pass
+
+    # 2. 选择登录方式(若 Microsoft 推 passkey 而非密码)
+    _select_password_option(page, email)
+
+    # 3. 密码
+    try:
+        page.wait_for_selector(
+            'input[name="passwd"], input[type="password"]',
+            state="visible",
+            timeout=10_000,
+        )
+        page.locator(
+            'input[name="passwd"], input[type="password"]'
+        ).first.fill(password)
+        _click_submit(page)
+        page.wait_for_timeout(2_000)
+    except PlaywrightTimeout:
+        # 密码框没出现 — 可能已经登录上(silent SSO 流程)
+        # 让 _handle_login_prompts 兜底判断 success
+        pass
+
+    # 4. 处理所有后续弹窗 直到离开登录域
+    return _handle_login_prompts(page) == "success"
 
 
 def _parse_orders(page: Page, limit: int) -> list[FetchedOrder]:
@@ -899,45 +1102,7 @@ def _parse_orders_fallback(page: Page, limit: int) -> list[FetchedOrder]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# 首次设置辅助 (供 CEO 手动登录建立信任设备)
-# ---------------------------------------------------------------------------
-
-
-def first_run_login(login_email: str, password_plain: str, timeout_seconds: int = 600) -> str:
-    """开发模式: 启动 headed Chromium/Edge 让 CEO 手动完成 2FA + 信任设备,
-    完成后 cookies 自动落到 user_data_dir,后续 headless 可复用。
-
-    用法 (在 Python REPL 或脚本):
-        from src.services.xbox_playwright import first_run_login
-        first_run_login("xbox@test.com", "real_password")
-    """
-    os.environ["XBOX_PLAYWRIGHT_HEADLESS"] = "false"
-    with sync_playwright() as p:
-        ctx = _launch_context(p)
-        try:
-            page = ctx.pages[0] if ctx.pages else ctx.new_page()
-            page.goto(_ORDERS_URL, wait_until="domcontentloaded", timeout=60_000)
-            print("[first_run_login] 浏览器已打开. 请在浏览器中完成:")
-            print("[first_run_login]   1) 填邮箱密码登录")
-            print("[first_run_login]   2) 完成 2FA(邮箱/短信验证码)")
-            print("[first_run_login]   3) 看到 'Stay signed in?' 点 Yes")
-            print("[first_run_login]   4) 看到订单页(account.microsoft.com/billing/orders)")
-            print(f"[first_run_login] 完成后,在浏览器里看到订单卡片 -> 关闭浏览器窗口即可")
-            print(f"[first_run_login] 等待最多 {timeout_seconds} 秒...")
-            # 等用户手动登录到订单页
-            page.wait_for_url(
-                lambda url: "account.microsoft.com/billing/orders" in url,
-                timeout=timeout_seconds * 1000,
-            )
-            print(f"[first_run_login] OK -- LOGIN SUCCESS")
-            print(f"[first_run_login] cookies written to {_user_data_dir()}")
-            print("[first_run_login] 你现在可以关闭浏览器, 后续 trigger_sync 会自动复用 cookies")
-            # 多等几秒让 cookies flush
-            page.wait_for_timeout(3000)
-            return f"OK cookies in {_user_data_dir()}"
-        finally:
-            try:
-                ctx.close()
-            except Exception:
-                pass
+# CEO 2026-05-15: first_run_login 旧手动登录入口已删除。
+# 新方案: _full_login + _handle_login_prompts + playwright-stealth 实现
+# 全自动完整登录, cookies 按账号 ID 分文件存储, 不再需要手动 2FA 步骤。
+# (若某账号触发 Microsoft 强制 2FA, 同步会失败 + 报 verification_required)
