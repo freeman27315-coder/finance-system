@@ -618,7 +618,9 @@ def operator_list_orders_endpoint(
     stmt = select(XboxOrder).where(XboxOrder.account_id == account_id)
     if only_pending:
         stmt = stmt.where(XboxOrder.status == XboxOrderStatus.PENDING_COMPLETE.value)
-    stmt = stmt.order_by(XboxOrder.order_at.desc())
+    # CEO 2026-05-14: 按"同步落库时间"从新到旧排, 最近爬到的永远在最上面。
+    # 不区分订单状态(已转销售 / 待补 不再特殊优先)。
+    stmt = stmt.order_by(XboxOrder.created_at.desc())
     orders = list(db.scalars(stmt))
 
     # 一次性查 method/item labels(避免每行 query)

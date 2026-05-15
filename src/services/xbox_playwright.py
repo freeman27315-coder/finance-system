@@ -382,8 +382,66 @@ def _do_fetch(
     _scroll_load_orders(page, target_count=count)
 
     orders = _parse_orders(page, limit=count)
-    # 余额: 截图未显示余额, billing 余额可能在 /billing 主页 或者跳过(暂不抓)
-    return FetchResult(success=True, orders=orders, balance=None)
+
+    # CEO 2026-05-14: 之前真实抓取代码完全没爬余额(balance 一直传 None),
+    # 导致 trigger_sync 永远跳过更新 account.local_balance。
+    # 这里跳到 billing 概览页爬一次余额, 失败不影响订单抓取。
+    balance = _try_fetch_balance(page)
+    return FetchResult(success=True, orders=orders, balance=balance)
+
+
+def _try_fetch_balance(page: Page) -> Optional[FetchedBalance]:
+    """爬 Microsoft 账户余额。失败返回 None, 不阻塞主流程。
+
+    Microsoft 把账户余额(Microsoft account balance / Account credit)
+    放在 https://account.microsoft.com/billing 概览页。我们跳过去,
+    用正则在整页文本里匹配"余额关键字 + 金额"模式。
+    """
+    try:
+        _goto_with_retry(
+            page,
+            "https://account.microsoft.com/billing",
+            wait_until="commit",
+            timeout=30_000,
+        )
+        # 等页面有内容(任意带 $/£/€/¥ 的金额)出现
+        try:
+            page.wait_for_selector(
+                'text=/[\\$£€¥]\\s*\\d/',
+                timeout=10_000,
+            )
+        except PlaywrightTimeout:
+            pass
+        body_text = page.inner_text("body", timeout=10_000)
+    except Exception:
+        return None
+
+    # 优先匹配带余额关键字的金额(英文 / 中文)
+    keyword_pat = re.compile(
+        r"(?:Microsoft account balance|Account balance|Account credit"
+        r"|Available credit|Balance|账户余额|账号余额|余额)"
+        r"[\s\S]{0,60}?"
+        r"(USD|GBP|EUR|TWD|JPY|CNY)?\s*[\$£€¥]?\s*([\d,]+\.\d{2})",
+        re.IGNORECASE,
+    )
+    m = keyword_pat.search(body_text)
+    if m:
+        cur = (m.group(1) or "").upper()
+        amt = m.group(2).replace(",", "")
+        if not cur:
+            # 从原始匹配的符号推币种 (粗糙兜底)
+            raw = m.group(0)
+            if "£" in raw:
+                cur = "GBP"
+            elif "€" in raw:
+                cur = "EUR"
+            else:
+                cur = "USD"
+        try:
+            return FetchedBalance(currency=cur, balance=Decimal(amt))
+        except Exception:
+            return None
+    return None
 
 
 def _scroll_load_orders(
