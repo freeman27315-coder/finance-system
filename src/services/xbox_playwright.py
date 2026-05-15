@@ -386,11 +386,13 @@ def _do_fetch(
     # CEO 2026-05-14: 之前真实抓取代码完全没爬余额(balance 一直传 None),
     # 导致 trigger_sync 永远跳过更新 account.local_balance。
     # 这里跳到 billing 概览页爬一次余额, 失败不影响订单抓取。
-    balance = _try_fetch_balance(page)
+    # password_plain 传进去, 因为 Microsoft 把 /billing/payments 视为
+    # 高敏感页, 即使 cookies 有效也会再次要求输密码。
+    balance = _try_fetch_balance(page, password_plain)
     return FetchResult(success=True, orders=orders, balance=balance)
 
 
-def _try_fetch_balance(page: Page) -> Optional[FetchedBalance]:
+def _try_fetch_balance(page: Page, password_plain: str) -> Optional[FetchedBalance]:
     """爬 Microsoft 账户余额。失败返回 None, 不阻塞主流程。
 
     Microsoft 把账户余额(Microsoft account balance / Microsoft 帐户余额)
@@ -405,15 +407,58 @@ def _try_fetch_balance(page: Page) -> Optional[FetchedBalance]:
     final_url = ""
 
     try:
-        # CEO 2026-05-14 调试发现: /billing 会被 Microsoft 301 redirect 回
-        # /billing/orders, 跑根本没拉到余额页。CEO 截图的余额徽章在
-        # /billing/payments (付款选项页), 这里直接进它。
+        # CEO 2026-05-14 调试发现:
+        # (1) /billing 会被 301 redirect 回 /billing/orders, 不显示余额
+        # (2) /billing/payments 有余额徽章, 但 Microsoft 视为高敏感页,
+        #     会要求 reauth (即使 cookies 有效, 也跳到 login.live.com 让
+        #     再次输密码)
         _goto_with_retry(
             page,
             "https://account.microsoft.com/billing/payments",
             wait_until="commit",
             timeout=30_000,
         )
+
+        # 处理 reauth: 若 URL 被弹到登录页, 再过一次密码
+        if "login.live.com" in page.url or "login.microsoftonline.com" in page.url:
+            try:
+                page.wait_for_selector(
+                    'input[name="passwd"]', state="visible", timeout=8_000
+                )
+                page.fill('input[name="passwd"]', password_plain)
+                _click_submit(page)
+                # 等回到 billing/payments (或者其他 account.microsoft.com 页)
+                try:
+                    page.wait_for_url(
+                        "**/billing/payments**", timeout=20_000
+                    )
+                except PlaywrightTimeout:
+                    # 可能跳到了 /billing/orders 等, 不强求, 继续往下抓
+                    pass
+                # "Stay signed in?" 二次确认 - 点 Yes
+                try:
+                    yes_btn = page.locator(
+                        'input[id="idSIButton9"], input[value="Yes"]'
+                    )
+                    if yes_btn.count() > 0:
+                        yes_btn.first.click(timeout=3_000)
+                except Exception:
+                    pass
+            except PlaywrightTimeout:
+                pass
+
+        # 如果仍在 login 页, 再 goto 一次目标
+        if "account.microsoft.com" not in page.url:
+            try:
+                _goto_with_retry(
+                    page,
+                    "https://account.microsoft.com/billing/payments",
+                    wait_until="commit",
+                    timeout=20_000,
+                )
+            except Exception:
+                pass
+
         # 等出现"余额"字样(中英文任一); 任意一个命中即可
         for sel in (
             "text=Microsoft account balance",
