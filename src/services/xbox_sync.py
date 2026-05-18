@@ -53,16 +53,65 @@ from src.utils.time import china_now
 VALID_SYNC_COUNTS = (10, 20, 30, 50, 200)
 
 
-# CEO 2026-05-12 Q1-A: 同步爬到 balance.currency 后自动识别国家
+# CEO 2026-05-17: 货币 → 国家映射, 自动支持 Microsoft 商店主流地区。
+# 完全没列出的货币会走 _identify_country_from_currency 兜底逻辑,
+# 用 ISO 4217 货币代码前两位当国家码(大多数货币代码 = 国家码 + 货币缩写首字母).
 _CURRENCY_TO_COUNTRY = {
-    "USD": ("US", "USD"),
-    "GBP": ("UK", "GBP"),
+    "USD": ("US", "USD"),   # 美国
+    "GBP": ("UK", "GBP"),   # 英国
+    "EUR": ("EU", "EUR"),   # 欧元区(德/法/意/西/荷/比/葡/爱/奥/芬等)
+    "JPY": ("JP", "JPY"),   # 日本
+    "CNY": ("CN", "CNY"),   # 中国大陆
+    "TWD": ("TW", "TWD"),   # 台湾
+    "HKD": ("HK", "HKD"),   # 香港
+    "KRW": ("KR", "KRW"),   # 韩国
+    "CAD": ("CA", "CAD"),   # 加拿大
+    "AUD": ("AU", "AUD"),   # 澳大利亚
+    "BRL": ("BR", "BRL"),   # 巴西
+    "MXN": ("MX", "MXN"),   # 墨西哥
+    "SGD": ("SG", "SGD"),   # 新加坡
+    "MYR": ("MY", "MYR"),   # 马来西亚
+    "THB": ("TH", "THB"),   # 泰国
+    "PHP": ("PH", "PHP"),   # 菲律宾
+    "INR": ("IN", "INR"),   # 印度
+    "IDR": ("ID", "IDR"),   # 印尼
+    "VND": ("VN", "VND"),   # 越南
+    "RUB": ("RU", "RUB"),   # 俄罗斯
+    "TRY": ("TR", "TRY"),   # 土耳其
+    "ZAR": ("ZA", "ZAR"),   # 南非
+    "CHF": ("CH", "CHF"),   # 瑞士
+    "SEK": ("SE", "SEK"),   # 瑞典
+    "NOK": ("NO", "NOK"),   # 挪威
+    "DKK": ("DK", "DKK"),   # 丹麦
+    "PLN": ("PL", "PLN"),   # 波兰
+    "NZD": ("NZ", "NZD"),   # 新西兰
+    "AED": ("AE", "AED"),   # 阿联酋
+    "SAR": ("SA", "SAR"),   # 沙特
+    "CLP": ("CL", "CLP"),   # 智利
+    "ARS": ("AR", "ARS"),   # 阿根廷
+    "COP": ("CO", "COP"),   # 哥伦比亚
+    "ILS": ("IL", "ILS"),   # 以色列
+    "CZK": ("CZ", "CZK"),   # 捷克
+    "HUF": ("HU", "HUF"),   # 匈牙利
 }
 
 
 def _identify_country_from_currency(currency: str) -> tuple[Optional[str], Optional[str]]:
-    """USD→(US,USD), GBP→(UK,GBP), 其他→(None,None)"""
-    return _CURRENCY_TO_COUNTRY.get(currency, (None, None))
+    """已知货币: 查映射表; 未知货币: 取代码前两位作国家码 (兜底)。
+
+    ISO 4217 货币代码大多遵循"前两位 ISO 3166 国家码 + 货币缩写第一位"的命名。
+    例如 PLN = PL(波兰) + N(złoty), ZAR = ZA(南非) + R(rand)。
+    所以即使我们的映射表里没列出, 也能自动推出合理的 country。
+    """
+    cur = (currency or "").upper().strip()
+    if not cur:
+        return (None, None)
+    if cur in _CURRENCY_TO_COUNTRY:
+        return _CURRENCY_TO_COUNTRY[cur]
+    # 兜底: 三字母全字母代码 → 前两位作 country
+    if len(cur) == 3 and cur.isalpha():
+        return (cur[:2], cur)
+    return (None, None)
 
 
 def _apply_country_auto_detection(
@@ -110,32 +159,58 @@ def _apply_country_auto_detection(
 
 
 def fetch_balance_only_stub(account: XboxAccount) -> Optional[FetchedBalance]:
-    """阶段 1 stub: 模拟拉余额(不拉订单)。阶段 2 替换为真实 Playwright。
+    """阶段 1 stub: 模拟拉余额(不拉订单)。
 
-    返回 None 表示拉失败(未设登录邮箱/密码),否则返回 mock 余额 + 币种。
-    Mock 规则:
-    - 账号已识别国家 → 用现有 currency 模拟
-    - 未识别 → 用 id%2 区分(演示自动识别效果)
+    CEO 2026-05-16: 永远尊重账号现有的 currency / country。
+    之前用 id%2 随机分配 USD/GBP, 会把新加账号(country_identified=False)
+    硬切到另一个国家 tab, 看起来像"账号消失"。修复方法是 stub 永不更改国家,
+    返回当前 currency 的 mock 数字; 真正的国家自动识别只发生在真实 Playwright 同步时。
     """
     if not account.login_email or not account.password_enc:
         return None
 
-    if account.country_identified and account.currency:
-        currency = account.currency.value if hasattr(account.currency, "value") else account.currency
-    else:
-        currency = "USD" if account.id % 2 == 0 else "GBP"
+    currency = (
+        account.currency.value
+        if hasattr(account.currency, "value")
+        else account.currency
+    ) or "USD"
 
     # mock 余额: 每个账号有不同基数,以体现刷新差异
     balance = Decimal("123.45") + Decimal(account.id) * Decimal("10.00")
     return FetchedBalance(currency=currency, balance=balance)
 
 
+def fetch_balance_only_real(account: XboxAccount) -> tuple[Optional[FetchedBalance], Optional[str]]:
+    """真实 Playwright 抓余额(顺便走过订单页, 但不写订单数据)。
+
+    CEO 2026-05-16: 替换原 stub, 让财务系统"刷新余额"按钮真去爬微软。
+    返回 (FetchedBalance, None) 表示成功, (None, error_message) 表示失败。
+    """
+    if not account.login_email or not account.password_enc:
+        return (None, "账号未设置登录邮箱或密码")
+
+    # 延迟导入避免循环依赖 (xbox_playwright 需要从 xbox_sync 取类型)
+    from src.services.xbox_playwright import fetch_microsoft_orders_real
+
+    # count=1 只是占位; 我们只关心 balance, 不写订单数据
+    result = fetch_microsoft_orders_real(account, count=1)
+    if not result.success:
+        return (None, result.failure_message or "Playwright 抓取失败")
+    if result.balance is None:
+        return (None, "登录成功但未爬到余额(可能微软弹了安全验证页)")
+    return (result.balance, None)
+
+
 def refresh_account_balance(session: Session, account: XboxAccount) -> dict:
     """刷新单个账号的微软余额 + 自动识别国家 + 写余额快照。
 
-    不拉订单。返回 {success, balance, currency, country, message?}。
+    不写订单。CEO 2026-05-16: 走真 Playwright (旧版是 mock 假数据)。
+    CEO 2026-05-17: 失败时把原因写入 account.status_message, 成功时清空 —
+    前端据此渲染绿/黄/红状态徽章。
+    返回 {success, balance, currency, country, message?}。
     """
     if account.status == XboxAccountStatus.DISABLED.value:
+        # 已停用是用户主动设的状态, 不覆盖 status_message
         return {
             "success": False,
             "message": "账号已停用",
@@ -144,11 +219,15 @@ def refresh_account_balance(session: Session, account: XboxAccount) -> dict:
             "country": account.country.value if hasattr(account.country, "value") else account.country,
         }
 
-    fetched = fetch_balance_only_stub(account)
+    fetched, err = fetch_balance_only_real(account)
     if fetched is None:
+        msg = err or "余额抓取失败"
+        # 写入 status_message, 但不动 status (active 保持; 这是瞬时错误不是严重故障)
+        account.status_message = f"刷新余额: {msg}"
+        session.flush()
         return {
             "success": False,
-            "message": "账号未设置登录邮箱或密码",
+            "message": msg,
             "balance": str(account.local_balance),
             "currency": account.currency.value if hasattr(account.currency, "value") else account.currency,
             "country": account.country.value if hasattr(account.country, "value") else account.country,
@@ -166,9 +245,12 @@ def refresh_account_balance(session: Session, account: XboxAccount) -> dict:
     # 自动识别国家
     _apply_country_auto_detection(session, account, fetched.currency)
 
-    # 更新余额 + last_synced_at
+    # 更新余额 + last_synced_at + 清空错误信息
     account.local_balance = Decimal(fetched.balance)
     account.last_synced_at = china_now()
+    # 如果之前有"刷新余额: xxx" 这种错误, 成功后清掉; 但不动 trigger_sync 写的密码错误信息
+    if account.status_message and account.status_message.startswith("刷新余额: "):
+        account.status_message = None
     session.flush()
 
     return {

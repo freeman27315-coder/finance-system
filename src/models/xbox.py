@@ -36,18 +36,16 @@ class XboxAccountStatus(str, Enum):
     NEED_VERIFICATION = "need_verification"  # 需要安全验证
 
 
-class XboxTransactionType(str, Enum):
-    RECHARGE = "recharge"
-    CONSUME = "consume"
-
-
 class XboxAccount(Base):
     __tablename__ = "xbox_accounts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
-    country: Mapped[XboxCountry] = mapped_column(String(8), nullable=False)
-    currency: Mapped[XboxCurrency] = mapped_column(String(8), nullable=False)
+    # CEO 2026-05-17: country / currency 字段放宽为任意字符串(不再枚举锁死 US/UK)。
+    # 这样系统能自动支持 Microsoft 所有商店的国家/货币 — 同步爬到什么就存什么。
+    # XboxCountry / XboxCurrency 枚举类保留作为"已知值"参考, 不再做 DB 校验。
+    country: Mapped[str] = mapped_column(String(8), nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False)
     # CEO 2026-05-12: 国家是否已通过同步自动识别。
     # False = 待识别(创建时占位 "US" + USD,等首次同步根据爬到的 currency 修正)
     # True  = 已根据 balance.currency 识别过(USD→US, GBP→UK)
@@ -90,10 +88,6 @@ class XboxAccount(Base):
         default=china_now,
     )
 
-    transactions: Mapped[list["XboxTransaction"]] = relationship(
-        back_populates="account",
-        cascade="all, delete-orphan",
-    )
     audit_logs: Mapped[list["XboxAccountAuditLog"]] = relationship(
         back_populates="account",
         cascade="all, delete-orphan",
@@ -126,24 +120,6 @@ class XboxAccountAuditLog(Base):
     )
 
     account: Mapped[XboxAccount] = relationship(back_populates="audit_logs")
-
-
-class XboxTransaction(Base):
-    __tablename__ = "xbox_transactions"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    account_id: Mapped[int] = mapped_column(ForeignKey("xbox_accounts.id"), nullable=False, index=True)
-    rmb_amount: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False, default=Decimal("0"))
-    local_amount: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
-    type: Mapped[XboxTransactionType] = mapped_column(String(16), nullable=False)
-    remark: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        default=china_now,
-    )
-
-    account: Mapped[XboxAccount] = relationship(back_populates="transactions")
 
 
 # ===================================================================

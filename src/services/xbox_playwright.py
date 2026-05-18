@@ -66,10 +66,13 @@ _ORDERS_URL = "https://account.microsoft.com/billing/orders"
 _LOGIN_URL_PREFIX = "https://login.live.com/"
 
 # 解析正则
-_ORDER_NO_RE = re.compile(r"Order\s+number\s+(\d+)")
-_DATE_RE = re.compile(
+# CEO 2026-05-15: 上下文 locale=zh-CN, 微软可能给中文 UI 也可能给英文 UI,
+# 两种都要能解析。
+_ORDER_NO_RE = re.compile(r"(?:Order\s+number|订单号)\s*[::]?\s*(\d+)")
+_DATE_RE_EN = re.compile(
     r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),\s+(\d{4})"
 )
+_DATE_RE_ZH = re.compile(r"(\d{4})年(\d{1,2})月(\d{1,2})日")
 _PRICE_RE = re.compile(r"(USD\$|GBP£|\$|£)([\d,]+\.\d{1,2})")
 _MONTH_NAMES = {
     "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
@@ -127,24 +130,54 @@ def _load_cookies(context: BrowserContext, account_id: int) -> bool:
         return False
 
 
-def _is_logged_in(page: Page) -> bool:
-    """注入 cookies 后, 访问主页看是否还在登录域。
-    True = cookies 有效, 可直接抓订单;
-    False = 失效, 需要走完整登录。
+def _is_on_login_domain(page: Page) -> bool:
+    """页面当前 URL 是否还在 Microsoft 登录域(login.live.com 或
+    login.microsoftonline.com)。
+    True = 被踢到登录页,需要走完整登录;
+    False = 已经在业务页 (account.microsoft.com / billing / xbox.com 等)。
+    """
+    url = page.url or ""
+    return (
+        "login.live.com" in url
+        or "login.microsoftonline.com" in url
+    )
+
+
+def _debug_log(msg: str) -> None:
+    """同步流程关键决策点写日志, 失败再排查时不用瞎猜。
+    日志文件: .playwright-cookies/debug/sync.log
+    异常 silent 吞掉, 永不阻塞主流程。
     """
     try:
-        page.goto(
-            "https://account.microsoft.com/",
-            wait_until="domcontentloaded",
-            timeout=15_000,
-        )
-        page.wait_for_timeout(2_000)
+        log_dir = _cookie_dir() / "debug"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with (log_dir / "sync.log").open("a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now().isoformat()}] {msg}\n")
     except Exception:
-        return False
-    return (
-        "login.live.com" not in page.url
-        and "login.microsoftonline.com" not in page.url
-    )
+        pass
+
+
+def _wait_url_stable(page: Page, max_wait_seconds: float = 8.0) -> str:
+    """等到 URL 在 1.5 秒内不再变化, 或最多等 max_wait_seconds 秒.
+
+    Microsoft 登录后通常会经历 silent SSO 重定向链:
+        login.live.com → /auth/complete-client-signin-oauth-silent
+        → account.microsoft.com → /billing/orders
+    在中间任何一步 page.goto 都会被新的重定向打断 (net::ERR_ABORTED)。
+    所以登录返回 success 后, 先等 URL 稳定再继续动作。
+    """
+    deadline = time.time() + max_wait_seconds
+    last_url = page.url
+    last_change = time.time()
+    while time.time() < deadline:
+        page.wait_for_timeout(400)
+        cur = page.url
+        if cur != last_url:
+            last_url = cur
+            last_change = time.time()
+        elif time.time() - last_change > 1.5:
+            return cur
+    return last_url
 
 
 def _apply_stealth(page: Page) -> None:
@@ -399,19 +432,39 @@ def _do_fetch(
 ) -> FetchResult:
     """登录(尽量复用 cookie)+ 拉订单 + 拉余额。
 
-    CEO 2026-05-15 流程改造:
+    CEO 2026-05-15 流程改造 v2:
       1. cookies 已在外层 _load_cookies 注入(若 JSON 文件存在)
-      2. _is_logged_in 通过访问主页验证 — 不在 login 域 = 复用成功
-      3. 复用失败 → 走完整登录 _full_login(自动处理弹窗) → _save_cookies
+      2. **直接去订单页**, 由 Microsoft 的 redirect 行为判定登录状态:
+         - 没被踢走 = cookies 有效, 直接进入抓取
+         - 被踢到 login.live.com / login.microsoftonline.com = 需要登录
+         (之前用 account.microsoft.com 主页判断 — 主页对未登录用户也开放
+          会显示 "Sign in" 按钮, 导致脚本误判已登录而跳过完整登录步骤)
+      3. 完整登录 _full_login → 登录后再回订单页 → 仍在登录域则真正失败
       4. 抓订单 (含懒加载滚动 + Show more)
       5. 抓余额
     """
-    # Step 1: 验证 cookies 是否仍有效
-    logged_in = _is_logged_in(page)
+    _debug_log(
+        f"=== sync start account_id={account_id} email={login_email} count={count}"
+    )
 
-    # Step 2: cookies 失效 → 完整登录
-    if not logged_in:
+    # Step 1: 直奔订单页. 等到 SSO 重定向链全部跑完(URL 不再变化)再判定登录状态。
+    # CEO 2026-05-15: 之前固定 wait 3s 太短 — silent SSO 中间页(complete-...)
+    # 在 3s 内还没跳完, 我们误判"不在登录域", 紧跟着的 re-goto 又会触发新一轮
+    # MBI_SSL 重定向, 然后才停在登录页 — 但那时已经过了登录检查。
+    try:
+        _goto_with_retry(page, _ORDERS_URL, wait_until="commit", timeout=30_000)
+        _wait_url_stable(page, max_wait_seconds=12)
+    except Exception as exc:
+        _debug_log(f"step1 goto ORDERS_URL exc: {type(exc).__name__}: {exc}")
+
+    _debug_log(f"step1 after goto url={page.url[:200]}")
+
+    # Step 2: 被踢到登录域 → 完整登录
+    if _is_on_login_domain(page):
+        _debug_log("step2 on login domain, calling _full_login")
         login_ok = _full_login(page, login_email, password_plain)
+        _debug_log(f"step2 _full_login returned {login_ok}, url={page.url[:200]}")
+
         if not login_ok:
             return FetchResult(
                 success=False,
@@ -423,11 +476,69 @@ def _do_fetch(
                     f"final_url={page.url[:200]}"
                 ),
             )
-        # 登录成功 → 把最新 cookies 落盘, 下次直接复用
-        _save_cookies(context, account_id)
 
-    # Step 3: 进订单页
-    _goto_with_retry(page, _ORDERS_URL, wait_until="commit", timeout=30_000)
+        # 登录成功 → cookies 落盘
+        _save_cookies(context, account_id)
+        _debug_log("step2 cookies saved")
+
+        # CEO 2026-05-15: 登录后 Microsoft 会经过 silent SSO 重定向链
+        # (auth/complete-client-signin-oauth-silent → account.microsoft.com →
+        #  billing/orders). 立刻 goto 会被打断 (net::ERR_ABORTED), 先等 URL 稳定。
+        stable_url = _wait_url_stable(page, max_wait_seconds=10)
+        _debug_log(f"step2 url stable: {stable_url[:200]}")
+
+        # 如果稳定后已经在订单页, 直接跳过 re-goto
+        if "account.microsoft.com/billing/orders" not in page.url:
+            try:
+                _goto_with_retry(
+                    page, _ORDERS_URL, wait_until="commit", timeout=30_000
+                )
+                page.wait_for_timeout(3_000)
+            except Exception as exc:
+                _debug_log(
+                    f"step2 re-goto ORDERS_URL exc: {type(exc).__name__}: {exc}"
+                )
+
+        _debug_log(f"step2 after re-goto url={page.url[:200]}")
+
+        # billing 是高敏感页(MBI_SSL scope), 即使刚登录, Microsoft 还可能
+        # 强制再认证一次 (prompt=login). 此时再走一次 _full_login 兜底。
+        if _is_on_login_domain(page):
+            _debug_log("step2b billing forced re-auth, doing second login pass")
+            login_ok2 = _full_login(page, login_email, password_plain)
+            _debug_log(
+                f"step2b _full_login returned {login_ok2}, url={page.url[:200]}"
+            )
+            if login_ok2:
+                _save_cookies(context, account_id)
+                stable_url = _wait_url_stable(page, max_wait_seconds=10)
+                _debug_log(f"step2b url stable: {stable_url[:200]}")
+                if "account.microsoft.com/billing/orders" not in page.url:
+                    try:
+                        _goto_with_retry(
+                            page, _ORDERS_URL,
+                            wait_until="commit", timeout=30_000,
+                        )
+                        page.wait_for_timeout(3_000)
+                    except Exception as exc:
+                        _debug_log(
+                            f"step2b re-goto exc: {type(exc).__name__}: {exc}"
+                        )
+
+            # 两次登录还在登录域 → 账号密码错 / 强 2FA / 安全锁
+            if _is_on_login_domain(page):
+                return FetchResult(
+                    success=False,
+                    orders=[],
+                    balance=None,
+                    failure_category="login_failed",
+                    failure_message=(
+                        "登录后 Microsoft 仍将我们拉回登录页(可能账号密码错或触发强安全验证). "
+                        f"final_url={page.url[:200]}"
+                    ),
+                )
+    else:
+        _debug_log("step2 cookies still valid, skip login")
 
     # "Is your security info still accurate?" 提示页 - 自动点 Looks good
     if "proofs" in page.url:
@@ -445,9 +556,49 @@ def _do_fetch(
         _goto_with_retry(page, _ORDERS_URL, wait_until="commit", timeout=30_000)
 
     # 直接等订单卡片 — 不用 networkidle (Microsoft 后台 XHR 永不停)
-    try:
-        page.wait_for_selector("text=Order number", timeout=20_000)
-    except PlaywrightTimeout:
+    # 中英文 UI 都支持 ("订单号" / "Order number")
+    # 注意: Microsoft 页面 CSP 禁 eval, 不能用 wait_for_function 传字符串。
+    # 改用 Playwright 原生 locator 轮询(底层走 protocol, 不触发 eval)。
+    #
+    # CEO 2026-05-15: 期间若被踢回登录域 (MBI_SSL 高敏感页强制再认证), 自动
+    # 触发一次完整登录, 然后重置等待窗口继续轮询订单。
+    _orders_ready = False
+    _login_retried_in_wait = False
+    _deadline = time.time() + 20
+    while time.time() < _deadline:
+        try:
+            zh = page.locator("text=订单号").count()
+            en = page.locator("text=Order number").count()
+            if zh > 0 or en > 0:
+                _orders_ready = True
+                break
+            # 等订单时被微软踢回登录域 → 触发完整登录(最多重试 1 次)
+            if not _login_retried_in_wait and _is_on_login_domain(page):
+                _login_retried_in_wait = True
+                _debug_log(
+                    f"wait_for_orders bounced to login, re-running _full_login. url={page.url[:200]}"
+                )
+                if _full_login(page, login_email, password_plain):
+                    _save_cookies(context, account_id)
+                    _wait_url_stable(page, max_wait_seconds=10)
+                    if "account.microsoft.com/billing/orders" not in page.url:
+                        try:
+                            _goto_with_retry(
+                                page, _ORDERS_URL,
+                                wait_until="commit", timeout=30_000,
+                            )
+                            _wait_url_stable(page, max_wait_seconds=8)
+                        except Exception:
+                            pass
+                    _deadline = time.time() + 20  # 重置 20s 窗口给页面渲染
+                    _debug_log(f"wait_for_orders post-relogin url={page.url[:200]}")
+                else:
+                    _debug_log("wait_for_orders re-login failed, will keep polling until timeout")
+        except Exception:
+            pass
+        page.wait_for_timeout(500)
+
+    if not _orders_ready:
         # 调试: 把页面 URL + 截图 + body text 写文件
         dbg_dir = _cookie_dir() / "debug"
         dbg_dir.mkdir(parents=True, exist_ok=True)
@@ -516,6 +667,44 @@ def _try_fetch_balance(page: Page, password_plain: str) -> Optional[FetchedBalan
             wait_until="commit",
             timeout=30_000,
         )
+        page.wait_for_timeout(2_500)
+
+        # CEO 2026-05-16: 微软对部分账号会跳到 /account-checkup 拦截首页,
+        # 要求绑定备用邮箱才让继续, 这页本身不显示余额。试着找 Skip / 暂时不
+        # 按钮跳过, 不行的话再硬跳一次首页。
+        for _ in range(2):
+            if "/account-checkup" not in page.url:
+                break
+            skipped = False
+            skip_labels = (
+                "Skip for now", "Skip", "Not now", "Maybe later",
+                "稍后", "跳过", "暂时不", "暂不", "Cancel", "取消",
+            )
+            for label in skip_labels:
+                for role in ("button", "link"):
+                    try:
+                        el = page.get_by_role(role, name=label, exact=False)
+                        if el.count() > 0 and el.first.is_visible():
+                            el.first.click(timeout=3_000)
+                            page.wait_for_timeout(2_500)
+                            skipped = True
+                            break
+                    except Exception:
+                        continue
+                if skipped:
+                    break
+            if not skipped:
+                # 找不到 Skip — 强制再跳一次主页, 微软有时会放行
+                try:
+                    _goto_with_retry(
+                        page, "https://account.microsoft.com/",
+                        wait_until="commit", timeout=20_000,
+                    )
+                    page.wait_for_timeout(2_500)
+                except Exception:
+                    break
+                if "/account-checkup" in page.url:
+                    break  # 跳了第二次还是这页, 放弃
 
         # 兜底: 万一主页也被 reauth 拦住 (不该出现, 留作防御)
         if "login.live.com" in page.url or "login.microsoftonline.com" in page.url:
@@ -573,12 +762,13 @@ def _try_fetch_balance(page: Page, password_plain: str) -> Optional[FetchedBalan
         return None
 
     # 两步匹配:
-    # 1) 先用关键字定位到"余额"那一小段
+    # 1) 先用关键字定位到"账户余额"那一小段(必须是明确的"账户/帐户余额"短语,
+    #    单独"余额"两字太宽松会误抓"代金券余额/奖励余额"等其他数字)
     # 2) 在关键字之后 100 字符内, 匹配金额 + 币种(币种可在前或后)
     keyword_re = re.compile(
-        r"(?:Microsoft account balance|Microsoft 帐户余额|Microsoft 账户余额"
-        r"|Account balance|Account credit|Available credit"
-        r"|账户余额|账号余额|帐户余额|余额)",
+        r"(?:Microsoft\s+account\s+balance|Microsoft\s+帐户余额|Microsoft\s+账户余额"
+        r"|Account\s+balance|Account\s+credit|Available\s+credit"
+        r"|账户余额|账号余额|帐户余额)",
         re.IGNORECASE,
     )
     m = keyword_re.search(body_text)
@@ -673,8 +863,20 @@ def _scroll_load_orders(
         "显示更多",
     )
 
+    # 中英文 UI 都要统计 ("订单号" + "Order number")
+    def _count_orders() -> int:
+        try:
+            zh = page.locator("text=订单号").count()
+        except Exception:
+            zh = 0
+        try:
+            en = page.locator("text=Order number").count()
+        except Exception:
+            en = 0
+        return zh + en
+
     for _ in range(max_iters):
-        current = page.locator("text=Order number").count()
+        current = _count_orders()
         if current >= target_count:
             return
 
@@ -686,7 +888,7 @@ def _scroll_load_orders(
         page.wait_for_timeout(1_500)
 
         # 看一下卡片数有没有增加
-        new_count = page.locator("text=Order number").count()
+        new_count = _count_orders()
         if new_count > current:
             last_count = new_count
             stagnant = 0
@@ -903,22 +1105,52 @@ def _full_login(page: Page, email: str, password: str) -> bool:
     """完整登录流程。cookies 失效 / 首次时调。
     流程:邮箱 → 选密码方式 → 密码 → 处理所有弹窗。返回是否成功。
 
-    CEO 2026-05-15: 强制跳 login.live.com 标准入口(避开 OAuth authorize
-    中间页 — 那种页面 body 里只有"登录/登录选项"几个字, 没邮箱框)。
-    login.live.com 是 Microsoft 个人账号标准入口, 一定有 loginfmt 邮箱框。
+    CEO 2026-05-15: 当前页面如果已经有邮箱输入框, 就地填 (避免破坏 Microsoft
+    刚发起的 OAuth flow — 强行跳 login.live.com 会丢失原 redirect_uri / state,
+    导致就算登录上也回不到 billing/orders)。没有邮箱框时再跳 login.live.com 标准入口。
     """
-    # 0. 强制跳标准登录入口
-    try:
-        page.goto(
-            "https://login.live.com/",
-            wait_until="domcontentloaded",
-            timeout=20_000,
-        )
-        page.wait_for_timeout(1_500)
-    except Exception:
-        pass
+    # 0. CEO 2026-05-15: 当前如果已经在 Microsoft 登录域 (oauth/authorize 或
+    #    login.live.com), 一定要就地走 — 这个登录页是 billing/orders 自动
+    #    redirect 过来的, 带着 state/redirect_uri, 登录完会自动回订单页。
+    #    强行跳 login.live.com 会丢失 OAuth state, 登录虽成功但回不到敏感页。
+    #
+    #    刚跳到登录域时邮箱框 JS 可能还没渲染, 先等几秒让它显出来再判断。
+    on_login_domain = (
+        "login.live.com" in page.url
+        or "login.microsoftonline.com" in page.url
+    )
+    if on_login_domain:
+        page.wait_for_timeout(2_500)  # 给 oauth/authorize 的 JS 渲染时间
 
-    # 1. 邮箱(login.live.com 标准入口必有)
+    try:
+        has_email_input = (
+            page.locator(
+                'input[name="loginfmt"], input[type="email"]'
+            ).count()
+            > 0
+        )
+    except Exception:
+        has_email_input = False
+
+    _debug_log(
+        f"_full_login start url={page.url[:200]} "
+        f"on_login_domain={on_login_domain} has_email_input={has_email_input}"
+    )
+
+    # 只在 (不在登录域 且 没邮箱框) 时才跳 login.live.com 兜底
+    if not on_login_domain and not has_email_input:
+        try:
+            page.goto(
+                "https://login.live.com/",
+                wait_until="domcontentloaded",
+                timeout=20_000,
+            )
+            page.wait_for_timeout(1_500)
+        except Exception as exc:
+            _debug_log(f"_full_login goto login.live.com exc: {exc}")
+
+    # 1. 邮箱
+    email_filled = False
     try:
         page.wait_for_selector(
             'input[name="loginfmt"], input[type="email"]',
@@ -929,7 +1161,8 @@ def _full_login(page: Page, email: str, password: str) -> bool:
             'input[name="loginfmt"], input[type="email"]'
         ).first.fill(email)
         _click_submit(page)
-        page.wait_for_timeout(2_000)
+        page.wait_for_timeout(2_500)
+        email_filled = True
     except PlaywrightTimeout:
         # 极少数情况邮箱框还是不可见 — 试点"登录"按钮唤出再试一次
         _click_first(page, [
@@ -950,14 +1183,20 @@ def _full_login(page: Page, email: str, password: str) -> bool:
                 'input[name="loginfmt"], input[type="email"]'
             ).first.fill(email)
             _click_submit(page)
-            page.wait_for_timeout(2_000)
+            page.wait_for_timeout(2_500)
+            email_filled = True
         except PlaywrightTimeout:
             pass  # 让后续步骤兜底, 不直接放弃
+
+    _debug_log(
+        f"_full_login step1 email_filled={email_filled} url={page.url[:200]}"
+    )
 
     # 2. 选择登录方式(若 Microsoft 推 passkey 而非密码)
     _select_password_option(page, email)
 
     # 3. 密码
+    pwd_filled = False
     try:
         page.wait_for_selector(
             'input[name="passwd"], input[type="password"]',
@@ -968,14 +1207,21 @@ def _full_login(page: Page, email: str, password: str) -> bool:
             'input[name="passwd"], input[type="password"]'
         ).first.fill(password)
         _click_submit(page)
-        page.wait_for_timeout(2_000)
+        page.wait_for_timeout(2_500)
+        pwd_filled = True
     except PlaywrightTimeout:
         # 密码框没出现 — 可能已经登录上(silent SSO 流程)
         # 让 _handle_login_prompts 兜底判断 success
         pass
 
+    _debug_log(f"_full_login step3 pwd_filled={pwd_filled} url={page.url[:200]}")
+
     # 4. 处理所有后续弹窗 直到离开登录域
-    return _handle_login_prompts(page) == "success"
+    final = _handle_login_prompts(page)
+    _debug_log(
+        f"_full_login step4 prompts result={final} final_url={page.url[:200]}"
+    )
+    return final == "success"
 
 
 def _parse_orders(page: Page, limit: int) -> list[FetchedOrder]:
@@ -989,11 +1235,25 @@ def _parse_orders(page: Page, limit: int) -> list[FetchedOrder]:
     页面用 React 渲染, 每个卡片是独立 div。我们通过 text=Order number 找到锚点,
     然后向上找父容器拿整张卡片的纯文本,再用正则提取。
     """
-    # 找所有"Order number"文本节点的所在卡片容器
-    cards = page.locator("text=Order number").locator(
+    # 找所有"订单号"/"Order number"文本节点的所在卡片容器(中英文 UI 都支持)
+    zh_cards = page.locator("text=订单号").locator(
         'xpath=ancestor::*[contains(@class, "card") or self::section or self::article][1]'
     )
-    card_count = cards.count()
+    en_cards = page.locator("text=Order number").locator(
+        'xpath=ancestor::*[contains(@class, "card") or self::section or self::article][1]'
+    )
+    try:
+        zh_count = zh_cards.count()
+    except Exception:
+        zh_count = 0
+    try:
+        en_count = en_cards.count()
+    except Exception:
+        en_count = 0
+
+    # 中文版优先 (locale=zh-CN 是默认)
+    cards = zh_cards if zh_count >= en_count else en_cards
+    card_count = max(zh_count, en_count)
 
     out: list[FetchedOrder] = []
     seen_order_nos: set[str] = set()
@@ -1039,12 +1299,19 @@ def _parse_one_card(text: str) -> Optional[FetchedOrder]:
         return None
     order_no = order_no_m.group(1)
 
-    date_m = _DATE_RE.search(text)
-    if not date_m:
-        return None
-    month = _MONTH_NAMES[date_m.group(1)]
-    day = int(date_m.group(2))
-    year = int(date_m.group(3))
+    # 日期: 优先匹配中文"2026年5月11日", 否则英文"May 11, 2026"
+    date_zh = _DATE_RE_ZH.search(text)
+    if date_zh:
+        year = int(date_zh.group(1))
+        month = int(date_zh.group(2))
+        day = int(date_zh.group(3))
+    else:
+        date_en = _DATE_RE_EN.search(text)
+        if not date_en:
+            return None
+        month = _MONTH_NAMES[date_en.group(1)]
+        day = int(date_en.group(2))
+        year = int(date_en.group(3))
     # Microsoft 页面只精确到天 → 用当天 12:00:00 (避免时区跨日)
     order_at = datetime(year, month, day, 12, 0, 0)
 
@@ -1073,24 +1340,34 @@ def _parse_one_card(text: str) -> Optional[FetchedOrder]:
     )
 
 
-# 不应作为商品名的关键字(排除掉)
+# 不应作为商品名的关键字(排除掉)— 中英文混合
 _NON_PRODUCT_NAME_TOKENS = {
+    # 英文
     "Completed", "Pending", "Refunded", "Canceled", "Cancelled",
     "Show details", "Hide details", "Paid with", "Total",
+    # 中文
+    "已完成", "处理中", "已退款", "已取消", "已兑现",
+    "显示详细信息", "隐藏详细信息", "支付方式", "总计",
 }
 
 
 def _extract_product_name(card_text: str, price_index: int) -> Optional[str]:
     """从卡片文本里提取商品名。
 
-    策略: "Order number XXX" 行之后,价格 (USD$/GBP£) 之前的第一个非空行。
-    通常就是商品名(如 "80 Robux" / "500 Robux")。
+    策略: "订单号"/"Order number"那一行之后,价格(USD$/GBP£)之前的第一个非空行。
+    通常就是商品名(如 "80 Robux" / "500 Robux" / "Premium 88 Robux")。
     """
-    # 取"Order number"行 → 价格之间的片段
-    order_idx = card_text.find("Order number")
+    # 找订单号关键字位置 — 中英文任一
+    order_idx = -1
+    for keyword in ("订单号", "Order number"):
+        idx = card_text.find(keyword)
+        if idx >= 0:
+            order_idx = idx
+            break
     if order_idx < 0:
         return None
-    # "Order number XXX\n" 后面到 price_index 之间的文本
+
+    # 锚点行结束位置 → 价格位置之间的文本片段
     after_order_line_end = card_text.find("\n", order_idx)
     if after_order_line_end < 0:
         return None
