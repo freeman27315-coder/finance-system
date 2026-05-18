@@ -46,6 +46,7 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_wallet_is_group_column()
     _ensure_wallet_transaction_business_date_column()
+    _ensure_wallet_transaction_operator_name_column()
     _ensure_xbox_account_extended_columns()
     _ensure_xbox_account_is_available_for_claim_column()
     _ensure_xbox_account_country_identified_column()
@@ -206,6 +207,23 @@ def _migrate_xbox_sale_date_to_datetime() -> None:
                     "WHERE sale_date IS NOT NULL AND length(sale_date) = 10"
                 )
             )
+
+
+def _ensure_wallet_transaction_operator_name_column() -> None:
+    """CEO 2026-05-18: 记录每笔流水操作人(从前端 localStorage 传).
+
+    用于台湾钱包 + 之后其他模块的"是谁动了这笔钱"追溯.
+    """
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    inspector = inspect(engine)
+    if "wallet_transactions" not in inspector.get_table_names():
+        return
+    column_names = {column["name"] for column in inspector.get_columns("wallet_transactions")}
+    if "operator_name" in column_names:
+        return
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE wallet_transactions ADD COLUMN operator_name VARCHAR(120)"))
 
 
 def _ensure_wallet_transaction_business_date_column() -> None:

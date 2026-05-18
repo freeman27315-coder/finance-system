@@ -49,7 +49,6 @@ from src.services.xbox_sales_ledger import (
     ensure_xbox_default_reconcile_mappings,
     ensure_xbox_default_wallet_settings,
     ensure_xbox_sales_ledger_wallets,
-    soft_delete_old_taiwan_wallets,
 )
 
 
@@ -62,8 +61,8 @@ async def lifespan(_: FastAPI):
         ensure_default_taobao_wallets(db)
         ensure_default_taiwan_wallets(db)
         ensure_vendor_wallets(db)
-        # XBOX 销售归口"理论值"钱包（CEO 2026-05-08 确认结构）
-        soft_delete_old_taiwan_wallets(db)  # CEO Q3:B - 台湾旧 3 个空钱包软删除
+        # CEO 2026-05-17: 旧的 soft_delete_old_taiwan_wallets 已弃用 —
+        # 它会误删新的"银行卡" group(同名). 台湾钱包结构改造后不再需要.
         leaf_id_by_name = ensure_xbox_sales_ledger_wallets(db)
         ensure_xbox_default_wallet_settings(db, leaf_id_by_name)
         # 淘宝店铺总钱包(group) + 自动配对账映射(CEO 2026-05-08 B+A)

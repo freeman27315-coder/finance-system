@@ -1,4 +1,6 @@
-export type Currency = "CNY" | "USDT" | "USD" | "GBP" | "TWD";
+// CEO 2026-05-17: 不再写死, 支持任意 ISO 4217 代码 (EUR/JPY/CNY/HKD/KRW 等)
+// 已知货币(USD/GBP/EUR/...) 在 money.ts 有特定格式化规则, 未知货币走兜底
+export type Currency = string;
 
 export type WalletType = "ASSET_RMB" | "ASSET_USDT" | "VENDOR" | "XBOX" | "TAOBAO" | "TAIWAN";
 
@@ -48,9 +50,9 @@ export type VendorTransaction = {
   createdAt: string;
 };
 
-export type XboxCountry = "US" | "UK";
+// CEO 2026-05-17: 不再写死 US/UK, 任何字符串(JP/EU/CN/HK ...) 都接受
+export type XboxCountry = string;
 
-export type XboxTransactionType = "recharge" | "consume";
 
 // PR #103 (issue #102) 加的账号状态
 export type XboxAccountStatus = "active" | "disabled" | "error" | "need_verification";
@@ -59,7 +61,8 @@ export type XboxAccount = {
   id: string;
   name: string;
   country: XboxCountry;
-  currency: Currency;
+  // CEO 2026-05-17: currency 不再限制 Currency 联合类型, 后端可能给任意 ISO 4217 代码
+  currency: string;
   rmbCostMinor: number;
   localBalanceMinor: number;
   remark: string | null;
@@ -197,27 +200,22 @@ export type XboxReconcileReportRow = {
   diff: string;
 };
 
-export type XboxTransaction = {
-  id: string;
-  accountId: string;
-  rmbAmountMinor: number;
-  localAmountMinor: number;
-  type: XboxTransactionType;
-  remark: string | null;
-  createdAt: string;
-  currency: Currency;
-};
-
 export type XboxCountrySummary = {
   rmbCostMinor: number;
   localBalanceMinor: number;
   accountCount: number;
-  currency: Currency;
+  // CEO 2026-05-17: 任意 ISO 4217 代码 (USD/GBP/EUR/JPY/CNY/HKD...)
+  currency: string;
+  // 显示用的国家代码 (US/UK/EU/JP...)
+  countryCode: string;
 };
 
+// CEO 2026-05-17: 加 byCurrency 字段存所有币种汇总(动态), 老的 us/uk 字段保留兼容
 export type XboxSummary = {
   us: XboxCountrySummary;
   uk: XboxCountrySummary;
+  // 新字段: 所有币种的汇总 (USD/GBP/EUR/JPY/CNY/HKD...) — 前端按这个动态渲染卡片
+  byCurrency: Record<string, XboxCountrySummary>;
 };
 
 export type TaiwanWallet = {
@@ -225,11 +223,17 @@ export type TaiwanWallet = {
   name: string;
   balanceMinor: number;
   createdAt: string;
+  // CEO 2026-05-17: 台湾钱包改为 group + 子钱包结构
+  isGroup: boolean;
+  parentId: string | null;
+  remark: string | null;
 };
 
 export type TaiwanTransaction = {
   id: string;
   walletId: string;
+  // CEO 2026-05-18: 谁动的这笔钱
+  operatorName: string | null;
   amountMinor: number;
   direction: "in" | "out";
   remark: string | null;

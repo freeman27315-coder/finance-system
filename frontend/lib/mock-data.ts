@@ -11,8 +11,7 @@ import type {
   VendorTransaction,
   WalletBalance,
   XboxAccount,
-  XboxSummary,
-  XboxTransaction
+  XboxSummary
 } from "@/types";
 
 export const mockWallets: WalletBalance[] = [
@@ -342,77 +341,37 @@ export const mockXboxAccounts: XboxAccount[] = [
   }
 ];
 
-export const mockXboxTransactions: Record<string, XboxTransaction[]> = {
-  "xbox-us-1": [
-    {
-      id: "xbox-us-1-tx-1",
-      accountId: "xbox-us-1",
-      rmbAmountMinor: 14_000_00,
-      localAmountMinor: 2_000_00,
-      type: "recharge",
-      remark: "首充",
-      createdAt: "2026-03-12T08:30:00.000Z",
-      currency: "USD"
-    },
-    {
-      id: "xbox-us-1-tx-2",
-      accountId: "xbox-us-1",
-      rmbAmountMinor: 0,
-      localAmountMinor: 160_00,
-      type: "consume",
-      remark: "购买游戏",
-      createdAt: "2026-04-10T11:00:00.000Z",
-      currency: "USD"
-    }
-  ],
-  "xbox-us-2": [
-    {
-      id: "xbox-us-2-tx-1",
-      accountId: "xbox-us-2",
-      rmbAmountMinor: 12_500_00,
-      localAmountMinor: 1_800_00,
-      type: "recharge",
-      remark: null,
-      createdAt: "2026-03-30T03:25:00.000Z",
-      currency: "USD"
-    }
-  ],
-  "xbox-uk-1": [
-    {
-      id: "xbox-uk-1-tx-1",
-      accountId: "xbox-uk-1",
-      rmbAmountMinor: 18_400_00,
-      localAmountMinor: 2_200_00,
-      type: "recharge",
-      remark: "英区开号",
-      createdAt: "2026-04-02T05:10:00.000Z",
-      currency: "GBP"
-    },
-    {
-      id: "xbox-uk-1-tx-2",
-      accountId: "xbox-uk-1",
-      rmbAmountMinor: 0,
-      localAmountMinor: 100_00,
-      type: "consume",
-      remark: "Game Pass",
-      createdAt: "2026-04-20T09:00:00.000Z",
-      currency: "GBP"
-    }
-  ]
-};
 
 export const mockXboxSummary: XboxSummary = {
   us: {
     rmbCostMinor: 40_500_00,
     localBalanceMinor: 5_560_00,
     accountCount: 2,
-    currency: "USD"
+    currency: "USD",
+    countryCode: "US"
   },
   uk: {
     rmbCostMinor: 18_400_00,
     localBalanceMinor: 2_100_00,
     accountCount: 1,
-    currency: "GBP"
+    currency: "GBP",
+    countryCode: "UK"
+  },
+  byCurrency: {
+    USD: {
+      rmbCostMinor: 40_500_00,
+      localBalanceMinor: 5_560_00,
+      accountCount: 2,
+      currency: "USD",
+      countryCode: "US"
+    },
+    GBP: {
+      rmbCostMinor: 18_400_00,
+      localBalanceMinor: 2_100_00,
+      accountCount: 1,
+      currency: "GBP",
+      countryCode: "UK"
+    }
   }
 };
 
@@ -583,74 +542,12 @@ export const mockAssetTransactions: Record<string, AssetTransaction[]> = {
 };
 
 export const mockTaiwanWallets: TaiwanWallet[] = [
-  {
-    id: "taiwan-8591",
-    name: "8591余额",
-    balanceMinor: 385_000_00,
-    createdAt: "2026-03-01T08:00:00.000Z"
-  },
-  {
-    id: "taiwan-bank",
-    name: "银行卡",
-    balanceMinor: 128_500_00,
-    createdAt: "2026-03-01T08:00:00.000Z"
-  },
-  {
-    id: "taiwan-store",
-    name: "超商代收金流余额",
-    balanceMinor: 62_800_00,
-    createdAt: "2026-03-01T08:00:00.000Z"
-  }
+  { id: "taiwan-bank-grp", name: "银行卡", balanceMinor: 0, createdAt: "2026-05-17T00:00:00.000Z", isGroup: true, parentId: null, remark: null },
+  { id: "taiwan-8591-grp", name: "8591",   balanceMinor: 0, createdAt: "2026-05-17T00:00:00.000Z", isGroup: true, parentId: null, remark: null },
+  { id: "taiwan-store-grp", name: "超商",   balanceMinor: 0, createdAt: "2026-05-17T00:00:00.000Z", isGroup: true, parentId: null, remark: null }
 ];
 
-export const mockTaiwanTransactions: Record<string, TaiwanTransaction[]> = {
-  "taiwan-8591": [
-    {
-      id: "taiwan-8591-tx-1",
-      walletId: "taiwan-8591",
-      amountMinor: 200_000_00,
-      direction: "in",
-      remark: "期初入账",
-      createdAt: "2026-03-05T03:00:00.000Z"
-    },
-    {
-      id: "taiwan-8591-tx-2",
-      walletId: "taiwan-8591",
-      amountMinor: 15_000_00,
-      direction: "out",
-      remark: "提现",
-      createdAt: "2026-04-15T07:30:00.000Z"
-    }
-  ],
-  "taiwan-bank": [
-    {
-      id: "taiwan-bank-tx-1",
-      walletId: "taiwan-bank",
-      amountMinor: 128_500_00,
-      direction: "in",
-      remark: "银行汇入",
-      createdAt: "2026-03-10T09:00:00.000Z"
-    }
-  ],
-  "taiwan-store": [
-    {
-      id: "taiwan-store-tx-1",
-      walletId: "taiwan-store",
-      amountMinor: 80_000_00,
-      direction: "in",
-      remark: "超商代收",
-      createdAt: "2026-03-20T05:00:00.000Z"
-    },
-    {
-      id: "taiwan-store-tx-2",
-      walletId: "taiwan-store",
-      amountMinor: 17_200_00,
-      direction: "out",
-      remark: "结算转出",
-      createdAt: "2026-04-12T08:00:00.000Z"
-    }
-  ]
-};
+export const mockTaiwanTransactions: Record<string, TaiwanTransaction[]> = {};
 
 export const mockTaiwanSummary: TaiwanSummary = {
   totalBalanceMinor: 385_000_00 + 128_500_00 + 62_800_00,

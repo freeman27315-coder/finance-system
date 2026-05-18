@@ -11,7 +11,6 @@ import {
   mockVendorTransactions,
   mockXboxAccounts,
   mockXboxSummary,
-  mockXboxTransactions
 } from "@/lib/mock-data";
 import { decimalToMinor } from "@/lib/money";
 import type {
@@ -50,8 +49,6 @@ import type {
   XboxSaleCurrency,
   XboxSaleRecord,
   XboxSummary,
-  XboxTransaction,
-  XboxTransactionType,
   XboxWalletMethod
 } from "@/types";
 
@@ -117,11 +114,34 @@ function normalizeWallet(wallet: AssetWalletResponse, parentId?: string | null):
 }
 
 export async function getDashboardData(): Promise<DashboardData> {
+  // CEO 2026-05-17: dashboard 需要看 ALL 钱包(资产 + 台湾 + 未来其他模块).
+  // /api/wallets/assets 只返 ASSET_*; 台湾要单独拉一次 /api/taiwan/wallets, 合并.
   try {
-    const wallets = await fetchJson<AssetWalletResponse[]>("/api/wallets/assets");
-    return {
-      wallets: wallets.map((wallet) => normalizeWallet(wallet))
-    };
+    const [assetWallets, taiwanWallets] = await Promise.all([
+      fetchJson<AssetWalletResponse[]>("/api/wallets/assets").catch(() => [] as AssetWalletResponse[]),
+      fetchJson<TaiwanWalletResponse[]>("/api/taiwan/wallets").catch(() => [] as TaiwanWalletResponse[]),
+    ]);
+    const all = [
+      ...assetWallets.map((wallet) => normalizeWallet(wallet)),
+      // 台湾响应转成 WalletBalance 形状
+      ...taiwanWallets.map<WalletBalance>((w) => ({
+        id: String(w.id),
+        name: w.name,
+        type: "TAIWAN",
+        currency: "TWD",
+        balanceMinor: decimalToMinor(w.balance, "TWD"),
+        isGroup: Boolean(w.is_group ?? w.isGroup ?? false),
+        parentId:
+          w.parent_id == null && w.parentId == null
+            ? null
+            : String(w.parent_id ?? w.parentId),
+        remark: w.remark ?? null,
+        deletedAt: null,
+        children: []
+      })),
+    ];
+    if (all.length === 0) return mockDashboardData;
+    return { wallets: all };
   } catch {
     return mockDashboardData;
   }
@@ -368,20 +388,6 @@ type XboxAccountAuditLogResponse = {
   createdAt?: string;
 };
 
-type XboxTransactionResponse = {
-  id: string | number;
-  account_id?: string | number;
-  accountId?: string | number;
-  rmb_amount?: string | number;
-  rmbAmount?: string | number;
-  local_amount?: string | number;
-  localAmount?: string | number;
-  type: XboxTransactionType;
-  remark?: string | null;
-  created_at?: string;
-  createdAt?: string;
-};
-
 type XboxSummaryResponse = {
   USD?: { rmb_cost?: string | number; local_balance?: string | number; rmbCost?: string | number; localBalance?: string | number };
   GBP?: { rmb_cost?: string | number; local_balance?: string | number; rmbCost?: string | number; localBalance?: string | number };
@@ -430,18 +436,6 @@ function normalizeXboxAuditLog(log: XboxAccountAuditLogResponse): XboxAccountAud
   };
 }
 
-function normalizeXboxTransaction(transaction: XboxTransactionResponse, currency: Currency): XboxTransaction {
-  return {
-    id: String(transaction.id),
-    accountId: String(transaction.account_id ?? transaction.accountId ?? ""),
-    rmbAmountMinor: decimalToMinor(transaction.rmb_amount ?? transaction.rmbAmount ?? 0, "CNY"),
-    localAmountMinor: decimalToMinor(transaction.local_amount ?? transaction.localAmount ?? 0, currency),
-    type: transaction.type,
-    remark: transaction.remark ?? null,
-    createdAt: transaction.created_at ?? transaction.createdAt ?? "",
-    currency
-  };
-}
 
 export async function getXboxAccounts(country?: XboxCountry): Promise<XboxAccount[]> {
   try {
@@ -537,69 +531,56 @@ export async function getXboxAccountAuditLogs(
   }
 }
 
-export async function rechargeXbox(
-  accountId: string,
-  payload: { rmbAmount: string; localAmount: string; remark?: string }
-): Promise<XboxTransaction> {
-  const body: Record<string, unknown> = {
-    rmb_amount: payload.rmbAmount,
-    local_amount: payload.localAmount
-  };
-  if (payload.remark) {
-    body.remark = payload.remark;
-  }
-  const data = (await postJson(`/api/xbox/accounts/${accountId}/recharge`, body)) as XboxTransactionResponse;
-  // currency unknown without account context; default USD-safe normalization happens via currency arg below
-  const account = mockXboxAccounts.find((acc) => acc.id === accountId);
-  return normalizeXboxTransaction({ ...data, account_id: data.account_id ?? accountId }, account?.currency ?? "USD");
-}
-
-export async function consumeXbox(
-  accountId: string,
-  payload: { localAmount: string; remark?: string }
-): Promise<XboxTransaction> {
-  const body: Record<string, unknown> = {
-    local_amount: payload.localAmount
-  };
-  if (payload.remark) {
-    body.remark = payload.remark;
-  }
-  const data = (await postJson(`/api/xbox/accounts/${accountId}/consume`, body)) as XboxTransactionResponse;
-  const account = mockXboxAccounts.find((acc) => acc.id === accountId);
-  return normalizeXboxTransaction({ ...data, account_id: data.account_id ?? accountId }, account?.currency ?? "USD");
-}
-
-export async function getXboxTransactions(account: XboxAccount): Promise<XboxTransaction[]> {
-  try {
-    const data = await fetchJson<XboxTransactionResponse[]>(`/api/xbox/accounts/${account.id}/transactions`);
-    return data.map((tx) => normalizeXboxTransaction({ ...tx, account_id: tx.account_id ?? account.id }, account.currency));
-  } catch {
-    return mockXboxTransactions[account.id] ?? [];
-  }
-}
-
 export async function getXboxSummary(): Promise<XboxSummary> {
   try {
-    const data = await fetchJson<XboxSummaryResponse>("/api/xbox/summary");
-    const usd = data.USD ?? {};
-    const gbp = data.GBP ?? {};
-    // accountCount unknown from summary endpoint — fetch accounts lazily on consumer if needed
+    // CEO 2026-05-17: 后端返回 {USD:{...}, GBP:{...}, JPY:{...}, ...} 任意币种
+    const data = await fetchJson<Record<string, {
+      rmb_cost?: number | string;
+      rmbCost?: number | string;
+      local_balance?: number | string;
+      localBalance?: number | string;
+      account_count?: number;
+      accountCount?: number;
+    }>>("/api/xbox/summary");
+    // 同时取账号列表算 country tag (CN-UK-JP-...)
     const accounts = await fetchJson<XboxAccountResponse[]>("/api/xbox/accounts").catch(() => [] as XboxAccountResponse[]);
-    const usCount = accounts.filter((acc) => acc.country === "US").length;
-    const ukCount = accounts.filter((acc) => acc.country === "UK").length;
-    return {
-      us: {
-        rmbCostMinor: decimalToMinor(usd.rmb_cost ?? usd.rmbCost ?? 0, "CNY"),
-        localBalanceMinor: decimalToMinor(usd.local_balance ?? usd.localBalance ?? 0, "USD"),
-        accountCount: usCount,
-        currency: "USD"
-      },
-      uk: {
-        rmbCostMinor: decimalToMinor(gbp.rmb_cost ?? gbp.rmbCost ?? 0, "CNY"),
-        localBalanceMinor: decimalToMinor(gbp.local_balance ?? gbp.localBalance ?? 0, "GBP"),
-        accountCount: ukCount,
-        currency: "GBP"
+    const countryByCurrency = new Map<string, string>();
+    for (const acc of accounts) {
+      if (acc.currency && acc.country) {
+        countryByCurrency.set(acc.currency, acc.country);
       }
+    }
+    const byCurrency: Record<string, {
+      rmbCostMinor: number;
+      localBalanceMinor: number;
+      accountCount: number;
+      currency: string;
+      countryCode: string;
+    }> = {};
+    for (const [currency, raw] of Object.entries(data ?? {})) {
+      const rmb = raw.rmb_cost ?? raw.rmbCost ?? 0;
+      const local = raw.local_balance ?? raw.localBalance ?? 0;
+      const count = raw.account_count ?? raw.accountCount ?? 0;
+      byCurrency[currency] = {
+        rmbCostMinor: decimalToMinor(rmb, "CNY"),
+        localBalanceMinor: decimalToMinor(local, currency),
+        accountCount: count,
+        currency,
+        countryCode: countryByCurrency.get(currency) ?? currency.slice(0, 2)
+      };
+    }
+    // 兼容老字段 us / uk
+    const emptySummary = {
+      rmbCostMinor: 0,
+      localBalanceMinor: 0,
+      accountCount: 0,
+      currency: "USD",
+      countryCode: "US"
+    };
+    return {
+      us: byCurrency.USD ?? { ...emptySummary, currency: "USD", countryCode: "US" },
+      uk: byCurrency.GBP ?? { ...emptySummary, currency: "GBP", countryCode: "UK" },
+      byCurrency
     };
   } catch {
     return mockXboxSummary;
@@ -1569,6 +1550,12 @@ type TaiwanWalletResponse = {
   balance: string | number;
   created_at?: string;
   createdAt?: string;
+  // CEO 2026-05-17: group + 子钱包结构
+  is_group?: boolean;
+  isGroup?: boolean;
+  parent_id?: string | number | null;
+  parentId?: string | number | null;
+  remark?: string | null;
 };
 
 type TaiwanTransactionResponse = {
@@ -1580,6 +1567,8 @@ type TaiwanTransactionResponse = {
   remark?: string | null;
   created_at?: string;
   createdAt?: string;
+  operator_name?: string | null;
+  operatorName?: string | null;
 };
 
 type TaiwanSummaryResponse = {
@@ -1590,11 +1579,15 @@ type TaiwanSummaryResponse = {
 };
 
 function normalizeTaiwanWallet(wallet: TaiwanWalletResponse): TaiwanWallet {
+  const parentIdRaw = wallet.parent_id ?? wallet.parentId ?? null;
   return {
     id: String(wallet.id),
     name: wallet.name,
     balanceMinor: decimalToMinor(wallet.balance, "TWD"),
-    createdAt: wallet.created_at ?? wallet.createdAt ?? ""
+    createdAt: wallet.created_at ?? wallet.createdAt ?? "",
+    isGroup: Boolean(wallet.is_group ?? wallet.isGroup ?? false),
+    parentId: parentIdRaw == null ? null : String(parentIdRaw),
+    remark: wallet.remark ?? null
   };
 }
 
@@ -1605,7 +1598,8 @@ function normalizeTaiwanTransaction(tx: TaiwanTransactionResponse, walletId?: st
     amountMinor: decimalToMinor(tx.amount, "TWD"),
     direction: tx.direction,
     remark: tx.remark ?? null,
-    createdAt: tx.created_at ?? tx.createdAt ?? ""
+    createdAt: tx.created_at ?? tx.createdAt ?? "",
+    operatorName: tx.operator_name ?? tx.operatorName ?? null
   };
 }
 
@@ -1620,26 +1614,80 @@ export async function getTaiwanWallets(): Promise<TaiwanWallet[]> {
 
 export async function creditTaiwanWallet(
   walletId: string,
-  payload: { amount: string; remark?: string }
+  payload: { amount: string; remark?: string; operatorName?: string }
 ): Promise<TaiwanTransaction> {
   const body: Record<string, unknown> = { amount: payload.amount };
-  if (payload.remark) {
-    body.remark = payload.remark;
-  }
+  if (payload.remark) body.remark = payload.remark;
+  if (payload.operatorName) body.operator_name = payload.operatorName;
   const data = (await postJson(`/api/taiwan/wallets/${walletId}/credit`, body)) as TaiwanTransactionResponse;
   return normalizeTaiwanTransaction(data, walletId);
 }
 
 export async function debitTaiwanWallet(
   walletId: string,
-  payload: { amount: string; remark?: string }
+  payload: { amount: string; remark?: string; operatorName?: string }
 ): Promise<TaiwanTransaction> {
   const body: Record<string, unknown> = { amount: payload.amount };
-  if (payload.remark) {
-    body.remark = payload.remark;
-  }
+  if (payload.remark) body.remark = payload.remark;
+  if (payload.operatorName) body.operator_name = payload.operatorName;
   const data = (await postJson(`/api/taiwan/wallets/${walletId}/debit`, body)) as TaiwanTransactionResponse;
   return normalizeTaiwanTransaction(data, walletId);
+}
+
+// CEO 2026-05-18: 新增 / 编辑 / 删除子钱包
+export async function createTaiwanWallet(payload: {
+  name: string;
+  parentId: number;
+  remark?: string;
+}): Promise<TaiwanWallet> {
+  const body: Record<string, unknown> = {
+    name: payload.name,
+    parent_id: payload.parentId
+  };
+  if (payload.remark) body.remark = payload.remark;
+  const data = (await postJson("/api/taiwan/wallets", body)) as TaiwanWalletResponse;
+  return normalizeTaiwanWallet(data);
+}
+
+export async function updateTaiwanWallet(
+  walletId: string,
+  payload: { name?: string; remark?: string | null }
+): Promise<TaiwanWallet> {
+  const body: Record<string, unknown> = {};
+  if (payload.name !== undefined) body.name = payload.name;
+  if (payload.remark !== undefined) body.remark = payload.remark ?? "";
+  const response = await fetch(`/api/taiwan/wallets/${walletId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    let msg = `${response.status}`;
+    try {
+      msg = (JSON.parse(text) as { detail?: string }).detail ?? msg;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(msg);
+  }
+  return normalizeTaiwanWallet((await response.json()) as TaiwanWalletResponse);
+}
+
+export async function deleteTaiwanWallet(walletId: string): Promise<void> {
+  const response = await fetch(`/api/taiwan/wallets/${walletId}`, {
+    method: "DELETE"
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    let msg = `${response.status}`;
+    try {
+      msg = (JSON.parse(text) as { detail?: string }).detail ?? msg;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(msg);
+  }
 }
 
 export async function getTaiwanTransactions(walletId: string): Promise<TaiwanTransaction[]> {
@@ -1713,6 +1761,41 @@ export async function refreshAllXboxBalances(): Promise<XboxRefreshAllResult> {
     failed: raw.failed,
     accounts: raw.accounts.map(normalizeXboxAccount)
   };
+}
+
+// ---------------------------------------------------------------------------
+// 异步批量刷新 (CEO 2026-05-17: 进度条 UI 用)
+// ---------------------------------------------------------------------------
+
+export type XboxRefreshJobStart = { jobId: string; total: number };
+
+export type XboxAccountRefreshResult = {
+  accountId: number;
+  accountName: string;
+  success: boolean;
+  balance: string | null;
+  currency: string | null;
+  message: string | null;
+};
+
+export type XboxRefreshJobStatus = {
+  jobId: string;
+  total: number;
+  completed: number;
+  succeeded: number;
+  failed: number;
+  currentAccountId: number | null;
+  currentAccountName: string | null;
+  done: boolean;
+  results: XboxAccountRefreshResult[];
+};
+
+export async function startXboxRefreshJob(): Promise<XboxRefreshJobStart> {
+  return (await postJson("/api/xbox/refresh-jobs", {})) as XboxRefreshJobStart;
+}
+
+export async function getXboxRefreshJob(jobId: string): Promise<XboxRefreshJobStatus> {
+  return fetchJson<XboxRefreshJobStatus>(`/api/xbox/refresh-jobs/${jobId}`);
 }
 
 // ---------------------------------------------------------------------------

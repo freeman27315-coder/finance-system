@@ -80,6 +80,9 @@ class WalletTransaction(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
     direction: Mapped[TransactionDirection] = mapped_column(String(8), nullable=False)
     remark: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # CEO 2026-05-18: 记录这笔流水是谁操作的(目前财务系统由 CEO 一个人用,
+    # 前端从 localStorage 拿,允许财务记录"是我还是李睿旭"按的钱)
+    operator_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -124,6 +127,7 @@ def create_wallet(
     parent_id: int | None = None,
     opening_balance: Decimal | int | float | str = Decimal("0"),
     is_group: bool = False,
+    remark: str | None = None,
 ) -> Wallet:
     """Create a wallet or sub-wallet and flush it into the current session."""
     balance = Decimal(str(opening_balance))
@@ -141,6 +145,7 @@ def create_wallet(
         parent_id=parent_id,
         balance=balance,
         is_group=is_group,
+        remark=remark,
     )
     session.add(wallet)
     session.flush()
@@ -154,17 +159,9 @@ def credit(
     remark: str | None = None,
     mature_at: Optional[datetime] = None,
     business_date: Optional[date] = None,
+    operator_name: str | None = None,
 ) -> WalletTransaction:
-    """Increase a wallet balance and create an inbound transaction record.
-
-    可选 ``mature_at`` 表示该笔入账的"成熟时间"（例如聚合支付冻结期满
-    可提现的时间点），仅写入 ``WalletTransaction.mature_at``，不影响余额逻辑。
-
-    可选 ``business_date`` 标记该笔入账的"业务日期"（用于按业务日期聚合）：
-    - 聚合释放写入 available IN：业务日期 = mature_at 那天
-    - 其他场景留 None，daily-summary 端点会自动回退用 order 业务日期或 created_at
-    见 ``.claude/skills/taobao-cashflow-rules``。
-    """
+    """Increase a wallet balance and create an inbound transaction record."""
     value = _to_decimal(amount)
     wallet = get_wallet(session, wallet_id)
     wallet.balance = Decimal(wallet.balance) + value
@@ -176,6 +173,7 @@ def credit(
         remark=remark,
         mature_at=mature_at,
         business_date=business_date,
+        operator_name=operator_name,
     )
     session.add(transaction)
     session.flush()
@@ -187,6 +185,7 @@ def debit(
     wallet_id: int,
     amount: Decimal | int | float | str,
     remark: str | None = None,
+    operator_name: str | None = None,
 ) -> WalletTransaction:
     """Decrease a wallet balance and create an outbound transaction record."""
     value = _to_decimal(amount)
@@ -201,6 +200,7 @@ def debit(
         amount=value,
         direction=TransactionDirection.OUT,
         remark=remark,
+        operator_name=operator_name,
     )
     session.add(transaction)
     session.flush()
