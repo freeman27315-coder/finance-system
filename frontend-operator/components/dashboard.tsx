@@ -88,7 +88,7 @@ export function OperatorDashboard({ operator }: { operator: StoredOperator }) {
             <Gamepad2 className="h-5 w-5" aria-hidden="true" />
           </div>
           <div>
-            <div className="text-sm font-semibold">XBOX 客服销售系统</div>
+            <div className="text-sm font-semibold">客服销售系统</div>
             <div className="text-xs text-muted-foreground">
               {operator.displayName} ({operator.loginName}) · 持有 {claims.length} / {MAX_CLAIMS}
             </div>

@@ -37,7 +37,7 @@ from src.services.xbox_account_claim import (
     return_claim,
 )
 from src.services.xbox_order import update_order_completion
-from src.services.xbox_sync import trigger_sync
+from src.services.xbox_sync import refresh_account_balance, trigger_sync
 from src.utils.crypto import CryptoError
 
 
@@ -311,7 +311,10 @@ def login_endpoint(
     response_model=list[dict],
 )
 def list_available_endpoint(db: Session = Depends(get_db)) -> list[dict]:
-    """当前可领取的账号(is_available_for_claim + status=active + 未被领)。"""
+    """当前可领取的账号(is_available_for_claim + status=active + 未被领)。
+    CEO 2026-05-17: 加上 localBalance / currency / status / lastSyncedAt
+    让客服在领取前能看到账号实时余额。
+    """
     accounts = list_available_accounts(db)
     return [
         {
@@ -319,8 +322,13 @@ def list_available_endpoint(db: Session = Depends(get_db)) -> list[dict]:
             "accountNo": a.account_no,
             "name": a.name,
             "country": a.country.value if hasattr(a.country, "value") else a.country,
+            "currency": a.currency.value if hasattr(a.currency, "value") else a.currency,
             "loginEmail": a.login_email,
             "exchangeRate": str(a.exchange_rate) if a.exchange_rate else None,
+            "localBalance": str(a.local_balance) if a.local_balance is not None else "0",
+            "status": a.status.value if hasattr(a.status, "value") else a.status,
+            "statusMessage": a.status_message,
+            "lastSyncedAt": a.last_synced_at.isoformat() if a.last_synced_at else None,
         }
         for a in accounts
     ]
@@ -395,6 +403,59 @@ def list_my_claims_endpoint(
 ) -> list[XboxAccountClaimOut]:
     """客服当前持有的领取(查我的账号)。"""
     return [_serialize_claim(c) for c in list_active_claims_for_operator(db, operator_id)]
+
+
+@router.get(
+    "/operators/{operator_id}/claimed-accounts",
+    response_model=list[dict],
+)
+def list_my_claimed_accounts_endpoint(
+    operator_id: int,
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    """客服当前持有的账号(全量字段, 用于"我的领取"卡片渲染)。
+    CEO 2026-05-17: 跟 /available-accounts 同形, 多 claimId + 待补单数。
+    """
+    from sqlalchemy import func, select
+
+    claims = list_active_claims_for_operator(db, operator_id)
+    account_ids = [c.account_id for c in claims]
+    # 一次查所有领取账号的待补订单数, 避免 N+1
+    pending_counts: dict[int, int] = {}
+    if account_ids:
+        rows = db.execute(
+            select(XboxOrder.account_id, func.count(XboxOrder.id))
+            .where(
+                XboxOrder.account_id.in_(account_ids),
+                XboxOrder.status == XboxOrderStatus.PENDING_COMPLETE.value,
+            )
+            .group_by(XboxOrder.account_id)
+        ).all()
+        pending_counts = {aid: int(cnt) for aid, cnt in rows}
+
+    out: list[dict] = []
+    for c in claims:
+        a = db.get(XboxAccount, c.account_id)
+        if a is None:
+            continue
+        out.append({
+            "id": a.id,
+            "accountNo": a.account_no,
+            "name": a.name,
+            "country": a.country.value if hasattr(a.country, "value") else a.country,
+            "currency": a.currency.value if hasattr(a.currency, "value") else a.currency,
+            "loginEmail": a.login_email,
+            "exchangeRate": str(a.exchange_rate) if a.exchange_rate else None,
+            "localBalance": str(a.local_balance) if a.local_balance is not None else "0",
+            "status": a.status.value if hasattr(a.status, "value") else a.status,
+            "statusMessage": a.status_message,
+            "lastSyncedAt": a.last_synced_at.isoformat() if a.last_synced_at else None,
+            "claimId": c.id,
+            "claimedAt": c.claimed_at.isoformat() if c.claimed_at else None,
+            # CEO 2026-05-17: 这个账号的待补订单数 - 前端拿来禁用归还按钮 + 顶部警告
+            "pendingOrderCount": pending_counts.get(a.id, 0),
+        })
+    return out
 
 
 @router.get(
@@ -526,6 +587,38 @@ def operator_sync_orders_endpoint(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     db.commit()
     return result
+
+
+@router.post(
+    "/accounts/{account_id}/refresh-balance",
+    response_model=dict,
+)
+def operator_refresh_balance_endpoint(
+    account_id: int,
+    db: Session = Depends(get_db),
+) -> dict:
+    """客服按需刷新单个账号的微软余额(慢, 走真 Playwright, 30-60 秒)。
+
+    CEO 2026-05-17: 客服在领取池里能看每账号最新余额, 按"刷新最新"触发此接口。
+    无需当前持有此账号 - 任意客服都能给可领取账号刷余额。
+    返回 {success, balance, currency, country, message?, lastSyncedAt}
+    """
+    from src.models.xbox import XboxAccount
+
+    account = db.get(XboxAccount, account_id)
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账号不存在")
+    result = refresh_account_balance(db, account)
+    db.commit()
+    db.refresh(account)
+    return {
+        "success": result.get("success", False),
+        "balance": result.get("balance"),
+        "currency": result.get("currency"),
+        "country": result.get("country"),
+        "message": result.get("message"),
+        "lastSyncedAt": account.last_synced_at.isoformat() if account.last_synced_at else None,
+    }
 
 
 class OperatorOrderOut(BaseModel):

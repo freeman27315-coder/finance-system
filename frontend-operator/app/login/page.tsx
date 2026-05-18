@@ -46,7 +46,7 @@ export default function LoginPage() {
           <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary text-primary-foreground">
             <Gamepad2 className="h-7 w-7" aria-hidden="true" />
           </div>
-          <CardTitle className="text-xl">XBOX 客服销售系统</CardTitle>
+          <CardTitle className="text-xl">客服销售系统</CardTitle>
           <div className="text-xs text-muted-foreground">
             登录三要素 = 账号 + 密码 + 6 位 TOTP
           </div>

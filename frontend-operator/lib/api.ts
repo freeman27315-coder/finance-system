@@ -8,6 +8,7 @@
 
 import type {
   AvailableAccount,
+  ClaimedAccount,
   LoginResponse,
   OperatorClaim,
   OperatorOrder,
@@ -95,6 +96,13 @@ export function getMyClaims(operatorId: number): Promise<OperatorClaim[]> {
   );
 }
 
+// CEO 2026-05-17: 拿"我的领取"全量账号信息(供"我的领取"卡片渲染)
+export function getMyClaimedAccounts(operatorId: number): Promise<ClaimedAccount[]> {
+  return request<ClaimedAccount[]>(
+    `/api/operator/operators/${operatorId}/claimed-accounts`
+  );
+}
+
 export function claimAccount(
   accountId: number,
   operatorId: number
@@ -103,6 +111,22 @@ export function claimAccount(
     method: "POST",
     body: JSON.stringify({ accountId, operatorId })
   });
+}
+
+// CEO 2026-05-17: 客服按需刷新单条账号余额(可领取池里 / 已领取账号都能用)
+export type OperatorRefreshBalanceResult = {
+  success: boolean;
+  balance: string | null;
+  currency: string | null;
+  country: string | null;
+  message: string | null;
+  lastSyncedAt: string | null;
+};
+export function refreshAccountBalance(accountId: number): Promise<OperatorRefreshBalanceResult> {
+  return request<OperatorRefreshBalanceResult>(
+    `/api/operator/accounts/${accountId}/refresh-balance`,
+    { method: "POST" }
+  );
 }
 
 export function returnClaim(

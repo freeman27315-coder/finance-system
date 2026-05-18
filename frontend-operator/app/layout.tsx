@@ -3,7 +3,7 @@ import "./globals.css";
 import { QueryProvider } from "@/components/query-provider";
 
 export const metadata: Metadata = {
-  title: "XBOX 客服销售系统",
+  title: "客服销售系统",
   description: "客服端: 领取账号 → 同步订单 → 补销售信息"
 };
 

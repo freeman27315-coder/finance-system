@@ -16,8 +16,8 @@ import {
   KeyRound,
   Layers,
   Link2,
-  ListOrdered,
   Lock,
+  MoreHorizontal,
   Pencil,
   Plus,
   Receipt,
@@ -28,7 +28,7 @@ import {
   Unlock,
   Users
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,7 +36,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import {
   changeXboxAccountPassword,
   changeXboxAccountStatus,
-  consumeXbox,
   createXboxAccount,
   createXboxOrder,
   createXboxReconcileMapping,
@@ -56,21 +55,22 @@ import {
   getXboxSalesSummary,
   getXboxSummary,
   getXboxSyncBatches,
-  getXboxTransactions,
   getXboxWalletPoolOptions,
   getXboxWalletSettings,
   patchXboxAccountAvailability,
   patchXboxOrder,
   patchXboxSaleRecord,
   pushXboxWalletSettings,
-  rechargeXbox,
   refreshAllXboxBalances,
   refreshXboxAccountBalance,
   returnClaim,
+  startXboxRefreshJob,
+  getXboxRefreshJob,
   triggerXboxSync,
   updateXboxAccount
 } from "@/lib/api";
-import { formatMoney } from "@/lib/money";
+import type { XboxRefreshJobStatus } from "@/lib/api";
+import { formatMoney, minorUnit } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import type {
   Currency,
@@ -86,20 +86,55 @@ import type {
   XboxWalletMethod
 } from "@/types";
 
-const COUNTRY_META: Record<XboxCountry, { label: string; currency: Currency; accentBorder: string; accentText: string }> = {
-  US: {
-    label: "美国 (USD)",
-    currency: "USD",
-    accentBorder: "border-blue-500/50",
-    accentText: "text-blue-600"
-  },
-  UK: {
-    label: "英国 (GBP)",
-    currency: "GBP",
-    accentBorder: "border-red-500/50",
-    accentText: "text-red-600"
-  }
+// CEO 2026-05-17: 国家显示信息表 - 已知国家有中文名 + 配色, 未知国家走兜底
+type CountryMeta = {
+  label: string;
+  currency: string;
+  accentBorder: string;
+  accentText: string;
 };
+
+const COUNTRY_META: Record<string, CountryMeta> = {
+  US: { label: "美国 (USD)", currency: "USD", accentBorder: "border-blue-500/50", accentText: "text-blue-600" },
+  UK: { label: "英国 (GBP)", currency: "GBP", accentBorder: "border-red-500/50", accentText: "text-red-600" },
+  EU: { label: "欧元区 (EUR)", currency: "EUR", accentBorder: "border-amber-500/50", accentText: "text-amber-600" },
+  JP: { label: "日本 (JPY)", currency: "JPY", accentBorder: "border-pink-500/50", accentText: "text-pink-600" },
+  CN: { label: "中国 (CNY)", currency: "CNY", accentBorder: "border-emerald-500/50", accentText: "text-emerald-600" },
+  HK: { label: "香港 (HKD)", currency: "HKD", accentBorder: "border-cyan-500/50", accentText: "text-cyan-600" },
+  TW: { label: "台湾 (TWD)", currency: "TWD", accentBorder: "border-purple-500/50", accentText: "text-purple-600" },
+  KR: { label: "韩国 (KRW)", currency: "KRW", accentBorder: "border-rose-500/50", accentText: "text-rose-600" },
+  CA: { label: "加拿大 (CAD)", currency: "CAD", accentBorder: "border-slate-500/50", accentText: "text-slate-600" },
+  AU: { label: "澳大利亚 (AUD)", currency: "AUD", accentBorder: "border-orange-500/50", accentText: "text-orange-600" },
+  SG: { label: "新加坡 (SGD)", currency: "SGD", accentBorder: "border-teal-500/50", accentText: "text-teal-600" },
+  BR: { label: "巴西 (BRL)", currency: "BRL", accentBorder: "border-green-500/50", accentText: "text-green-600" },
+  MX: { label: "墨西哥 (MXN)", currency: "MXN", accentBorder: "border-yellow-500/50", accentText: "text-yellow-600" },
+  // CEO 2026-05-17: 扩展国家列表
+  NO: { label: "挪威 (NOK)", currency: "NOK", accentBorder: "border-indigo-500/50", accentText: "text-indigo-600" },
+  SE: { label: "瑞典 (SEK)", currency: "SEK", accentBorder: "border-sky-500/50", accentText: "text-sky-600" },
+  CZ: { label: "捷克 (CZK)", currency: "CZK", accentBorder: "border-violet-500/50", accentText: "text-violet-600" },
+  DK: { label: "丹麦 (DKK)", currency: "DKK", accentBorder: "border-lime-600/50", accentText: "text-lime-700" },
+  HU: { label: "匈牙利 (HUF)", currency: "HUF", accentBorder: "border-stone-500/50", accentText: "text-stone-700" },
+  PL: { label: "波兰 (PLN)", currency: "PLN", accentBorder: "border-fuchsia-500/50", accentText: "text-fuchsia-600" },
+  TR: { label: "土耳其 (TRY)", currency: "TRY", accentBorder: "border-orange-700/50", accentText: "text-orange-700" },
+  CH: { label: "瑞士 (CHF)", currency: "CHF", accentBorder: "border-red-800/50", accentText: "text-red-800" }
+};
+
+// CEO 2026-05-17: 国家卡片默认显示顺序 - 用户指定。
+// 用户没在数据库里但还没出现的国家,卡片仍展示(0 个账号占位); 用户有但不在这表里的国家追加到末尾。
+const DEFAULT_COUNTRY_ORDER = [
+  "US", "UK", "CA", "BR", "NO", "SE", "EU", "CZ", "DK", "HU", "PL", "TR", "CH", "SG"
+];
+
+// 没在表里的国家走这个兜底
+function getCountryMeta(code: string): CountryMeta {
+  if (COUNTRY_META[code]) return COUNTRY_META[code];
+  return {
+    label: code,
+    currency: code,
+    accentBorder: "border-gray-500/50",
+    accentText: "text-gray-600"
+  };
+}
 
 function formatDateTime(value: string) {
   if (!value) return "-";
@@ -118,8 +153,12 @@ function SummaryCards({ country }: { country: XboxCountry }) {
     queryFn: getXboxSummary
   });
 
-  const meta = COUNTRY_META[country];
-  const summary = country === "US" ? data?.us : data?.uk;
+  // CEO 2026-05-17: 按当前 tab 国家匹配对应币种的汇总, 找不到则空
+  const meta = getCountryMeta(country);
+  const byCurrency = data?.byCurrency ?? {};
+  // 国家 → 货币: 用 COUNTRY_META 的预设货币
+  const currencyForCountry = getCountryMeta(country).currency;
+  const summary = byCurrency[currencyForCountry];
   const rmbCost = summary?.rmbCostMinor ?? 0;
   const localBalance = summary?.localBalanceMinor ?? 0;
   const accountCount = summary?.accountCount ?? 0;
@@ -800,245 +839,240 @@ function AuditLogsModal({ account, onClose }: { account: XboxAccount; onClose: (
   );
 }
 
-function RechargeModal({ account, onClose }: { account: XboxAccount; onClose: () => void }) {
-  const queryClient = useQueryClient();
-  const [rmbAmount, setRmbAmount] = useState("");
-  const [localAmount, setLocalAmount] = useState("");
-  const [remark, setRemark] = useState("");
-  const [error, setError] = useState<string | null>(null);
-
-  const mutation = useMutation({
-    mutationFn: async () => {
-      if (!rmbAmount || Number(rmbAmount) <= 0) {
-        throw new Error("花费人民币必须大于 0");
-      }
-      if (!localAmount || Number(localAmount) <= 0) {
-        throw new Error("到账当地货币必须大于 0");
-      }
-      return rechargeXbox(account.id, {
-        rmbAmount,
-        localAmount,
-        remark: remark.trim() === "" ? undefined : remark.trim()
-      });
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["xbox-accounts"] });
-      await queryClient.invalidateQueries({ queryKey: ["xbox-summary"] });
-      await queryClient.invalidateQueries({ queryKey: ["xbox-transactions", account.id] });
-      onClose();
-    },
-    onError: (err) => {
-      setError(err instanceof Error ? err.message : "充值失败");
-    }
-  });
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>充值 · {account.name}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">花费人民币</div>
-            <input
-              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={rmbAmount}
-              onChange={(event) => setRmbAmount(event.target.value)}
-              placeholder="花费人民币"
-              type="number"
-              min="0"
-              step="0.01"
-            />
-          </div>
-          <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">到账当地货币（{account.currency}）</div>
-            <input
-              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={localAmount}
-              onChange={(event) => setLocalAmount(event.target.value)}
-              placeholder="到账当地货币"
-              type="number"
-              min="0"
-              step="0.01"
-            />
-          </div>
-          <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">备注（选填）</div>
-            <textarea
-              className="min-h-[80px] w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={remark}
-              onChange={(event) => setRemark(event.target.value)}
-              placeholder="备注"
-            />
-          </div>
-          {error ? (
-            <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
-              {error}
-            </div>
-          ) : null}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>
-              取消
-            </Button>
-            <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
-              {mutation.isPending ? "提交中..." : "确认充值"}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function ConsumeModal({ account, onClose }: { account: XboxAccount; onClose: () => void }) {
-  const queryClient = useQueryClient();
-  const [localAmount, setLocalAmount] = useState("");
-  const [remark, setRemark] = useState("");
-  const [error, setError] = useState<string | null>(null);
-
-  const mutation = useMutation({
-    mutationFn: async () => {
-      if (!localAmount || Number(localAmount) <= 0) {
-        throw new Error("消费金额必须大于 0");
-      }
-      return consumeXbox(account.id, {
-        localAmount,
-        remark: remark.trim() === "" ? undefined : remark.trim()
-      });
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["xbox-accounts"] });
-      await queryClient.invalidateQueries({ queryKey: ["xbox-summary"] });
-      await queryClient.invalidateQueries({ queryKey: ["xbox-transactions", account.id] });
-      onClose();
-    },
-    onError: (err) => {
-      setError(err instanceof Error ? err.message : "消费失败");
-    }
-  });
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>消费 · {account.name}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">消费金额（{account.currency}）</div>
-            <input
-              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={localAmount}
-              onChange={(event) => setLocalAmount(event.target.value)}
-              placeholder="消费金额"
-              type="number"
-              min="0"
-              step="0.01"
-            />
-          </div>
-          <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">备注（选填）</div>
-            <textarea
-              className="min-h-[80px] w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={remark}
-              onChange={(event) => setRemark(event.target.value)}
-              placeholder="备注"
-            />
-          </div>
-          {error ? (
-            <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
-              {error}
-            </div>
-          ) : null}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>
-              取消
-            </Button>
-            <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
-              {mutation.isPending ? "提交中..." : "确认消费"}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function TransactionsModal({ account, onClose }: { account: XboxAccount; onClose: () => void }) {
-  const { data: transactions = [], isFetching } = useQuery({
-    queryKey: ["xbox-transactions", account.id],
-    queryFn: () => getXboxTransactions(account)
-  });
-
-  const sorted = [...transactions].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <Card className="w-full max-w-3xl">
-        <CardHeader>
-          <div className="flex items-center justify-between gap-3">
-            <CardTitle>{account.name} · 流水</CardTitle>
-            <Button variant="ghost" size="sm" onClick={onClose}>
-              关闭
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>类型</TableHead>
-                <TableHead className="text-right">RMB 金额</TableHead>
-                <TableHead className="text-right">本地金额</TableHead>
-                <TableHead>备注</TableHead>
-                <TableHead>时间</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {sorted.map((tx) => {
-                const isRecharge = tx.type === "recharge";
-                return (
-                  <TableRow key={tx.id}>
-                    <TableCell>
-                      <Badge tone={isRecharge ? "success" : "danger"}>
-                        {isRecharge ? "充值" : "消费"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-muted-foreground">
-                      {tx.rmbAmountMinor > 0 ? formatMoney(tx.rmbAmountMinor, "CNY") : "-"}
-                    </TableCell>
-                    <TableCell
-                      className={cn(
-                        "text-right tabular-nums font-semibold",
-                        isRecharge ? "text-green-600" : "text-red-600"
-                      )}
-                    >
-                      {formatMoney(tx.localAmountMinor, tx.currency)}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{tx.remark ?? "-"}</TableCell>
-                    <TableCell className="text-muted-foreground">{formatDateTime(tx.createdAt)}</TableCell>
-                  </TableRow>
-                );
-              })}
-              {sorted.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
-                    {isFetching ? "加载中..." : "暂无流水"}
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
 
 function StatusBadge({ status }: { status: XboxAccountStatus }) {
   const meta = STATUS_META[status];
   return <Badge tone={meta.tone}>{meta.label}</Badge>;
+}
+
+// CEO 2026-05-17 卡片改版: 顶部国家选择 - 每个国家一张卡, 显示余额/成本/账号数
+function CountryCard({
+  country,
+  balanceMinor,
+  rmbCostMinor,
+  accountCount,
+  currency,
+  selected,
+  onSelect
+}: {
+  country: string;
+  balanceMinor: number;
+  rmbCostMinor: number;
+  accountCount: number;
+  currency: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const meta = getCountryMeta(country);
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        "rounded-md border bg-card p-3 text-left transition-all hover:shadow-md",
+        selected
+          ? cn("border-2 ring-1", meta.accentBorder, "ring-current shadow-sm", meta.accentText)
+          : "border-border hover:border-muted-foreground/40"
+      )}
+    >
+      <div className="flex items-baseline justify-between mb-2">
+        <span className={cn("text-sm font-semibold", selected ? meta.accentText : "text-foreground")}>
+          {meta.label}
+        </span>
+        <span className="text-[10px] text-muted-foreground">{accountCount} 个账号</span>
+      </div>
+      <div className="space-y-1 text-xs">
+        <div className="flex items-baseline justify-between">
+          <span className="text-muted-foreground">余额</span>
+          <span className={cn("tabular-nums font-medium", meta.accentText)}>
+            {formatMoney(balanceMinor, currency)}
+          </span>
+        </div>
+        <div className="flex items-baseline justify-between">
+          <span className="text-muted-foreground">RMB 成本</span>
+          <span className="tabular-nums font-medium text-red-600">
+            {rmbCostMinor > 0 ? formatMoney(rmbCostMinor, "CNY") : "—"}
+          </span>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// CEO 2026-05-17: 可点击展开筛选下拉的表头 - 点列名出选项, 当前生效会显示蓝点
+function FilterableTableHead<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+  className
+}: {
+  label: string;
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+  const isFiltered = options.length > 0 && options[0].value !== value;
+  return (
+    <TableHead className={className}>
+      <div ref={ref} className="relative inline-block">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className={cn(
+            "inline-flex items-center gap-1 cursor-pointer hover:text-foreground",
+            isFiltered && "text-blue-600"
+          )}
+          title={isFiltered ? "已筛选, 点击修改" : "点击筛选"}
+        >
+          <span>{label}</span>
+          <ChevronDown className="h-3 w-3" aria-hidden="true" />
+          {isFiltered ? (
+            <span className="ml-0.5 inline-block h-1.5 w-1.5 rounded-full bg-blue-500" />
+          ) : null}
+        </button>
+        {open ? (
+          <div className="absolute left-0 top-full z-30 mt-1 min-w-[140px] rounded-md border border-border bg-card shadow-md py-1">
+            {options.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => {
+                  onChange(opt.value);
+                  setOpen(false);
+                }}
+                className={cn(
+                  "flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-xs hover:bg-muted",
+                  value === opt.value && "bg-muted/60 font-medium text-foreground"
+                )}
+              >
+                <span>{opt.label}</span>
+                {value === opt.value ? (
+                  <CheckCircle2 className="h-3 w-3 text-blue-500" />
+                ) : null}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </TableHead>
+  );
+}
+
+// CEO 2026-05-17: 行操作下拉菜单 - 收起低频操作避免按钮塞满一行
+function RowActionsMenu({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+  return (
+    <div ref={ref} className="relative inline-block">
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        title="更多操作"
+      >
+        <MoreHorizontal className="h-3.5 w-3.5" />
+      </Button>
+      {open ? (
+        <div
+          className="absolute right-0 top-full z-30 mt-1 min-w-[140px] rounded-md border border-border bg-card shadow-md py-1"
+          onClick={() => setOpen(false)}
+        >
+          {children}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RowMenuItem({
+  icon,
+  label,
+  onClick,
+  danger = false
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted",
+        danger && "text-red-600 hover:bg-red-50"
+      )}
+    >
+      <span className="flex h-3.5 w-3.5 items-center justify-center">{icon}</span>
+      <span>{label}</span>
+    </button>
+  );
+}
+
+// CEO 2026-05-17: 在账号编号前显示绿/黄/红/灰圆点 - 一眼看哪些账号有问题
+function StatusDot({ account }: { account: XboxAccount }) {
+  const { dotClass, tip } = (() => {
+    if (!account.loginEmail) {
+      return { dotClass: "bg-gray-300", tip: "尚未设登录账号 / 密码" };
+    }
+    if (account.status === "disabled") {
+      return { dotClass: "bg-red-500", tip: "账号已停用" };
+    }
+    if (account.status === "error") {
+      return {
+        dotClass: "bg-red-500",
+        tip: account.statusMessage || "账号异常(可能密码错或被微软锁)"
+      };
+    }
+    if (account.statusMessage) {
+      return {
+        dotClass: "bg-amber-400",
+        tip: account.statusMessage
+      };
+    }
+    if (!account.lastSyncedAt) {
+      return { dotClass: "bg-gray-300", tip: "尚未同步过" };
+    }
+    const days = (Date.now() - new Date(account.lastSyncedAt).getTime()) / 86_400_000;
+    if (days > 7) {
+      return {
+        dotClass: "bg-amber-400",
+        tip: `已 ${Math.floor(days)} 天未同步 (${account.lastSyncedAt.slice(0, 16).replace("T", " ")})`
+      };
+    }
+    const when = account.lastSyncedAt.slice(0, 16).replace("T", " ");
+    return { dotClass: "bg-emerald-500", tip: `状态正常 · 上次同步 ${when}` };
+  })();
+  return (
+    <span
+      className={cn("inline-block h-2.5 w-2.5 rounded-full ring-1 ring-white shadow-sm shrink-0", dotClass)}
+      title={tip}
+    />
+  );
 }
 
 function AccountsTable({
@@ -1046,7 +1080,10 @@ function AccountsTable({
   country,
   claimByAccountId,
   operatorById,
-  onTransactions,
+  statusFilter,
+  onStatusFilterChange,
+  claimFilter,
+  onClaimFilterChange,
   onEdit,
   onChangePassword,
   onChangeStatus,
@@ -1063,7 +1100,10 @@ function AccountsTable({
   country: XboxCountry;
   claimByAccountId: Map<number, { id: number; operatorId: number }>;
   operatorById: Map<number, { id: number; displayName: string; loginName: string }>;
-  onTransactions: (account: XboxAccount) => void;
+  statusFilter: "all" | XboxAccountStatus;
+  onStatusFilterChange: (v: "all" | XboxAccountStatus) => void;
+  claimFilter: "all" | "claimed" | "available" | "off_shelf";
+  onClaimFilterChange: (v: "all" | "claimed" | "available" | "off_shelf") => void;
   onEdit: (account: XboxAccount) => void;
   onChangePassword: (account: XboxAccount) => void;
   onChangeStatus: (account: XboxAccount) => void;
@@ -1076,19 +1116,44 @@ function AccountsTable({
   refreshingAccountId: string | null;
   refreshPending: boolean;
 }) {
-  const meta = COUNTRY_META[country];
+  const meta = getCountryMeta(country);
   return (
+    // CEO 2026-05-17 紧凑改版: 国家/状态去边框, 领取人单行, 操作只留 4 个高频按钮 + ⋮ 菜单
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>账号编号</TableHead>
-          <TableHead>登录邮箱</TableHead>
-          <TableHead>国家</TableHead>
-          <TableHead>状态</TableHead>
-          <TableHead>领取情况</TableHead>
-          <TableHead className="text-right">RMB 累计成本</TableHead>
-          <TableHead className="text-right">本地余额</TableHead>
-          <TableHead>备注</TableHead>
+          <TableHead className="w-[110px]">账号</TableHead>
+          <TableHead className="w-[200px]">登录邮箱</TableHead>
+          <TableHead className="w-[60px]">国家</TableHead>
+          <FilterableTableHead
+            label="状态"
+            className="w-[90px]"
+            value={statusFilter}
+            onChange={onStatusFilterChange}
+            options={[
+              { value: "all", label: "全部" },
+              { value: "active", label: "可用" },
+              { value: "disabled", label: "已停用" },
+              { value: "error", label: "异常" },
+              { value: "need_verification", label: "待验证" }
+            ]}
+          />
+          <FilterableTableHead
+            label="领取"
+            className="w-[140px]"
+            value={claimFilter}
+            onChange={onClaimFilterChange}
+            options={[
+              { value: "all", label: "全部" },
+              { value: "claimed", label: "已领取" },
+              { value: "available", label: "可出库(待领取)" },
+              { value: "off_shelf", label: "未上架" }
+            ]}
+          />
+          <TableHead className="w-[70px] text-right">汇率</TableHead>
+          <TableHead className="w-[100px] text-right">成本</TableHead>
+          <TableHead className="w-[120px] text-right">余额</TableHead>
+          <TableHead className="w-[80px]">备注</TableHead>
           <TableHead className="text-right">操作</TableHead>
         </TableRow>
       </TableHeader>
@@ -1097,147 +1162,176 @@ function AccountsTable({
           const claim = claimByAccountId.get(Number(account.id));
           const holder = claim ? operatorById.get(claim.operatorId) : null;
           const isRefreshingThis = refreshPending && refreshingAccountId === account.id;
+          // 状态文字 + tooltip 给详细消息(去掉冗余边框)
+          const statusLabel = STATUS_META[account.status]?.label ?? account.status;
+          const statusColorClass = (() => {
+            if (account.status === "active") return "text-emerald-600";
+            if (account.status === "error" || account.status === "disabled") return "text-red-600";
+            if (account.status === "need_verification") return "text-amber-600";
+            return "text-muted-foreground";
+          })();
           return (
             <TableRow key={account.id}>
-              <TableCell className="text-xs tabular-nums text-muted-foreground">
-                {account.accountNo ?? account.name}
+              {/* 账号: 圆点 + 编号 */}
+              <TableCell className="text-xs tabular-nums">
+                <div className="flex items-center gap-2">
+                  <StatusDot account={account} />
+                  <span className="text-foreground">{account.accountNo ?? account.name}</span>
+                </div>
               </TableCell>
+              {/* 登录邮箱 */}
               <TableCell className="text-xs text-muted-foreground">
                 <div className="flex items-center gap-1">
-                  <span className="truncate max-w-[160px]">{account.loginEmail ?? "-"}</span>
+                  <span className="truncate max-w-[180px]" title={account.loginEmail ?? "-"}>
+                    {account.loginEmail ?? "-"}
+                  </span>
                   {account.hasPassword ? (
-                    <KeyRound className="h-3 w-3 text-emerald-600" aria-label="已设密码" />
+                    <KeyRound className="h-3 w-3 text-emerald-600 shrink-0" aria-label="已设密码" />
                   ) : null}
                 </div>
               </TableCell>
-              <TableCell>
-                {/* CEO 2026-05-12 Q1-A: 国家自动识别 */}
+              {/* 国家: 纯文字, 不带边框 */}
+              <TableCell className="text-xs">
                 {account.countryIdentified ? (
-                  <Badge tone={account.country === "UK" ? "danger" : "transfer"}>
-                    {account.country}
-                  </Badge>
+                  <span className="font-medium text-foreground">{account.country}</span>
                 ) : (
-                  <Badge tone="neutral" title="待首次同步后系统自动识别">
-                    待识别
-                  </Badge>
+                  <span className="text-muted-foreground" title="待首次同步后系统自动识别">待识别</span>
                 )}
               </TableCell>
+              {/* 状态: 单行纯文字 - 错误信息已在账号列圆点 tooltip 显示, 这里不重复 */}
               <TableCell>
-                <div className="flex flex-col gap-0.5">
-                  <StatusBadge status={account.status} />
-                  {account.statusMessage ? (
-                    <span className="text-[10px] text-muted-foreground truncate max-w-[120px]">
-                      {account.statusMessage}
-                    </span>
-                  ) : null}
-                </div>
+                <span
+                  className={cn("text-xs font-medium whitespace-nowrap", statusColorClass)}
+                  title={account.statusMessage ?? statusLabel}
+                >
+                  {statusLabel}
+                </span>
               </TableCell>
-              <TableCell>
+              {/* 领取: 单行 */}
+              <TableCell className="text-xs">
                 {claim ? (
-                  <div className="flex flex-col gap-0.5">
-                    <Badge tone="warning">
-                      <Lock className="mr-1 h-3 w-3" />
+                  <div className="flex items-center gap-1 truncate" title={`${holder?.displayName ?? `#${claim.operatorId}`} (${holder?.loginName ?? ""})`}>
+                    <Lock className="h-3 w-3 shrink-0 text-amber-600" />
+                    <span className="truncate font-medium text-amber-700">
                       {holder?.displayName ?? `#${claim.operatorId}`}
-                    </Badge>
-                    <span className="text-[10px] text-muted-foreground">
-                      {holder?.loginName ?? ""}
                     </span>
+                    {holder?.loginName ? (
+                      <span className="text-[10px] text-muted-foreground truncate">·{holder.loginName}</span>
+                    ) : null}
                   </div>
                 ) : account.isAvailableForClaim ? (
-                  <Badge tone="success">
-                    <Unlock className="mr-1 h-3 w-3" />
-                    可出库
-                  </Badge>
+                  <div className="flex items-center gap-1 text-emerald-700">
+                    <Unlock className="h-3 w-3 shrink-0" />
+                    <span>可出库</span>
+                  </div>
                 ) : (
-                  <Badge tone="neutral">未上架</Badge>
+                  <span className="text-muted-foreground">未上架</span>
                 )}
               </TableCell>
-              <TableCell className="text-right tabular-nums text-red-600">
-                {formatMoney(account.rmbCostMinor, "CNY")}
+              {/* 汇率 */}
+              <TableCell className="text-right tabular-nums text-xs text-muted-foreground">
+                {account.exchangeRate != null && account.exchangeRate > 0
+                  ? account.exchangeRate.toFixed(2)
+                  : "—"}
               </TableCell>
-              <TableCell className={cn("text-right tabular-nums font-semibold", meta.accentText)}>
-                {/* CEO 2026-05-12 Q3-A: 余额后加币种缩写 */}
+              {/* 成本 = 当前余额 × 汇率 (实时算) */}
+              <TableCell className="text-right tabular-nums text-red-600 text-xs">
+                {(() => {
+                  const rate = account.exchangeRate;
+                  if (rate == null || rate <= 0) return "—";
+                  // localBalanceMinor 是 minor unit (例如 76 = $0.76 USD)
+                  // 先除回单位后乘汇率, 再转成 CNY minor unit (×100)
+                  const localUnits = account.localBalanceMinor / 10 ** minorUnit(account.currency);
+                  const rmbValue = localUnits * rate;
+                  const rmbMinor = Math.round(rmbValue * 100);
+                  return formatMoney(rmbMinor, "CNY");
+                })()}
+              </TableCell>
+              {/* 余额: 显眼 */}
+              <TableCell className={cn("text-right tabular-nums font-semibold text-sm", meta.accentText)}>
                 {formatMoney(account.localBalanceMinor, account.currency)}
                 <span className="ml-1 text-[10px] font-normal text-muted-foreground">
                   {account.currency}
                 </span>
               </TableCell>
-              <TableCell className="text-muted-foreground text-xs">{account.remark ?? "-"}</TableCell>
+              {/* 备注 */}
+              <TableCell className="text-muted-foreground text-xs">
+                <span className="truncate max-w-[70px] inline-block" title={account.remark ?? ""}>
+                  {account.remark ?? "-"}
+                </span>
+              </TableCell>
+              {/* 操作: 4 个高频 + ⋮ 菜单 */}
               <TableCell className="text-right">
-                <div className="flex flex-wrap justify-end gap-1">
-                  {/* CEO 2026-05-12 Q2: 单账号刷新余额 */}
+                <div className="flex justify-end items-center gap-1">
                   <Button
                     size="sm"
                     variant="outline"
                     onClick={() => onRefreshBalance(account)}
                     disabled={refreshPending}
-                    title="刷新此账号微软余额(用于判断是否出入库)"
+                    title="刷新此账号微软余额"
+                    className="h-7 px-2"
                   >
-                    <RefreshCcw
-                      className={cn("h-3.5 w-3.5", isRefreshingThis && "animate-spin")}
-                    />
-                    {isRefreshingThis ? "刷新中" : "刷新余额"}
+                    <RefreshCcw className={cn("h-3.5 w-3.5", isRefreshingThis && "animate-spin")} />
+                    <span className="ml-1 text-xs">{isRefreshingThis ? "刷新中" : "刷新"}</span>
                   </Button>
                   <Button
                     size="sm"
                     variant={account.isAvailableForClaim ? "outline" : "default"}
                     onClick={() => onToggleAvailable(account)}
                     disabled={togglePending}
-                    title={
-                      account.isAvailableForClaim
-                        ? "撤销可出库（客服将无法再领取此账号）"
-                        : "标记为可出库，客服可领取此账号"
-                    }
+                    title={account.isAvailableForClaim ? "撤销可出库" : "标记为可出库"}
+                    className="h-7 px-2"
                   >
                     {account.isAvailableForClaim ? (
-                      <>
-                        <Lock className="h-3.5 w-3.5" />
-                        撤销可出库
-                      </>
+                      <Lock className="h-3.5 w-3.5" />
                     ) : (
-                      <>
-                        <Unlock className="h-3.5 w-3.5" />
-                        标可出库
-                      </>
+                      <Unlock className="h-3.5 w-3.5" />
                     )}
+                    <span className="ml-1 text-xs">
+                      {account.isAvailableForClaim ? "撤销" : "上架"}
+                    </span>
                   </Button>
-                  {claim ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() =>
-                        onForceRecall(
-                          claim.id,
-                          account.accountNo ?? account.name,
-                          holder?.displayName ?? `#${claim.operatorId}`
-                        )
-                      }
-                      disabled={recallPending}
-                      title="强制回收：跳过持有人确认，CEO 直接收回账号"
-                    >
-                      强制回收
-                    </Button>
-                  ) : null}
-                  <Button size="sm" variant="ghost" onClick={() => onTransactions(account)}>
-                    <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />
-                    流水
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => onEdit(account)}
+                    title="编辑账号"
+                    className="h-7 px-2"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    <span className="ml-1 text-xs">编辑</span>
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => onEdit(account)}>
-                    <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-                    编辑
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => onChangePassword(account)}>
-                    <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
-                    改密码
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => onChangeStatus(account)}>
-                    <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" />
-                    改状态
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => onShowAuditLogs(account)}>
-                    <History className="h-3.5 w-3.5" aria-hidden="true" />
-                    审计
-                  </Button>
+                  <RowActionsMenu>
+                    <RowMenuItem
+                      icon={<KeyRound className="h-3.5 w-3.5" />}
+                      label="改密码"
+                      onClick={() => onChangePassword(account)}
+                    />
+                    <RowMenuItem
+                      icon={<ShieldAlert className="h-3.5 w-3.5" />}
+                      label="改状态"
+                      onClick={() => onChangeStatus(account)}
+                    />
+                    <RowMenuItem
+                      icon={<History className="h-3.5 w-3.5" />}
+                      label="审计日志"
+                      onClick={() => onShowAuditLogs(account)}
+                    />
+                    {claim ? (
+                      <RowMenuItem
+                        icon={<Lock className="h-3.5 w-3.5" />}
+                        label="强制回收"
+                        onClick={() =>
+                          onForceRecall(
+                            claim.id,
+                            account.accountNo ?? account.name,
+                            holder?.displayName ?? `#${claim.operatorId}`
+                          )
+                        }
+                        danger
+                      />
+                    ) : null}
+                  </RowActionsMenu>
                 </div>
               </TableCell>
             </TableRow>
@@ -1245,7 +1339,7 @@ function AccountsTable({
         })}
         {accounts.length === 0 ? (
           <TableRow>
-            <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">
+            <TableCell colSpan={10} className="py-8 text-center text-muted-foreground">
               当前 Tab 暂无账号，点击右上角「+ 新建账号」开始
             </TableCell>
           </TableRow>
@@ -3101,7 +3195,9 @@ function AccountsManagementTab() {
   const queryClient = useQueryClient();
   const [country, setCountry] = useState<XboxCountry>("US");
   const [showCreate, setShowCreate] = useState(false);
-  const [transactionsTarget, setTransactionsTarget] = useState<XboxAccount | null>(null);
+  // CEO 2026-05-17: 状态 & 领取的客户端筛选
+  const [statusFilter, setStatusFilter] = useState<"all" | XboxAccountStatus>("all");
+  const [claimFilter, setClaimFilter] = useState<"all" | "claimed" | "available" | "off_shelf">("all");
   const [editTarget, setEditTarget] = useState<XboxAccount | null>(null);
   const [passwordTarget, setPasswordTarget] = useState<XboxAccount | null>(null);
   const [statusTarget, setStatusTarget] = useState<XboxAccount | null>(null);
@@ -3111,6 +3207,12 @@ function AccountsManagementTab() {
   const { data: accounts = [], isFetching, refetch } = useQuery({
     queryKey: ["xbox-accounts", country],
     queryFn: () => getXboxAccounts(country)
+  });
+
+  // CEO 2026-05-17: 另外取一份"全部账号", 用来动态生成 tab 列表
+  const { data: allAccounts = [] } = useQuery({
+    queryKey: ["xbox-accounts-all-for-tabs"],
+    queryFn: () => getXboxAccounts()
   });
 
   // CEO 后台需要的领取数据 + 客服字典
@@ -3163,60 +3265,135 @@ function AccountsManagementTab() {
       setAvailabilityError(err instanceof Error ? err.message : "刷新余额失败")
   });
 
-  // CEO 2026-05-12 Q2: 全部刷新余额(批量)
-  const refreshAllMut = useMutation({
-    mutationFn: () => refreshAllXboxBalances(),
-    onSuccess: async (result) => {
-      setAvailabilityError(null);
-      setRefreshAllSummary(
-        `刷新完成: ${result.succeeded}/${result.total} 个账号余额已更新${result.failed ? `, ${result.failed} 个失败(账号未设密码/已停用)` : ""}`
-      );
-      await queryClient.invalidateQueries({ queryKey: ["xbox-accounts"] });
-    },
-    onError: (err) =>
-      setAvailabilityError(err instanceof Error ? err.message : "全部刷新失败")
-  });
+  // CEO 2026-05-17: 批量刷新 - 异步任务 + 轮询 + 进度条
+  const [refreshJob, setRefreshJob] = useState<XboxRefreshJobStatus | null>(null);
   const [refreshAllSummary, setRefreshAllSummary] = useState<string | null>(null);
 
-  const meta = COUNTRY_META[country];
+  const startRefreshAll = async () => {
+    setRefreshAllSummary(null);
+    setAvailabilityError(null);
+    try {
+      const { jobId, total } = await startXboxRefreshJob();
+      setRefreshJob({
+        jobId,
+        total,
+        completed: 0,
+        succeeded: 0,
+        failed: 0,
+        currentAccountId: null,
+        currentAccountName: null,
+        done: false,
+        results: []
+      });
+    } catch (err) {
+      setAvailabilityError(err instanceof Error ? err.message : "启动批量刷新失败");
+    }
+  };
+
+  // 轮询进度: 任务在跑 → 每 2 秒查一次
+  useEffect(() => {
+    if (!refreshJob || refreshJob.done) return;
+    const jid = refreshJob.jobId;
+    const tick = async () => {
+      try {
+        const s = await getXboxRefreshJob(jid);
+        setRefreshJob(s);
+        if (s.done) {
+          setRefreshAllSummary(
+            `刷新完成: 成功 ${s.succeeded}/${s.total}${s.failed > 0 ? `,失败 ${s.failed} 个(鼠标悬停账号查看原因)` : ""}`
+          );
+          await queryClient.invalidateQueries({ queryKey: ["xbox-accounts"] });
+        }
+      } catch (err) {
+        // 轮询失败可能是后端重启,提示一下但不打断 UI
+        setAvailabilityError(err instanceof Error ? err.message : "进度查询失败");
+      }
+    };
+    const timer = setInterval(tick, 2000);
+    // 立刻查一次,不等首个 2s
+    tick();
+    return () => clearInterval(timer);
+  }, [refreshJob?.jobId, refreshJob?.done, queryClient]);
+
+  const refreshAllPending = !!refreshJob && !refreshJob.done;
+
+  const meta = getCountryMeta(country);
+
+  // CEO 2026-05-17: 默认显示 14 个国家(按 CEO 指定顺序), 数据库里有但不在默认列表的国家追加到末尾
+  const availableCountries = (() => {
+    const set = new Set<string>(DEFAULT_COUNTRY_ORDER);
+    for (const acc of allAccounts ?? []) {
+      if (acc.country) set.add(acc.country);
+    }
+    const orderIndex = new Map(DEFAULT_COUNTRY_ORDER.map((c, i) => [c, i]));
+    return Array.from(set).sort((a, b) => {
+      const ai = orderIndex.get(a) ?? 999;
+      const bi = orderIndex.get(b) ?? 999;
+      if (ai !== bi) return ai - bi;
+      return a.localeCompare(b);
+    });
+  })();
+
+  // CEO 2026-05-17: 客户端筛选 - 在 accounts 基础上按状态 + 领取过滤
+  const filteredAccounts = accounts.filter((acc) => {
+    if (statusFilter !== "all" && acc.status !== statusFilter) return false;
+    const isClaimed = !!claimByAccountId.get(Number(acc.id));
+    if (claimFilter === "claimed" && !isClaimed) return false;
+    if (claimFilter === "available" && (!acc.isAvailableForClaim || isClaimed)) return false;
+    if (claimFilter === "off_shelf" && (acc.isAvailableForClaim || isClaimed)) return false;
+    return true;
+  });
+
+  // CEO 2026-05-17 卡片改版: 按国家聚合余额 / RMB 成本 / 账号数 (前端算, 没有跟后端 summary 接口耦合)
+  const countryStats = availableCountries.map((c) => {
+    const inCountry = allAccounts.filter((a) => a.country === c);
+    const balanceMinor = inCountry.reduce((sum, a) => sum + a.localBalanceMinor, 0);
+    const rmbCostMinor = inCountry.reduce((sum, a) => {
+      if (a.exchangeRate == null || a.exchangeRate <= 0) return sum;
+      const localUnits = a.localBalanceMinor / 10 ** minorUnit(a.currency);
+      return sum + Math.round(localUnits * a.exchangeRate * 100);
+    }, 0);
+    const currency = inCountry[0]?.currency ?? getCountryMeta(c).currency;
+    return { country: c, balanceMinor, rmbCostMinor, accountCount: inCountry.length, currency };
+  });
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="inline-flex rounded-md border border-border p-1">
-          {(["US", "UK"] as XboxCountry[]).map((item) => (
-            <button
-              key={item}
-              type="button"
-              className={cn(
-                "h-9 px-4 rounded text-sm font-medium text-muted-foreground transition-colors",
-                country === item && "bg-muted text-foreground"
-              )}
-              onClick={() => setCountry(item)}
-            >
-              {COUNTRY_META[item].label}
-            </button>
+      <div className="flex items-start justify-between gap-3">
+        {/* CEO 2026-05-17 卡片改版: 顶部国家卡片网格 - 余额/成本/账号数一目了然 */}
+        <div className="grid flex-1 gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+          {countryStats.map((s) => (
+            <CountryCard
+              key={s.country}
+              country={s.country}
+              balanceMinor={s.balanceMinor}
+              rmbCostMinor={s.rmbCostMinor}
+              accountCount={s.accountCount}
+              currency={s.currency}
+              selected={country === s.country}
+              onSelect={() => setCountry(s.country)}
+            />
           ))}
         </div>
-        <div className="flex gap-2">
+        <div className="flex shrink-0 flex-col gap-2">
           <Button
             variant="outline"
             size="sm"
             onClick={() => {
-              setRefreshAllSummary(null);
+              if (refreshAllPending) return;
               if (
                 confirm(
-                  "全部刷新余额? 将串行向 Microsoft 拉取所有 active 账号的最新余额(每个账号约 2-3 秒)。"
+                  "全部刷新余额? 系统会串行向 Microsoft 拉取所有 active 账号的真实余额, 每个账号约 30-60 秒, 总用时大约 (账号数 × 1 分钟)。\n\n过程中你可以做别的事, 进度条会实时显示。"
                 )
               ) {
-                refreshAllMut.mutate();
+                void startRefreshAll();
               }
             }}
-            disabled={refreshAllMut.isPending}
+            disabled={refreshAllPending}
             title="批量刷新 → 判断哪些账号正在被使用(余额变了 = 客服在消费)"
           >
-            <RefreshCcw className={cn("h-4 w-4", refreshAllMut.isPending && "animate-spin")} />
-            {refreshAllMut.isPending ? "全部刷新中…" : "全部刷新余额"}
+            <RefreshCcw className={cn("h-4 w-4", refreshAllPending && "animate-spin")} />
+            {refreshAllPending ? "全部刷新中…" : "全部刷新余额"}
           </Button>
           <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
             <RefreshCcw className={cn("h-4 w-4", isFetching && "animate-spin")} />
@@ -3225,13 +3402,51 @@ function AccountsManagementTab() {
         </div>
       </div>
 
+      {/* CEO 2026-05-17: 批量刷新进度条 - 任务跑完前一直显示 */}
+      {refreshJob && !refreshJob.done ? (
+        <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="font-medium">
+              批量刷新中: 已完成 {refreshJob.completed}/{refreshJob.total}
+              {refreshJob.currentAccountName ? ` · 正在刷新 ${refreshJob.currentAccountName}` : ""}
+            </span>
+            <span className="text-blue-700">
+              成功 {refreshJob.succeeded}{refreshJob.failed > 0 ? ` · 失败 ${refreshJob.failed}` : ""}
+            </span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-blue-200">
+            <div
+              className="h-full bg-blue-500 transition-all duration-500"
+              style={{
+                width: `${refreshJob.total > 0 ? (refreshJob.completed / refreshJob.total) * 100 : 0}%`
+              }}
+            />
+          </div>
+          {/* 最近 3 条结果, 让 CEO 实时看到余额变化 */}
+          {refreshJob.results.length > 0 ? (
+            <div className="text-[11px] space-y-0.5 mt-1 max-h-32 overflow-auto">
+              {refreshJob.results.slice(-5).reverse().map((r) => (
+                <div key={r.accountId} className="flex justify-between">
+                  <span>
+                    {r.success ? "✓" : "✗"} {r.accountName}
+                  </span>
+                  <span className="text-blue-700">
+                    {r.success
+                      ? `${r.balance ?? "-"} ${r.currency ?? ""}`
+                      : (r.message ?? "失败").slice(0, 40)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       {refreshAllSummary ? (
         <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
           {refreshAllSummary}
         </div>
       ) : null}
-
-      <SummaryCards country={country} />
 
       {availabilityError ? (
         <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
@@ -3242,7 +3457,18 @@ function AccountsManagementTab() {
       <Card className={cn("border", meta.accentBorder)}>
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
-            <CardTitle>{meta.label} 账号列表</CardTitle>
+            <CardTitle>
+              {meta.label} 账号列表
+              {filteredAccounts.length !== accounts.length ? (
+                <span className="ml-2 text-xs font-normal text-blue-600">
+                  (已筛选 {filteredAccounts.length} / {accounts.length})
+                </span>
+              ) : (
+                <span className="ml-2 text-xs font-normal text-muted-foreground">
+                  ({accounts.length})
+                </span>
+              )}
+            </CardTitle>
             <Button size="sm" onClick={() => setShowCreate(true)}>
               <Plus className="h-4 w-4" aria-hidden="true" />
               新建账号
@@ -3251,11 +3477,14 @@ function AccountsManagementTab() {
         </CardHeader>
         <CardContent>
           <AccountsTable
-            accounts={accounts}
+            accounts={filteredAccounts}
             country={country}
             claimByAccountId={claimByAccountId}
             operatorById={operatorById}
-            onTransactions={setTransactionsTarget}
+            statusFilter={statusFilter}
+            onStatusFilterChange={setStatusFilter}
+            claimFilter={claimFilter}
+            onClaimFilterChange={setClaimFilter}
             onEdit={setEditTarget}
             onChangePassword={setPasswordTarget}
             onChangeStatus={setStatusTarget}
@@ -3297,9 +3526,6 @@ function AccountsManagementTab() {
 
       {showCreate ? (
         <CreateAccountModal defaultCountry={country} onClose={() => setShowCreate(false)} />
-      ) : null}
-      {transactionsTarget ? (
-        <TransactionsModal account={transactionsTarget} onClose={() => setTransactionsTarget(null)} />
       ) : null}
       {editTarget ? (
         <EditAccountModal account={editTarget} onClose={() => setEditTarget(null)} />

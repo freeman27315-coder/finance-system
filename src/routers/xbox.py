@@ -25,8 +25,6 @@ from src.models.xbox import (
     XboxReconcileMapping,
     XboxSaleRecord,
     XboxSyncBatch,
-    XboxTransaction,
-    XboxTransactionType,
     XboxWalletItem,
     XboxWalletMethod,
 )
@@ -78,6 +76,18 @@ COUNTRY_CURRENCY = {
 }
 
 
+# CEO 2026-05-17: 国家 → 默认货币的反向映射, 从 _CURRENCY_TO_COUNTRY 自动派生。
+# 创建账号时, 如果用户传了 country 但没传 currency, 用这表填默认。
+def _default_currency_for_country(country_code: str) -> str:
+    """US → USD, UK → GBP, EU → EUR, JP → JPY, 等。未知国家 → USD。"""
+    from src.services.xbox_sync import _CURRENCY_TO_COUNTRY
+    for cur_key, (country_val, currency_val) in _CURRENCY_TO_COUNTRY.items():
+        if country_val == country_code:
+            return currency_val
+    # 兜底: ISO 3166 国家码 + "D" 之类的猜测, 或直接 USD
+    return "USD"
+
+
 def _to_camel(snake: str) -> str:
     head, *tail = snake.split("_")
     return head + "".join(part.title() for part in tail)
@@ -93,7 +103,8 @@ class XboxAccountCreate(BaseModel):
     model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
 
     name: str = Field(..., min_length=1, max_length=120)
-    country: Optional[XboxCountry] = None  # 不传 = 待识别
+    # CEO 2026-05-17: 不限制必须是 US/UK, 可以传任何国家码
+    country: Optional[str] = Field(None, max_length=8)
     account_no: Optional[str] = Field(None, max_length=64)
     login_email: Optional[str] = Field(None, max_length=255)
     password: Optional[str] = Field(None, min_length=1)  # 明文,后端加密
@@ -174,35 +185,19 @@ class XboxAccountAuditLogOut(BaseModel):
     created_at: str
 
 
-class XboxRechargeRequest(BaseModel):
-    rmb_amount: Decimal = Field(..., gt=0)
-    local_amount: Decimal = Field(..., gt=0)
-    remark: Optional[str] = None
-
-
-class XboxConsumeRequest(BaseModel):
-    local_amount: Decimal = Field(..., gt=0)
-    remark: Optional[str] = None
-
-
-class XboxTransactionOut(BaseModel):
-    id: int
-    account_id: int
-    rmb_amount: Decimal
-    local_amount: Decimal
-    type: str
-    remark: Optional[str]
-    created_at: str
-
 
 class XboxCurrencySummary(BaseModel):
     rmb_cost: Decimal
     local_balance: Decimal
+    # CEO 2026-05-17: 加 accountCount 让前端不用再 GET 整张账号表算数量
+    account_count: int = 0
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
 
 
-class XboxSummaryOut(BaseModel):
-    USD: XboxCurrencySummary
-    GBP: XboxCurrencySummary
+# CEO 2026-05-17: XboxSummaryOut 从写死的 {USD, GBP} 改成动态 {币种: summary}。
+# 这样不论新加什么币种(EUR/JPY/CNY/HKD...), 前端都自动能看到对应汇总卡片。
+# 后端不再过滤, 把所有币种的汇总都吐出来。
 
 
 def _value(value):
@@ -244,17 +239,6 @@ def serialize_audit_log(log: XboxAccountAuditLog) -> XboxAccountAuditLogOut:
     )
 
 
-def serialize_transaction(transaction: XboxTransaction) -> XboxTransactionOut:
-    return XboxTransactionOut(
-        id=transaction.id,
-        account_id=transaction.account_id,
-        rmb_amount=transaction.rmb_amount,
-        local_amount=transaction.local_amount,
-        type=_value(transaction.type),
-        remark=transaction.remark,
-        created_at=transaction.created_at.isoformat() if transaction.created_at else "",
-    )
-
 
 def get_account_or_404(session: Session, account_id: int) -> XboxAccount:
     account = session.get(XboxAccount, account_id)
@@ -262,30 +246,6 @@ def get_account_or_404(session: Session, account_id: int) -> XboxAccount:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="XBOX 账号不存在")
     return account
 
-
-def apply_recharge_to_account(
-    session: Session,
-    account: XboxAccount,
-    rmb_amount: Decimal,
-    local_amount: Decimal,
-    remark: Optional[str] = None,
-) -> XboxTransaction:
-    """累加 XBOX 账号 rmb_cost / local_balance 并写入一条 recharge 流水。
-
-    仅 add + flush，不 commit；调用方负责事务边界，便于嵌入更大的原子操作。
-    """
-    account.rmb_cost = Decimal(account.rmb_cost) + Decimal(rmb_amount)
-    account.local_balance = Decimal(account.local_balance) + Decimal(local_amount)
-    transaction = XboxTransaction(
-        account_id=account.id,
-        rmb_amount=Decimal(rmb_amount),
-        local_amount=Decimal(local_amount),
-        type=XboxTransactionType.RECHARGE.value,
-        remark=remark,
-    )
-    session.add(transaction)
-    session.flush()
-    return transaction
 
 
 @router.post(
@@ -301,8 +261,9 @@ def create_account(request: XboxAccountCreate, db: Session = Depends(get_db)) ->
     首次同步后根据爬到的 currency 自动识别(USD→US, GBP→UK)。
     """
     # 国家占位: 未传时默认 US/USD,country_identified=False 标记为"待识别"
-    effective_country = request.country or XboxCountry.US
-    effective_currency = COUNTRY_CURRENCY[effective_country]
+    # CEO 2026-05-17: country 可以是任意字符串 (US/UK/JP/EU/...), 自动派生默认货币
+    effective_country = request.country or "US"
+    effective_currency = _default_currency_for_country(effective_country)
     try:
         account = service_create_account(
             db,
@@ -332,14 +293,15 @@ def create_account(request: XboxAccountCreate, db: Session = Depends(get_db)) ->
 
 @router.get("/accounts", response_model=list[XboxAccountOut], response_model_by_alias=True)
 def list_accounts(
-    country: Optional[XboxCountry] = Query(None),
+    # CEO 2026-05-17: country 不再枚举锁死, 接受任意字符串(US/UK/JP/EU 等)
+    country: Optional[str] = Query(None, max_length=8),
     status_filter: Optional[XboxAccountStatus] = Query(None, alias="status"),
     db: Session = Depends(get_db),
 ) -> list[XboxAccountOut]:
     accounts = service_list_accounts(
         db,
         status=status_filter.value if status_filter else None,
-        country=country.value if country else None,
+        country=country,
     )
     return [serialize_account(account) for account in accounts]
 
@@ -456,91 +418,36 @@ def get_account_audit_logs(
     return [serialize_audit_log(log) for log in logs]
 
 
-@router.post(
-    "/accounts/{account_id}/recharge",
-    response_model=XboxTransactionOut,
-    status_code=status.HTTP_201_CREATED,
-)
-def recharge_account(
-    account_id: int,
-    request: XboxRechargeRequest,
-    db: Session = Depends(get_db),
-) -> XboxTransactionOut:
-    account = get_account_or_404(db, account_id)
-    transaction = apply_recharge_to_account(
-        db,
-        account,
-        rmb_amount=request.rmb_amount,
-        local_amount=request.local_amount,
-        remark=request.remark,
+
+
+@router.get("/summary")
+def xbox_summary(db: Session = Depends(get_db)) -> dict[str, XboxCurrencySummary]:
+    """按币种聚合所有账号的 RMB 成本 + 本币余额 + 账号数。
+    CEO 2026-05-17: 返回所有币种(不止 USD/GBP), 前端按响应里的 key 动态渲染。
+    CEO 2026-05-17 v2: 成本算式改为 SUM(local_balance × exchange_rate),
+    汇率为空/0 的账号那行成本算 0(还是包含在账号数里), 不再读老的 rmb_cost 字段。
+    """
+    # 用 COALESCE 把 NULL 汇率视作 0
+    rmb_cost_expr = func.coalesce(
+        func.sum(XboxAccount.local_balance * func.coalesce(XboxAccount.exchange_rate, 0)),
+        0,
     )
-    db.commit()
-    db.refresh(transaction)
-    return serialize_transaction(transaction)
-
-
-@router.post(
-    "/accounts/{account_id}/consume",
-    response_model=XboxTransactionOut,
-    status_code=status.HTTP_201_CREATED,
-)
-def consume_account(
-    account_id: int,
-    request: XboxConsumeRequest,
-    db: Session = Depends(get_db),
-) -> XboxTransactionOut:
-    account = get_account_or_404(db, account_id)
-    if Decimal(account.local_balance) < request.local_amount:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当地币余额不足")
-    account.local_balance = Decimal(account.local_balance) - request.local_amount
-    transaction = XboxTransaction(
-        account_id=account.id,
-        rmb_amount=Decimal("0"),
-        local_amount=request.local_amount,
-        type=XboxTransactionType.CONSUME.value,
-        remark=request.remark,
-    )
-    db.add(transaction)
-    db.commit()
-    db.refresh(transaction)
-    return serialize_transaction(transaction)
-
-
-@router.get("/accounts/{account_id}/transactions", response_model=list[XboxTransactionOut])
-def list_account_transactions(
-    account_id: int,
-    db: Session = Depends(get_db),
-) -> list[XboxTransactionOut]:
-    get_account_or_404(db, account_id)
-    transactions = db.scalars(
-        select(XboxTransaction)
-        .where(XboxTransaction.account_id == account_id)
-        .order_by(XboxTransaction.id)
-    ).all()
-    return [serialize_transaction(transaction) for transaction in transactions]
-
-
-@router.get("/summary", response_model=XboxSummaryOut)
-def xbox_summary(db: Session = Depends(get_db)) -> XboxSummaryOut:
     rows = db.execute(
         select(
             XboxAccount.currency,
-            func.coalesce(func.sum(XboxAccount.rmb_cost), 0),
+            rmb_cost_expr,
             func.coalesce(func.sum(XboxAccount.local_balance), 0),
+            func.count(XboxAccount.id),
         ).group_by(XboxAccount.currency)
     ).all()
-    totals = {
-        currency: XboxCurrencySummary(
+    return {
+        (currency or "UNKNOWN"): XboxCurrencySummary(
             rmb_cost=Decimal(str(rmb_cost)),
             local_balance=Decimal(str(local_balance)),
+            account_count=int(count_),
         )
-        for currency, rmb_cost, local_balance in rows
+        for currency, rmb_cost, local_balance, count_ in rows
     }
-    empty = XboxCurrencySummary(rmb_cost=Decimal("0"), local_balance=Decimal("0"))
-    return XboxSummaryOut(
-        USD=totals.get(XboxCurrency.USD.value, empty),
-        GBP=totals.get(XboxCurrency.GBP.value, empty),
-    )
 
 
 # ==================================================================
@@ -1436,9 +1343,10 @@ class XboxRefreshAllResult(BaseModel):
     response_model_by_alias=True,
 )
 def refresh_all_balances_endpoint(db: Session = Depends(get_db)) -> XboxRefreshAllResult:
-    """串行刷新所有 active 账号的余额(CEO 2026-05-12: 方便判断出入库)。
+    """[已废弃, 但保留向后兼容] 同步刷新所有账号余额, 全部跑完才返回。
 
-    返回每个账号最新状态(含余额、国家、识别标记)。
+    CEO 2026-05-17: 改用 POST /xbox/refresh-jobs 异步启动 + GET 轮询进度,
+    7 个账号一起跑要 5-10 分钟, HTTP 长连接会超时, 同步版前端是看不到结果的。
     """
     accounts = service_list_accounts(db, status=XboxAccountStatus.ACTIVE.value)
     succeeded = 0
@@ -1459,6 +1367,151 @@ def refresh_all_balances_endpoint(db: Session = Depends(get_db)) -> XboxRefreshA
         succeeded=succeeded,
         failed=failed,
         accounts=out_accounts,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 异步批量刷新 (CEO 2026-05-17: 进度条 UI 用)
+# ---------------------------------------------------------------------------
+
+
+class XboxRefreshJobStart(BaseModel):
+    """启动任务返回的 job_id。"""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    job_id: str
+    total: int
+
+
+class XboxAccountRefreshResult(BaseModel):
+    """单个账号刷新结果(progress 展示用)。"""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    account_id: int
+    account_name: str
+    success: bool
+    balance: Optional[str] = None
+    currency: Optional[str] = None
+    message: Optional[str] = None
+
+
+class XboxRefreshJobStatus(BaseModel):
+    """整批刷新当前进度。"""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    job_id: str
+    total: int
+    completed: int
+    succeeded: int
+    failed: int
+    current_account_id: Optional[int] = None
+    current_account_name: Optional[str] = None
+    done: bool
+    results: list[XboxAccountRefreshResult]
+
+
+@router.post(
+    "/refresh-jobs",
+    response_model=XboxRefreshJobStart,
+    response_model_by_alias=True,
+)
+def start_refresh_job(db: Session = Depends(get_db)) -> XboxRefreshJobStart:
+    """启动异步批量刷新, 立即返回 job_id, 前端轮询 GET /xbox/refresh-jobs/{id}。
+
+    内部开一个 daemon thread 串行跑每个账号, 每跑完一个把结果写进 job 状态。
+    """
+    import threading
+    from src.database import SessionLocal
+    from src.services.xbox_refresh_jobs import (
+        AccountRefreshResult,
+        append_result,
+        create_job,
+        finish_job,
+        update_progress,
+    )
+
+    accounts = service_list_accounts(db, status=XboxAccountStatus.ACTIVE.value)
+    account_ids = [a.id for a in accounts]
+    account_names = {a.id: a.name for a in accounts}
+
+    job = create_job(total=len(account_ids))
+
+    def _runner(job_id: str, ids: list[int]) -> None:
+        """在独立线程串行刷新每个账号. 每个账号用独立 DB session。"""
+        for aid in ids:
+            name = account_names.get(aid, f"#{aid}")
+            update_progress(job_id, current_account_id=aid, current_account_name=name)
+            session = SessionLocal()
+            try:
+                acc = session.get(XboxAccount, aid)
+                if acc is None:
+                    append_result(job_id, AccountRefreshResult(
+                        account_id=aid, account_name=name, success=False,
+                        message="账号不存在",
+                    ))
+                    continue
+                result = refresh_account_balance(session, acc)
+                session.commit()
+                append_result(job_id, AccountRefreshResult(
+                    account_id=aid,
+                    account_name=name,
+                    success=bool(result.get("success")),
+                    balance=result.get("balance"),
+                    currency=result.get("currency"),
+                    message=result.get("message"),
+                ))
+            except Exception as exc:
+                session.rollback()
+                append_result(job_id, AccountRefreshResult(
+                    account_id=aid, account_name=name, success=False,
+                    message=f"系统异常: {type(exc).__name__}: {exc}",
+                ))
+            finally:
+                session.close()
+        finish_job(job_id)
+
+    threading.Thread(
+        target=_runner, args=(job.job_id, account_ids), daemon=True
+    ).start()
+
+    return XboxRefreshJobStart(job_id=job.job_id, total=job.total)
+
+
+@router.get(
+    "/refresh-jobs/{job_id}",
+    response_model=XboxRefreshJobStatus,
+    response_model_by_alias=True,
+)
+def get_refresh_job_status(job_id: str) -> XboxRefreshJobStatus:
+    """查询批量刷新进度. 前端每 2 秒轮询一次。"""
+    from src.services.xbox_refresh_jobs import get_job
+
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="任务不存在(可能已被清理或后端重启)")
+    return XboxRefreshJobStatus(
+        job_id=job.job_id,
+        total=job.total,
+        completed=job.completed,
+        succeeded=job.succeeded,
+        failed=job.failed,
+        current_account_id=job.current_account_id,
+        current_account_name=job.current_account_name,
+        done=job.finished_at is not None,
+        results=[
+            XboxAccountRefreshResult(
+                account_id=r.account_id,
+                account_name=r.account_name,
+                success=r.success,
+                balance=r.balance,
+                currency=r.currency,
+                message=r.message,
+            )
+            for r in job.results
+        ],
     )
 
 

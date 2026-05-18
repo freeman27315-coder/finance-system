@@ -22,9 +22,23 @@ export type AvailableAccount = {
   id: number;
   accountNo: string | null;
   name: string;
-  country: string; // "US" / "UK"
+  country: string; // "US" / "UK" / "JP" / "EU" / ...
+  currency: string; // "USD" / "GBP" / "JPY" / "EUR" / ...
   loginEmail: string | null;
   exchangeRate: string | null;
+  // CEO 2026-05-17: 客服领取前能看到的实时账号状态
+  localBalance: string; // 当前余额
+  status: string; // active / disabled / error / need_verification
+  statusMessage: string | null;
+  lastSyncedAt: string | null;
+};
+
+// CEO 2026-05-17: 客服"我的领取"卡片用 - 跟 AvailableAccount 同形, 多 claimId / claimedAt
+// + pendingOrderCount(待补订单数, 用于禁用归还按钮 + 顶部黄条警告)
+export type ClaimedAccount = AvailableAccount & {
+  claimId: number;
+  claimedAt: string | null;
+  pendingOrderCount: number;
 };
 
 // 客服当前持有的领取 (GET /operator/operators/{id}/claims)
