@@ -47,6 +47,8 @@ def init_db() -> None:
     _ensure_wallet_is_group_column()
     _ensure_wallet_transaction_business_date_column()
     _ensure_wallet_transaction_operator_name_column()
+    _ensure_wallet_transfers_table()
+    _ensure_wallet_transaction_transfer_id_column()
     _ensure_xbox_account_extended_columns()
     _ensure_xbox_account_is_available_for_claim_column()
     _ensure_xbox_account_country_identified_column()
@@ -224,6 +226,48 @@ def _ensure_wallet_transaction_operator_name_column() -> None:
         return
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE wallet_transactions ADD COLUMN operator_name VARCHAR(120)"))
+
+
+def _ensure_wallet_transfers_table() -> None:
+    """Issue #129: 启动时建 wallet_transfers 表(划转单).
+
+    SQLAlchemy create_all 已经会建表, 这里仅作为防御性 fallback: 若旧库
+    metadata 没注册到 WalletTransfer (例如表删了又没重启), 也能补回来.
+    """
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    inspector = inspect(engine)
+    if "wallet_transfers" in inspector.get_table_names():
+        return
+    # 通过 create_all 走 SQLAlchemy 的 DDL 比手写 SQL 更安全; 这里 import 一下确保
+    # WalletTransfer 注册进 metadata
+    from src.models.wallet import WalletTransfer  # noqa: F401
+    Base.metadata.create_all(bind=engine, tables=[WalletTransfer.__table__])
+
+
+def _ensure_wallet_transaction_transfer_id_column() -> None:
+    """Issue #129: 给 wallet_transactions 表加 transfer_id 列(FK + 索引).
+
+    用于把同一笔划转的 OUT/IN 两条流水绑死. 普通 credit/debit 流水留 NULL.
+    """
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    inspector = inspect(engine)
+    if "wallet_transactions" not in inspector.get_table_names():
+        return
+    column_names = {column["name"] for column in inspector.get_columns("wallet_transactions")}
+    if "transfer_id" in column_names:
+        return
+    with engine.begin() as connection:
+        # SQLite 加 FK 列只能不带 REFERENCES 约束(SQLite 不支持 ALTER 加 FK).
+        # SQLAlchemy ORM 层仍会按 FK 解析; 数据完整性靠业务层保证.
+        connection.execute(text("ALTER TABLE wallet_transactions ADD COLUMN transfer_id INTEGER"))
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_wallet_transactions_transfer_id "
+                "ON wallet_transactions(transfer_id)"
+            )
+        )
 
 
 def _ensure_wallet_transaction_business_date_column() -> None:

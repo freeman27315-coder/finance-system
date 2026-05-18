@@ -100,8 +100,53 @@ class WalletTransaction(Base):
         Date,
         nullable=True,
     )
+    # Issue #129: 关联划转单(钱包间转账). 一笔划转 = 两条 wallet_transactions
+    # (一 OUT 一 IN), 用 transfer_id 绑死. 普通的 credit/debit 流水留 NULL.
+    transfer_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("wallet_transfers.id"),
+        nullable=True,
+        index=True,
+    )
 
     wallet: Mapped[Wallet] = relationship(back_populates="transactions")
+
+
+class WalletTransfer(Base):
+    """划转单 — 一笔钱从 A 钱包搬到 B 钱包, 记录两边金额和汇率快照.
+
+    Issue #129 (CEO 2026-05-18):
+    - 典型场景: 台湾同事把 TWD 兑成 USDT 打到资产钱包, 一条 transfer = 两条 tx
+    - 用户填两个金额 (出账/入账), 系统自动算 rate = to_amount / from_amount
+    - from_currency / to_currency 必须**快照**, 防钱包后续改名/改币种导致历史汇率失真
+    - 软删除 (deleted_at) 用于"撤销划转": 反向冲销两条流水 + 标记 deleted_at
+    """
+
+    __tablename__ = "wallet_transfers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    from_wallet_id: Mapped[int] = mapped_column(ForeignKey("wallets.id"), nullable=False, index=True)
+    to_wallet_id: Mapped[int] = mapped_column(ForeignKey("wallets.id"), nullable=False, index=True)
+    from_amount: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    to_amount: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    # 汇率精度比金额高 2 位, 保留 8 位小数足够覆盖 USDT/CNY/TWD 间小数级别波动
+    rate: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
+    from_currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    to_currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    business_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    operator_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=china_now,
+    )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    from_wallet: Mapped[Wallet] = relationship(foreign_keys=[from_wallet_id])
+    to_wallet: Mapped[Wallet] = relationship(foreign_keys=[to_wallet_id])
 
 
 def _to_decimal(amount: Decimal | int | float | str) -> Decimal:
