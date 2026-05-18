@@ -40,6 +40,7 @@ from src.routers.xbox import router as xbox_router
 from src.routers.taobao import router as taobao_router
 from src.routers.taiwan import router as taiwan_router
 from src.routers.transfers import router as transfers_router
+from src.routers.wallet_transfers import router as wallet_transfers_router
 from src.services.assets import ensure_default_asset_wallets
 from src.services.taiwan import ensure_default_taiwan_wallets
 from src.services.taobao import ensure_default_taobao_wallets
@@ -94,6 +95,7 @@ app.include_router(xbox_router)
 app.include_router(taobao_router)
 app.include_router(taiwan_router)
 app.include_router(transfers_router)
+app.include_router(wallet_transfers_router, prefix="/api/wallet-transfers", tags=["wallet-transfers"])
 
 
 @app.get("/health")
