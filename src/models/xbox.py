@@ -195,6 +195,13 @@ class XboxOrder(Base):
     )
 
 
+class XboxSaleRecordStatus(str, Enum):
+    """销售记录状态(PR #130 / Issue #130)。"""
+
+    ACTIVE = "active"
+    REFUNDED = "refunded"
+
+
 class XboxSaleRecord(Base):
     """销售记录（订单补齐后生成,带 walletPoolId 流入资金池）。"""
 
@@ -228,6 +235,17 @@ class XboxSaleRecord(Base):
     # 内部记账：本销售记录在资金池写入了一笔 IN 流水（用于改字段时反向调整）
     bookkeeping_tx_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("wallet_transactions.id"), nullable=True
+    )
+    # Issue #130: 退款状态字段(默认 active, 退款后改 refunded)
+    # 退款不动 XBOX 账号状态, 只标销售记录, 实际钱包 + 理论钱包都写一条 OUT 流水
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=XboxSaleRecordStatus.ACTIVE.value
+    )
+    refunded_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    refund_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("xbox_refunds.id"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=china_now
@@ -385,6 +403,53 @@ class XboxReconcileMapping(Base):
     actual_wallet_id: Mapped[int] = mapped_column(
         ForeignKey("wallets.id"), nullable=False
     )  # 任何实际值钱包(淘宝/台湾/资产...)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=china_now,
+    )
+
+
+class XboxRefund(Base):
+    """XBOX 销售记录退款单(Issue #130 / CEO 2026-05-18)。
+
+    业务规则：
+    - 一笔退款 = 两条 wallet_transactions(实际钱包 OUT + 理论钱包 OUT)
+    - 一个销售记录只能退一次(original_sale_record_id UNIQUE)
+    - 只支持全额退(refund_amount = sale_record.sale_price)
+    - 退款不动 XBOX 账号状态(账号未被使用,账号回收由客服系统处理)
+    - 撤销退款=反向冲销两条流水 + 销售记录改回 active + 硬删本记录(因 UNIQUE)
+    """
+
+    __tablename__ = "xbox_refunds"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    original_sale_record_id: Mapped[int] = mapped_column(
+        ForeignKey("xbox_sale_records.id"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    refund_amount: Mapped[Decimal] = mapped_column(
+        Numeric(18, 6), nullable=False, default=Decimal("0")
+    )
+    refund_currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    actual_wallet_id: Mapped[int] = mapped_column(
+        ForeignKey("wallets.id"), nullable=False, index=True
+    )
+    theoretical_wallet_id: Mapped[int] = mapped_column(
+        ForeignKey("wallets.id"), nullable=False, index=True
+    )
+    business_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    operator_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # 关联两条流水(撤销时也用得着)
+    actual_bookkeeping_tx_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("wallet_transactions.id"), nullable=True
+    )
+    theoretical_bookkeeping_tx_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("wallet_transactions.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

@@ -54,6 +54,8 @@ def init_db() -> None:
     _ensure_xbox_account_country_identified_column()
     _ensure_xbox_order_remark_column()
     _migrate_xbox_sale_date_to_datetime()
+    _ensure_xbox_refunds_table()
+    _ensure_xbox_sale_record_refund_columns()
 
 
 def _ensure_wallet_is_group_column() -> None:
@@ -289,6 +291,48 @@ def _ensure_wallet_transaction_business_date_column() -> None:
 
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE wallet_transactions ADD COLUMN business_date DATE"))
+
+
+def _ensure_xbox_refunds_table() -> None:
+    """Issue #130: 启动时建 xbox_refunds 表(退款单).
+
+    SQLAlchemy create_all 已经会建表, 这里作为防御性 fallback: 若旧库
+    metadata 没注册到 XboxRefund(例如表删了又没重启), 也能补回来.
+    """
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    inspector = inspect(engine)
+    if "xbox_refunds" in inspector.get_table_names():
+        return
+    from src.models.xbox import XboxRefund  # noqa: F401
+    Base.metadata.create_all(bind=engine, tables=[XboxRefund.__table__])
+
+
+def _ensure_xbox_sale_record_refund_columns() -> None:
+    """Issue #130: 给 xbox_sale_records 表加退款相关 3 列.
+
+    - status VARCHAR(16) NOT NULL DEFAULT 'active' (active / refunded)
+    - refunded_at DATETIME (NULL)
+    - refund_id INTEGER (NULL, FK xbox_refunds.id, 无约束因 SQLite ALTER 限制)
+    """
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    inspector = inspect(engine)
+    if "xbox_sale_records" not in inspector.get_table_names():
+        return
+    column_names = {column["name"] for column in inspector.get_columns("xbox_sale_records")}
+
+    additions = [
+        ("status", "VARCHAR(16) NOT NULL DEFAULT 'active'"),
+        ("refunded_at", "DATETIME"),
+        ("refund_id", "INTEGER"),
+    ]
+    with engine.begin() as connection:
+        for col_name, col_def in additions:
+            if col_name not in column_names:
+                connection.execute(
+                    text(f"ALTER TABLE xbox_sale_records ADD COLUMN {col_name} {col_def}")
+                )
 
 
 def get_db() -> Iterator[Session]:
