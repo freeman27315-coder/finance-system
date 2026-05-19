@@ -3012,7 +3012,8 @@ function ReconcileTab() {
         <CardHeader>
           <CardTitle className="text-base">{date} 对账</CardTitle>
           <div className="text-xs text-muted-foreground">
-            理论值（XBOX 销售归口）当日流入 vs 实际值钱包当日 IN 流水。差异 ≠ 0 表示客服可能填错出售渠道,
+            理论值（XBOX 销售归口）当日 vs 实际值钱包当日 IN/OUT 流水。
+            IN 差异 ≠ 0 表示客服可能填错出售渠道; OUT 差异 ≠ 0 表示退款时实际钱包选错。
             可在订单 tab 用「改字段」拆单纠错。
           </div>
         </CardHeader>
@@ -3022,9 +3023,12 @@ function ReconcileTab() {
               <TableRow>
                 <TableHead>理论值钱包</TableHead>
                 <TableHead>币种</TableHead>
-                <TableHead className="text-right">理论金额</TableHead>
-                <TableHead className="text-right">实际金额（合计）</TableHead>
-                <TableHead className="text-right">差异</TableHead>
+                <TableHead className="text-right text-emerald-700">理论 IN</TableHead>
+                <TableHead className="text-right text-emerald-700">实际 IN</TableHead>
+                <TableHead className="text-right text-emerald-700">IN 差异</TableHead>
+                <TableHead className="text-right text-red-700">理论 OUT</TableHead>
+                <TableHead className="text-right text-red-700">实际 OUT</TableHead>
+                <TableHead className="text-right text-red-700">OUT 差异</TableHead>
                 <TableHead>映射的实际钱包</TableHead>
               </TableRow>
             </TableHeader>
@@ -3033,6 +3037,10 @@ function ReconcileTab() {
                 const diff = Number(row.diff);
                 const diffColor =
                   diff === 0 ? "text-muted-foreground" : diff > 0 ? "text-blue-600" : "text-red-600";
+                const outDiff = Number(row.outDiff ?? "0");
+                const outDiffColor =
+                  outDiff === 0 ? "text-muted-foreground" : "text-amber-600";
+                const outDiffBg = outDiff !== 0 ? "bg-amber-50" : "";
                 return (
                   <TableRow key={row.theoreticalWallet.id}>
                     <TableCell className="font-medium">{row.theoreticalWallet.name}</TableCell>
@@ -3052,6 +3060,22 @@ function ReconcileTab() {
                     <TableCell className={cn("text-right tabular-nums font-semibold", diffColor)}>
                       {diff > 0 ? "+" : ""}
                       {Number(row.diff).toLocaleString("zh-CN", {
+                        minimumFractionDigits: 2, maximumFractionDigits: 2
+                      })}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      {Number(row.theoreticalOutTotal ?? "0").toLocaleString("zh-CN", {
+                        minimumFractionDigits: 2, maximumFractionDigits: 2
+                      })}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      {Number(row.actualOutTotal ?? "0").toLocaleString("zh-CN", {
+                        minimumFractionDigits: 2, maximumFractionDigits: 2
+                      })}
+                    </TableCell>
+                    <TableCell className={cn("text-right tabular-nums font-semibold", outDiffColor, outDiffBg)}>
+                      {outDiff > 0 ? "+" : ""}
+                      {Number(row.outDiff ?? "0").toLocaleString("zh-CN", {
                         minimumFractionDigits: 2, maximumFractionDigits: 2
                       })}
                     </TableCell>
@@ -3075,11 +3099,13 @@ function ReconcileTab() {
                                 m.theoreticalWalletId === String(row.theoreticalWallet.id) &&
                                 m.actualWalletId === String(aw.id)
                             );
+                            const hasOut = aw.outTotal !== undefined && Number(aw.outTotal) > 0;
                             return (
                               <Badge key={aw.id} tone="transfer">
                                 <span>{aw.name}</span>
                                 <span className="ml-1 tabular-nums">
-                                  ({aw.currency} {Number(aw.total).toLocaleString("zh-CN")})
+                                  ({aw.currency} IN {Number(aw.total).toLocaleString("zh-CN")}
+                                  {hasOut ? ` · OUT ${Number(aw.outTotal ?? "0").toLocaleString("zh-CN")}` : ""})
                                 </span>
                                 {mapping ? (
                                   <button
@@ -3117,7 +3143,7 @@ function ReconcileTab() {
               })}
               {report.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                  <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">
                     暂无对账数据
                   </TableCell>
                 </TableRow>
