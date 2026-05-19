@@ -96,8 +96,8 @@ app.include_router(xbox_router)
 app.include_router(taobao_router)
 app.include_router(taiwan_router)
 app.include_router(transfers_router)
-app.include_router(wallet_transfers_router, prefix="/api/wallet-transfers", tags=["wallet-transfers"])
-app.include_router(xbox_refund_router, prefix="/api/xbox/refunds", tags=["xbox-refunds"])
+app.include_router(wallet_transfers_router, prefix="/wallet-transfers", tags=["wallet-transfers"])
+app.include_router(xbox_refund_router, prefix="/xbox/refunds", tags=["xbox-refunds"])
 
 
 @app.get("/health")

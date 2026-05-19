@@ -77,7 +77,7 @@ def test_create_transfer_changes_balances_and_records_rate(client):
     _credit_asset(client, from_id, "1000")
 
     resp = client.post(
-        "/api/wallet-transfers",
+        "/wallet-transfers",
         json={
             "from_wallet_id": from_id,
             "to_wallet_id": to_id,
@@ -119,7 +119,7 @@ def test_same_currency_transfer_rate_is_one(client):
     _credit_taiwan(client, from_id, "5000")
 
     resp = client.post(
-        "/api/wallet-transfers",
+        "/wallet-transfers",
         json={
             "from_wallet_id": from_id,
             "to_wallet_id": to_id,
@@ -146,7 +146,7 @@ def test_cross_currency_transfer_twd_to_usdt(client):
 
     # 30000 TWD → 1000 USDT, rate = 1000 / 30000 = 0.03333333
     resp = client.post(
-        "/api/wallet-transfers",
+        "/wallet-transfers",
         json={
             "from_wallet_id": from_id,
             "to_wallet_id": to_id,
@@ -174,7 +174,7 @@ def test_insufficient_balance_rejected(client):
     _credit_asset(client, from_id, "100")  # 只有 100
 
     resp = client.post(
-        "/api/wallet-transfers",
+        "/wallet-transfers",
         json={
             "from_wallet_id": from_id,
             "to_wallet_id": to_id,
@@ -190,7 +190,7 @@ def test_insufficient_balance_rejected(client):
     assert _wallet_balance(to_id) == Decimal("0")
 
     # 列表里也不能出现这笔(已 rollback)
-    listing = client.get("/api/wallet-transfers").json()
+    listing = client.get("/wallet-transfers").json()
     assert listing == []
 
 
@@ -202,7 +202,7 @@ def test_same_wallet_rejected(client):
     _credit_asset(client, wallet_id, "100")
 
     resp = client.post(
-        "/api/wallet-transfers",
+        "/wallet-transfers",
         json={
             "from_wallet_id": wallet_id,
             "to_wallet_id": wallet_id,
@@ -224,7 +224,7 @@ def test_cancel_transfer_restores_balances(client):
 
     # 先创建划转
     resp = client.post(
-        "/api/wallet-transfers",
+        "/wallet-transfers",
         json={
             "from_wallet_id": from_id,
             "to_wallet_id": to_id,
@@ -238,7 +238,7 @@ def test_cancel_transfer_restores_balances(client):
     assert _wallet_balance(to_id) == Decimal("300")
 
     # 撤销
-    cancel_resp = client.delete(f"/api/wallet-transfers/{transfer_id}")
+    cancel_resp = client.delete(f"/wallet-transfers/{transfer_id}")
     assert cancel_resp.status_code == 200, cancel_resp.text
     body = cancel_resp.json()
     assert body["deleted_at"] is not None
@@ -250,10 +250,10 @@ def test_cancel_transfer_restores_balances(client):
     assert _wallet_balance(to_id) == Decimal("0")
 
     # 默认列表不含已撤销
-    default_list = client.get("/api/wallet-transfers").json()
+    default_list = client.get("/wallet-transfers").json()
     assert all(t["id"] != transfer_id for t in default_list)
     # include_deleted=true 能看到
-    full_list = client.get("/api/wallet-transfers?include_deleted=true").json()
+    full_list = client.get("/wallet-transfers?include_deleted=true").json()
     assert any(t["id"] == transfer_id for t in full_list)
 
 
@@ -267,7 +267,7 @@ def test_cancel_rejected_when_to_balance_insufficient(client):
 
     # 划转 300 过去
     resp = client.post(
-        "/api/wallet-transfers",
+        "/wallet-transfers",
         json={
             "from_wallet_id": from_id,
             "to_wallet_id": to_id,
@@ -286,14 +286,14 @@ def test_cancel_rejected_when_to_balance_insufficient(client):
     assert _wallet_balance(to_id) == Decimal("50")
 
     # 撤销应该被拒绝(to 只有 50, 但要扣回 300)
-    cancel_resp = client.delete(f"/api/wallet-transfers/{transfer_id}")
+    cancel_resp = client.delete(f"/wallet-transfers/{transfer_id}")
     assert cancel_resp.status_code == 400, cancel_resp.text
     assert "insufficient" in cancel_resp.json()["detail"].lower()
 
     # 余额没变, transfer 也没被软删
     assert _wallet_balance(from_id) == Decimal("700")
     assert _wallet_balance(to_id) == Decimal("50")
-    get_resp = client.get(f"/api/wallet-transfers/{transfer_id}")
+    get_resp = client.get(f"/wallet-transfers/{transfer_id}")
     assert get_resp.status_code == 200
     assert get_resp.json()["deleted_at"] is None
 
@@ -308,7 +308,7 @@ def test_create_transfer_rejects_non_positive_amount(client):
 
     # from_amount = 0 (被 pydantic gt=0 拦, 返回 422)
     resp = client.post(
-        "/api/wallet-transfers",
+        "/wallet-transfers",
         json={
             "from_wallet_id": from_id,
             "to_wallet_id": to_id,
@@ -328,7 +328,7 @@ def test_create_transfer_rejects_group_wallet(client):
 
     # group 作为 from
     resp = client.post(
-        "/api/wallet-transfers",
+        "/wallet-transfers",
         json={
             "from_wallet_id": rmb_root_id,
             "to_wallet_id": leaf_id,
@@ -341,7 +341,7 @@ def test_create_transfer_rejects_group_wallet(client):
 
     # group 作为 to
     resp = client.post(
-        "/api/wallet-transfers",
+        "/wallet-transfers",
         json={
             "from_wallet_id": leaf_id,
             "to_wallet_id": rmb_root_id,
@@ -358,7 +358,7 @@ def test_create_transfer_404_when_wallet_missing(client):
     _credit_asset(client, leaf_id, "100")
 
     resp = client.post(
-        "/api/wallet-transfers",
+        "/wallet-transfers",
         json={
             "from_wallet_id": leaf_id,
             "to_wallet_id": 99999,
@@ -379,7 +379,7 @@ def test_list_filters_by_wallet_and_operator(client):
     _credit_asset(client, from_id, "1000")
 
     client.post(
-        "/api/wallet-transfers",
+        "/wallet-transfers",
         json={
             "from_wallet_id": from_id,
             "to_wallet_id": to_id_1,
@@ -389,7 +389,7 @@ def test_list_filters_by_wallet_and_operator(client):
         },
     )
     client.post(
-        "/api/wallet-transfers",
+        "/wallet-transfers",
         json={
             "from_wallet_id": from_id,
             "to_wallet_id": to_id_2,
@@ -400,14 +400,14 @@ def test_list_filters_by_wallet_and_operator(client):
     )
 
     # 按 to_wallet_id 筛
-    resp = client.get(f"/api/wallet-transfers?to_wallet_id={to_id_1}")
+    resp = client.get(f"/wallet-transfers?to_wallet_id={to_id_1}")
     assert resp.status_code == 200
     items = resp.json()
     assert len(items) == 1
     assert items[0]["to_wallet_id"] == to_id_1
 
     # 按 operator 筛
-    resp = client.get("/api/wallet-transfers?operator_name=freeman")
+    resp = client.get("/wallet-transfers?operator_name=freeman")
     assert resp.status_code == 200
     items = resp.json()
     assert len(items) == 1
@@ -423,7 +423,7 @@ def test_double_cancel_rejected(client):
     _credit_asset(client, from_id, "1000")
 
     resp = client.post(
-        "/api/wallet-transfers",
+        "/wallet-transfers",
         json={
             "from_wallet_id": from_id,
             "to_wallet_id": to_id,
@@ -434,8 +434,8 @@ def test_double_cancel_rejected(client):
     transfer_id = resp.json()["id"]
 
     # 第一次撤销 ok
-    assert client.delete(f"/api/wallet-transfers/{transfer_id}").status_code == 200
+    assert client.delete(f"/wallet-transfers/{transfer_id}").status_code == 200
     # 第二次撤销拒绝
-    second = client.delete(f"/api/wallet-transfers/{transfer_id}")
+    second = client.delete(f"/wallet-transfers/{transfer_id}")
     assert second.status_code == 400
     assert "已撤销" in second.json()["detail"]
