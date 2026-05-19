@@ -29,7 +29,7 @@ from src.models.wallet import (
     WalletTransaction,
     WalletType,
 )
-from src.models.xbox import XboxRefund, XboxReconcileMapping, XboxSaleRecord
+from src.models.xbox import XboxReconcileMapping, XboxSaleRecord
 
 
 def list_mappings(session: Session) -> list[XboxReconcileMapping]:
@@ -197,87 +197,20 @@ def _actual_total_for_day(
     return Decimal(str(total or 0))
 
 
-def _theoretical_out_total_for_day(
-    session: Session,
-    theoretical_wallet_id: int,
-    target_date: date,
-) -> Decimal:
-    """理论值钱包在指定日期的"OUT 总额"(退款方向)。
-
-    数据来源：``XboxRefund``(Issue #130)。
-    - theoretical_wallet_id 匹配
-    - business_date == target_date (退款单的业务日, NULL 时不参与)
-
-    CEO 2026-05-18: 退款的理论 OUT 自动体现在对账页 —
-    原销售记录关联的理论钱包当日 OUT vs 实际退款钱包当日 OUT 撞账.
-    """
-    total = session.scalar(
-        select(sa_func.coalesce(sa_func.sum(XboxRefund.refund_amount), 0)).where(
-            XboxRefund.theoretical_wallet_id == theoretical_wallet_id,
-            XboxRefund.business_date == target_date,
-        )
-    )
-    return Decimal(str(total or 0))
-
-
-def _actual_out_total_for_day(
-    session: Session,
-    actual_wallet_id: int,
-    target_date: date,
-) -> Decimal:
-    """实际值钱包在指定日期的"OUT 流水总额"(退款方向)。
-
-    若 actual_wallet 是 group(店铺总钱包),递归汇总所有子孙叶子的当日 OUT 流水。
-
-    数据来源：``WalletTransaction``。
-    - direction == "out"
-    - business_date == target_date 或 created_at 落在当天
-    - **transfer_id IS NULL**(排除划转产生的 OUT, Issue #129)
-
-    优先用 business_date,fallback created_at(与 IN 方向逻辑对称)。
-    """
-    from sqlalchemy import or_
-
-    leaf_ids = _collect_leaf_descendants(session, actual_wallet_id)
-    if not leaf_ids:
-        return Decimal("0")
-
-    start, end = _day_range(target_date)
-    total = session.scalar(
-        select(sa_func.coalesce(sa_func.sum(WalletTransaction.amount), 0)).where(
-            WalletTransaction.wallet_id.in_(leaf_ids),
-            WalletTransaction.direction == TransactionDirection.OUT.value,
-            WalletTransaction.transfer_id.is_(None),
-            or_(
-                WalletTransaction.business_date == target_date,
-                and_(
-                    WalletTransaction.business_date.is_(None),
-                    WalletTransaction.created_at >= start,
-                    WalletTransaction.created_at < end,
-                ),
-            ),
-        )
-    )
-    return Decimal(str(total or 0))
-
-
 def get_reconcile_report_for_day(
     session: Session,
     target_date: date,
 ) -> list[dict]:
     """对账报告：每个有映射的理论值钱包一行,含理论金额、实际金额（合计映射钱包）、差异。
 
-    返回结构(Issue #130 起加 OUT 三字段)：
+    返回结构：
         [
           {
             "theoreticalWallet": {id, name, currency},
-            "actualWallets": [{id, name, currency, total: "X.XX", outTotal: "X.XX"}],
-            "theoreticalTotal": "X.XX",        # IN 方向(销售)
+            "actualWallets": [{id, name, currency, total: "X.XX"}],
+            "theoreticalTotal": "X.XX",
             "actualTotal": "X.XX",
             "diff": "X.XX",
-            "theoreticalOutTotal": "X.XX",     # OUT 方向(退款) Issue #130
-            "actualOutTotal": "X.XX",
-            "outDiff": "X.XX",
           },
           ...
         ]
@@ -314,24 +247,19 @@ def get_reconcile_report_for_day(
     for tw in theoretical_wallets:
         actual_ids = actual_ids_by_theoretical.get(tw.id, [])
         theoretical_total = _theoretical_total_for_day(session, tw.id, target_date)
-        theoretical_out_total = _theoretical_out_total_for_day(session, tw.id, target_date)
         actual_details: list[dict] = []
         actual_total = Decimal("0")
-        actual_out_total = Decimal("0")
         for aid in actual_ids:
             aw = actual_wallets_by_id.get(aid)
             if aw is None:
                 continue
             sub_total = _actual_total_for_day(session, aid, target_date)
-            sub_out_total = _actual_out_total_for_day(session, aid, target_date)
             actual_total += sub_total
-            actual_out_total += sub_out_total
             actual_details.append({
                 "id": aid,
                 "name": aw.name,
                 "currency": aw.currency.value if hasattr(aw.currency, "value") else aw.currency,
                 "total": str(sub_total),
-                "outTotal": str(sub_out_total),
             })
 
         report.append({
@@ -344,8 +272,5 @@ def get_reconcile_report_for_day(
             "theoreticalTotal": str(theoretical_total),
             "actualTotal": str(actual_total),
             "diff": str(theoretical_total - actual_total),
-            "theoreticalOutTotal": str(theoretical_out_total),
-            "actualOutTotal": str(actual_out_total),
-            "outDiff": str(theoretical_out_total - actual_out_total),
         })
     return report

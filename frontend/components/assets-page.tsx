@@ -31,8 +31,6 @@ import {
 import { formatMoney, sumMinor } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import type { AssetTransaction, Currency, WalletBalance } from "@/types";
-import { WalletTransferList } from "@/components/wallet-transfer-list";
-import { WalletTransferModal } from "@/components/wallet-transfer-modal";
 
 type AssetTab = "CNY" | "USDT";
 type MovementMode = "credit" | "debit";
@@ -586,8 +584,7 @@ function AssetTree({
   onShowTransactions,
   onEdit,
   onDelete,
-  onTransfer,
-  onCrossTransfer
+  onTransfer
 }: {
   wallets: WalletBalance[];
   expandedIds: Set<string>;
@@ -600,7 +597,6 @@ function AssetTree({
   onEdit: (wallet: WalletBalance) => void;
   onDelete: (wallet: WalletBalance) => void;
   onTransfer: (wallet: WalletBalance) => void;
-  onCrossTransfer: (wallet: WalletBalance) => void;
 }) {
   const renderNode = (wallet: WalletBalance, depth: number) => {
     const hasChildren = Boolean(wallet.children?.length);
@@ -675,10 +671,6 @@ function AssetTree({
                         转账
                       </Button>
                     ) : null}
-                    <Button variant="outline" size="sm" onClick={() => onCrossTransfer(wallet)}>
-                      <ArrowLeftRight className="h-4 w-4" aria-hidden="true" />
-                      划转
-                    </Button>
                   </>
                 )}
                 <Button variant="outline" size="sm" onClick={() => onEdit(wallet)}>
@@ -776,8 +768,6 @@ export function AssetsPage() {
   const [editTarget, setEditTarget] = useState<WalletBalance | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<WalletBalance | null>(null);
   const [transferTarget, setTransferTarget] = useState<WalletBalance | null>(null);
-  const [crossTransferTarget, setCrossTransferTarget] = useState<WalletBalance | null>(null);
-  const [showTransferList, setShowTransferList] = useState(false);
   const { data: wallets = [], isFetching, refetch } = useQuery({
     queryKey: ["assets"],
     queryFn: getAssetWallets
@@ -826,22 +816,11 @@ export function AssetsPage() {
           <h2 className="text-2xl font-semibold tracking-normal">资产钱包</h2>
           <p className="mt-1 text-sm text-muted-foreground">RMB 和 USDT 三层结构、分组折叠、叶子钱包记账和流水。</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant={showTransferList ? "default" : "outline"}
-            onClick={() => setShowTransferList((v) => !v)}
-          >
-            <ArrowLeftRight className="h-4 w-4" aria-hidden="true" />
-            划转记录
-          </Button>
-          <Button variant="outline" onClick={() => refetch()} disabled={isFetching}>
-            <RefreshCcw className="h-4 w-4" />
-            刷新
-          </Button>
-        </div>
+        <Button variant="outline" onClick={() => refetch()} disabled={isFetching}>
+          <RefreshCcw className="h-4 w-4" />
+          刷新
+        </Button>
       </div>
-
-      {showTransferList ? <WalletTransferList title="资产钱包相关划转记录" /> : null}
 
       <div className="grid gap-2 rounded-lg border border-border bg-card p-2 md:grid-cols-2">
         {tabs.map((tab) => (
@@ -895,7 +874,6 @@ export function AssetsPage() {
         onEdit={setEditTarget}
         onDelete={setDeleteTarget}
         onTransfer={setTransferTarget}
-        onCrossTransfer={setCrossTransferTarget}
       />
       <AssetActions
         leafWallets={leafWallets}
@@ -921,11 +899,6 @@ export function AssetsPage() {
           onClose={() => setTransferTarget(null)}
         />
       ) : null}
-      <WalletTransferModal
-        open={crossTransferTarget !== null}
-        onClose={() => setCrossTransferTarget(null)}
-        defaultFromWalletId={crossTransferTarget?.id}
-      />
     </div>
   );
 }
