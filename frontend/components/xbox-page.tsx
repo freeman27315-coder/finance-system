@@ -1746,9 +1746,10 @@ function CompleteOrderModal({
   const [saleCurrency, setSaleCurrency] = useState<XboxSaleCurrency>(
     order.saleCurrency ?? "CNY"
   );
-  // CEO 2026-05-20 #134: 直接选真实钱包(walletPoolId), 不再走 method+item 两层
+  // CEO 2026-05-20: 先选渠道 → 锁币种 → 再选具体钱包
+  const CHANNEL_TO_CUR: Record<string, XboxSaleCurrency> = { TAOBAO: "CNY", TAIWAN: "TWD" };
+  const [channelCode, setChannelCode] = useState<string>("");
   const [walletPoolId, setWalletPoolId] = useState("");
-  const [showAllWallets, setShowAllWallets] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [autoCountdown, setAutoCountdown] = useState<number | null>(null);
 
@@ -1760,17 +1761,17 @@ function CompleteOrderModal({
     queryFn: () => getXboxWalletPoolOptions()
   });
 
-  // 按账号币种过滤(账号币种来自销售币种 saleCurrency, 默认 CNY)
-  // - TWD 账号 → 只显示台湾(TWD)
-  // - CNY 账号 → 只显示淘宝(CNY)
-  // 客服可以打开"显示全部"开关跨币种选(罕见)
-  const filteredGroups = showAllWallets
-    ? poolGroups
-    : poolGroups
-        .map((g) => ({ ...g, wallets: g.wallets.filter((w) => w.currency === saleCurrency) }))
-        .filter((g) => g.wallets.length > 0);
-  const flatWallets = filteredGroups.flatMap((g) => g.wallets);
-  const selectedWallet = flatWallets.find((w) => w.id === walletPoolId);
+  // 渠道决定币种 + 候选钱包
+  const selectedGroup = poolGroups.find((g) => g.groupCode === channelCode);
+  const walletsInChannel = selectedGroup?.wallets ?? [];
+  const selectedWallet = walletsInChannel.find((w) => w.id === walletPoolId);
+  // saleCurrency 由渠道锁定(选完渠道后自动同步)
+  useEffect(() => {
+    if (channelCode && CHANNEL_TO_CUR[channelCode]) {
+      setSaleCurrency(CHANNEL_TO_CUR[channelCode]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelCode]);
 
   // 合单提示: 查同账号 + 同 walletPoolId 的现有销售记录
   const { data: allSaleRecords = [] } = useQuery({
@@ -1899,30 +1900,36 @@ function CompleteOrderModal({
               </select>
             </div>
           </div>
+          {/* 渠道选择 (CEO 2026-05-20: 先选渠道 → 锁币种 → 再选钱包) */}
           <div className="space-y-1">
-            <div className="flex items-center justify-between">
-              <div className="text-sm text-muted-foreground">收款钱包 *</div>
-              <label className="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={showAllWallets}
-                  onChange={(e) => setShowAllWallets(e.target.checked)}
-                />
-                显示全部币种
-              </label>
-            </div>
+            <div className="text-sm text-muted-foreground">渠道 *</div>
+            <select
+              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              value={channelCode}
+              onChange={(event) => {
+                setChannelCode(event.target.value);
+                setWalletPoolId(""); // 换渠道清空钱包
+              }}
+            >
+              <option value="">-- 请选渠道 --</option>
+              {poolGroups.map((g) => (
+                <option key={g.groupCode} value={g.groupCode}>
+                  {g.groupLabel} ({CHANNEL_TO_CUR[g.groupCode] ?? g.wallets[0]?.currency})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm text-muted-foreground">收款钱包 *</div>
             <select
               className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
               value={walletPoolId}
               onChange={(event) => setWalletPoolId(event.target.value)}
+              disabled={!channelCode}
             >
-              <option value="">-- 请选 --</option>
-              {filteredGroups.map((g) => (
-                <optgroup key={g.groupCode} label={`── ${g.groupLabel} (${g.wallets[0]?.currency ?? ""}) ──`}>
-                  {g.wallets.map((w) => (
-                    <option key={w.id} value={w.id}>{w.name}</option>
-                  ))}
-                </optgroup>
+              <option value="">{channelCode ? "-- 请选钱包 --" : "先选渠道"}</option>
+              {walletsInChannel.map((w) => (
+                <option key={w.id} value={w.id}>{w.name}</option>
               ))}
             </select>
           </div>

@@ -471,13 +471,21 @@ export function OperatorWorkbench({ operator }: { operator: StoredOperator }) {
 
 // CEO 2026-05-14: 草稿模式 + 3 秒去抖自动保存
 // CEO 2026-05-20 #134: 砍掉 walletMethodId/walletItemId, 用 walletPoolId 直选真实钱包
+// CEO 2026-05-20 二次改动: 先选渠道(淘宝/台湾) → 锁币种 → 再选具体钱包
 type RowDraft = {
   productName?: string | null;
   salePrice?: string | null;
   saleCurrency?: SaleCurrency | null;
+  channelCode?: string | null;        // TAOBAO / TAIWAN — 草稿里临时存,真正存储是 walletPoolId
   walletPoolId?: number | null;
-  walletPoolName?: string | null;  // 冗余存名字, 提交时给后端 wallet_item_label
+  walletPoolName?: string | null;
   remark?: string | null;
+};
+
+// 渠道码 → 锁定币种(CEO 2026-05-20)
+const CHANNEL_TO_CURRENCY: Record<string, SaleCurrency> = {
+  TAOBAO: "CNY",
+  TAIWAN: "TWD"
 };
 
 const AUTOSAVE_COUNTDOWN_SECONDS = 3;
@@ -735,19 +743,39 @@ function HistoryOrdersTable({
       <TableBody>
         {pagedOrders.map((order) => {
           const merged = merge(order);
-          // CEO 2026-05-20 #134: 真实钱包扁平列表 + 按当前 saleCurrency 过滤(若已选币种)
-          const lockedCurrency = (merged.saleCurrency as SaleCurrency | null | undefined) ?? null;
-          const walletOptions = walletGroups.flatMap((g) =>
-            g.wallets
-              .filter((w) => !lockedCurrency || w.currency === lockedCurrency)
-              .map((w) => ({
-                value: w.id,
-                label: `${w.name} (${g.groupLabel})`,
-                name: w.name,
-                currency: w.currency as SaleCurrency
-              }))
-          );
-          const selectedWallet = walletOptions.find((w) => w.value === merged.walletPoolId);
+          // CEO 2026-05-20 二次改: 先选渠道 → 锁币种 → 再选钱包
+          // 行的渠道码推导: draft.channelCode 优先;否则查 walletPoolId 所在 group
+          const draftRow = drafts.get(order.id);
+          const channelFromDraft = draftRow?.channelCode;
+          const channelFromWallet = (() => {
+            const pid = merged.walletPoolId;
+            if (pid == null) return null;
+            for (const g of walletGroups) {
+              if (g.wallets.some((w) => w.id === pid)) return g.groupCode;
+            }
+            return null;
+          })();
+          const channelCode = channelFromDraft !== undefined
+            ? channelFromDraft
+            : channelFromWallet;
+          const channelGroup = channelCode
+            ? walletGroups.find((g) => g.groupCode === channelCode)
+            : null;
+          // 渠道选项:固定的 2 个(淘宝/台湾),从后端 groups 里抽
+          const channelOptions = walletGroups.map((g) => ({
+            value: g.groupCode,
+            label: `${g.groupLabel} (${CHANNEL_TO_CURRENCY[g.groupCode] ?? g.wallets[0]?.currency})`
+          }));
+          // 钱包选项: 选中渠道下的钱包
+          const walletOptions = (channelGroup?.wallets ?? []).map((w) => ({
+            value: w.id,
+            label: w.name,
+            name: w.name,
+            currency: w.currency as SaleCurrency
+          }));
+          const lockedCurrency: SaleCurrency | null = channelCode
+            ? CHANNEL_TO_CURRENCY[channelCode] ?? null
+            : null;
           // CEO 2026-05-14: 区分 "DB 实际存了"(savedComplete) 和 "客户端看到的合并状态"(mergedComplete)
           // 行颜色只看 savedComplete (是否真存到 DB), 防止"绿色但其实是草稿"误导客服。
           const savedComplete = _isRowComplete(order);
@@ -814,22 +842,41 @@ function HistoryOrdersTable({
                 )}
               </TableCell>
 
-              {/* 收款钱包 - CEO 2026-05-20 #134: 砍中间层, 直接选真实钱包 */}
+              {/* 收款钱包 - CEO 2026-05-20: 先选渠道 → 锁币种 → 再选具体钱包 */}
               <TableCell className="px-2 py-2">
-                <EditableSelectCell<number>
-                  value={merged.walletPoolId}
-                  options={walletOptions}
-                  onSave={(v) => {
-                    const w = v != null ? walletOptions.find((wo) => wo.value === v) : null;
-                    onFieldChange(order.id, {
-                      walletPoolId: v ?? null,
-                      walletPoolName: w?.name ?? null,
-                      // 同时锁币种(防客服误填)
-                      saleCurrency: (w?.currency as SaleCurrency | null) ?? merged.saleCurrency as SaleCurrency | null
-                    });
-                    return Promise.resolve();
-                  }}
-                />
+                <div className="space-y-1">
+                  <EditableSelectCell<string>
+                    value={channelCode ?? null}
+                    options={channelOptions}
+                    placeholder="选渠道"
+                    onSave={(v) => {
+                      const newCode = v ?? null;
+                      onFieldChange(order.id, {
+                        channelCode: newCode,
+                        // 换渠道清空具体钱包
+                        walletPoolId: null,
+                        walletPoolName: null,
+                        // 锁定币种
+                        saleCurrency: newCode ? CHANNEL_TO_CURRENCY[newCode] ?? null : null
+                      });
+                      return Promise.resolve();
+                    }}
+                  />
+                  <EditableSelectCell<number>
+                    value={merged.walletPoolId}
+                    options={walletOptions}
+                    placeholder={channelCode ? "选钱包" : "先选渠道"}
+                    disabled={!channelCode}
+                    onSave={(v) => {
+                      const w = v != null ? walletOptions.find((wo) => wo.value === v) : null;
+                      onFieldChange(order.id, {
+                        walletPoolId: v ?? null,
+                        walletPoolName: w?.name ?? null
+                      });
+                      return Promise.resolve();
+                    }}
+                  />
+                </div>
               </TableCell>
 
               {/* 收款金额 + 锁定币种(币种紧贴金额后缀) */}
