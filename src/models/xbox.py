@@ -175,6 +175,10 @@ class XboxOrder(Base):
     wallet_item_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("xbox_wallet_items.id"), nullable=True
     )
+    # CEO 2026-05-20 #134: 客服直选真实钱包(草稿阶段也持久化, 转销售时一起带走)
+    wallet_pool_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("wallets.id"), nullable=True
+    )
     # CEO 2026-05-12: 客服补销售时可自由填写的备注
     remark: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # 关联（方案 3 双向）

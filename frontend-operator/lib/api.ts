@@ -13,6 +13,7 @@ import type {
   OperatorClaim,
   OperatorOrder,
   SaleCurrency,
+  SalesWalletGroup,
   SyncOrdersResult,
   WalletMethod,
   XboxAccountDetail
@@ -182,8 +183,10 @@ export function completeOrder(
     productName?: string;
     salePrice?: string;
     saleCurrency?: SaleCurrency;
-    walletMethodId?: number;
-    walletItemId?: number;
+    walletMethodId?: number;       // CEO 2026-05-20 #134: 已废弃, 保留兼容
+    walletItemId?: number;          // CEO 2026-05-20 #134: 已废弃, 保留兼容
+    walletPoolId?: number;          // CEO 2026-05-20 #134: 直接挂真实钱包
+    walletItemLabel?: string;       // 冗余存钱包名便于展示
     remark?: string;
   }
 ): Promise<OperatorOrder> {
@@ -196,9 +199,15 @@ export function completeOrder(
   );
 }
 
-// 钱包设置(收款方式 / 备注模板) — 复用 CEO 后台的端点
+// 钱包设置(收款方式 / 备注模板) — CEO 2026-05-20 #134 后端已废弃返回 []
 export function getWalletMethods(): Promise<WalletMethod[]> {
   return request<WalletMethod[]>("/api/xbox/wallet-settings?onlyActive=true");
+}
+
+// CEO 2026-05-20 #134: 客服销售记录可选钱包列表
+// (7 个台湾真实子钱包 + 3 个淘宝供应商分组钱包)
+export function getSalesWalletOptions(): Promise<SalesWalletGroup[]> {
+  return request<SalesWalletGroup[]>("/api/xbox/wallet-pool-options");
 }
 
 export { ApiError };

@@ -145,13 +145,9 @@ def update_order_completion(
         order.wallet_method_id = wallet_method_id
     if wallet_item_id is not None:
         order.wallet_item_id = wallet_item_id
-    # CEO 2026-05-20 #134: 新订单字段
+    # CEO 2026-05-20 #134: 新订单字段 — 持久化到 xbox_orders.wallet_pool_id
     if wallet_pool_id is not None:
-        # 在 XboxOrder 模型里没有 wallet_pool_id 字段, 我们把它放在临时变量,
-        # 用于触发转销售时传给 sale record
-        order._pending_wallet_pool_id = wallet_pool_id  # type: ignore[attr-defined]
-    if wallet_item_label is not None:
-        order._pending_wallet_item_label = wallet_item_label  # type: ignore[attr-defined]
+        order.wallet_pool_id = wallet_pool_id
 
     order.last_updated_at = china_now()
     session.flush()
@@ -161,12 +157,10 @@ def update_order_completion(
     # 检查是否所有补齐字段都到位 → 自动转销售
     if auto_convert and _all_completion_fields_set(order):
         # CEO 2026-05-20 #134: 新订单走 wallet_pool_id 直挂真实钱包流程
-        pending_pool_id = getattr(order, "_pending_wallet_pool_id", None)
-        pending_label = getattr(order, "_pending_wallet_item_label", None)
-        if pending_pool_id is not None:
-            wallet = session.get(Wallet, pending_pool_id)
+        if order.wallet_pool_id is not None:
+            wallet = session.get(Wallet, order.wallet_pool_id)
             if wallet is None or wallet.deleted_at is not None:
-                raise ValueError(f"钱包 {pending_pool_id} 不存在或已废弃")
+                raise ValueError(f"钱包 {order.wallet_pool_id} 不存在或已废弃")
             account = session.get(XboxAccount, order.account_id)
             record = create_or_merge_sale_record(
                 session,
@@ -178,8 +172,8 @@ def update_order_completion(
                 sale_currency=order.sale_currency,
                 wallet_method_id=None,
                 wallet_item_id=None,
-                wallet_item_label=pending_label or wallet.name,
-                wallet_pool_id=pending_pool_id,
+                wallet_item_label=wallet_item_label or wallet.name,
+                wallet_pool_id=order.wallet_pool_id,
                 order=order,
             )
             sale_record_id = record.id
@@ -222,7 +216,7 @@ def update_order_completion(
 
 def _all_completion_fields_set(order: XboxOrder) -> bool:
     has_wallet = (
-        getattr(order, "_pending_wallet_pool_id", None) is not None
+        order.wallet_pool_id is not None
         or (order.wallet_method_id is not None and order.wallet_item_id is not None)
     )
     return (

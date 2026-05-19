@@ -646,9 +646,10 @@ class OperatorOrderOut(BaseModel):
     sale_price: Optional[str]
     sale_currency: Optional[str]
     wallet_method_id: Optional[int]
-    wallet_method_label: Optional[str]  # 收款方式 label(展示用)
+    wallet_method_label: Optional[str]  # 老收款方式 label
     wallet_item_id: Optional[int]
-    wallet_item_label: Optional[str]  # 备注模板 label(展示用)
+    wallet_item_label: Optional[str]  # 老备注模板 label / 新订单冗余存钱包名
+    wallet_pool_id: Optional[int]  # CEO 2026-05-20 #134: 真实钱包 id(新订单)
     remark: Optional[str]  # CEO 2026-05-12: 客服自由填写的备注
 
 
@@ -687,6 +688,7 @@ def _serialize_op_order(
             if order.wallet_item_id is not None
             else None
         ),
+        wallet_pool_id=order.wallet_pool_id,
         remark=order.remark,
     )
 
@@ -744,11 +746,10 @@ def operator_list_orders_endpoint(
 
 class OperatorOrderCompletion(BaseModel):
     """客服补销售信息。销售日期 + 经办人系统自动填,
-    客服填: 商品 / 售价 / 币种 / 收款方式 / 备注模板 / 备注(可自由填写)。
+    客服填: 商品 / 售价 / 币种 / 收款钱包 / 备注。
 
-    CEO 2026-05-12 (inline 编辑): 所有字段全部 Optional,客服改哪个传哪个;
-    后端只更新传过来的字段。全部到位时自动转销售记录(底层 update_order_completion
-    自带 auto_convert 逻辑)。
+    CEO 2026-05-20 #134: 砍掉收款方式+备注模板中间层, 客服直传 walletPoolId(真实钱包 id)。
+    老 wallet_method_id/wallet_item_id 保留兼容历史。
     """
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
@@ -759,6 +760,8 @@ class OperatorOrderCompletion(BaseModel):
     sale_currency: Optional[str] = None
     wallet_method_id: Optional[int] = None
     wallet_item_id: Optional[int] = None
+    wallet_pool_id: Optional[int] = None  # CEO 2026-05-20 #134: 新订单走这个
+    wallet_item_label: Optional[str] = None
     remark: Optional[str] = None
 
 
@@ -796,6 +799,8 @@ def operator_complete_order_endpoint(
             sale_currency=request.sale_currency,
             wallet_method_id=request.wallet_method_id,
             wallet_item_id=request.wallet_item_id,
+            wallet_pool_id=request.wallet_pool_id,
+            wallet_item_label=request.wallet_item_label,
         )
         # 备注独立字段, 不走 update_order_completion (它不管 remark)
         # CEO 2026-05-14: 空字符串视为"未传", 不清空数据库已有备注。

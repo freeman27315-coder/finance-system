@@ -96,16 +96,16 @@ export type OperatorOrder = {
   operatorName: string | null;      // 经办人
   salePrice: string | null;         // 收款金额
   saleCurrency: string | null;
-  walletMethodId: number | null;
-  walletMethodLabel: string | null; // 收款方式 label
-  walletItemId: number | null;
-  walletItemLabel: string | null;   // 备注模板 label
-  remark: string | null;            // CEO 2026-05-12: 可自由填写
+  walletMethodId: number | null;     // CEO 2026-05-20 #134: 已废弃, 老订单还有值
+  walletMethodLabel: string | null;  // 老收款方式 label
+  walletItemId: number | null;       // CEO 2026-05-20 #134: 已废弃
+  walletItemLabel: string | null;    // 老备注模板 label / 新订单冗余存钱包名
+  walletPoolId: number | null;       // CEO 2026-05-20 #134: 真实钱包 id(直挂)
+  remark: string | null;             // CEO 2026-05-12: 可自由填写
 };
 
 // 钱包设置 (复用 /xbox/wallet-settings)
-// CEO 2026-05-14: 后端推 method.currency 出来(该方式下所有 item 同币种),
-// 前端选完方式自动锁币种,客服只填金额。
+// CEO 2026-05-20 #134: 已废弃, 留类型兼容老组件(后端永远返回空数组)。
 export type WalletMethod = {
   id: number;
   code: string;
@@ -119,6 +119,20 @@ export type WalletMethod = {
     walletPoolId: number;
     isActive: boolean;
   }[];
+};
+
+// CEO 2026-05-20 #134: 客服销售记录可选钱包(真实钱包, 来自 /xbox/wallet-pool-options)
+export type SalesWallet = {
+  id: number;
+  name: string;
+  currency: SaleCurrency;
+  fullPath: string;
+};
+
+export type SalesWalletGroup = {
+  groupCode: string;   // "TAIWAN" / "TAOBAO"
+  groupLabel: string;  // "台湾" / "淘宝"
+  wallets: SalesWallet[];
 };
 
 export type SaleCurrency = "CNY" | "USD" | "USDT" | "TWD";

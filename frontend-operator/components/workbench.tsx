@@ -47,6 +47,7 @@ import {
   getMyClaimedAccounts,
   getMyClaims,
   getWalletMethods,
+  getSalesWalletOptions,
   refreshAccountBalance,
   returnClaim,
   syncOrders
@@ -469,33 +470,27 @@ export function OperatorWorkbench({ operator }: { operator: StoredOperator }) {
 // ===================================================================
 
 // CEO 2026-05-14: 草稿模式 + 3 秒去抖自动保存
-// - 客服改任一字段进入"草稿"(不立刻发请求)
-// - 改完 3 秒不动 + 必填齐 → 自动 POST → 行变绿
-// - 改完 3 秒不动 + 必填没齐 → 不保存, 行保持红, 草稿仍在内存
-// - 关 Electron / 切账号 → 内存草稿全丢(已保存的 DB 数据保留)
+// CEO 2026-05-20 #134: 砍掉 walletMethodId/walletItemId, 用 walletPoolId 直选真实钱包
 type RowDraft = {
   productName?: string | null;
   salePrice?: string | null;
   saleCurrency?: SaleCurrency | null;
-  walletMethodId?: number | null;
-  walletItemId?: number | null;
+  walletPoolId?: number | null;
+  walletPoolName?: string | null;  // 冗余存名字, 提交时给后端 wallet_item_label
   remark?: string | null;
 };
 
 const AUTOSAVE_COUNTDOWN_SECONDS = 3;
 
-// CEO 2026-05-14: 必填 4 项 — 收款方式 / 备注模板 / 收款金额(>0) / 备注
-// 商品名是抓取自动填的,经办人 / 币种 系统自动,均不算客服必填。
+// 必填 3 项 — 收款钱包 / 收款金额(>0) / 备注
 function _isRowComplete(o: {
-  walletMethodId: number | null;
-  walletItemId: number | null;
+  walletPoolId: number | null;
   salePrice: string | null;
   remark: string | null;
 }): boolean {
   const priceNum = o.salePrice ? Number(o.salePrice) : 0;
   return (
-    o.walletMethodId != null &&
-    o.walletItemId != null &&
+    o.walletPoolId != null &&
     Number.isFinite(priceNum) &&
     priceNum > 0 &&
     !!o.remark &&
@@ -504,14 +499,12 @@ function _isRowComplete(o: {
 }
 
 function _missingFields(o: {
-  walletMethodId: number | null;
-  walletItemId: number | null;
+  walletPoolId: number | null;
   salePrice: string | null;
   remark: string | null;
 }): string[] {
   const m: string[] = [];
-  if (o.walletMethodId == null) m.push("收款方式");
-  if (o.walletItemId == null) m.push("备注模板");
+  if (o.walletPoolId == null) m.push("收款钱包");
   const priceNum = o.salePrice ? Number(o.salePrice) : 0;
   if (!(Number.isFinite(priceNum) && priceNum > 0)) m.push("收款金额");
   if (!o.remark || o.remark.trim().length === 0) m.push("备注");
@@ -533,12 +526,14 @@ function HistoryOrdersTable({
   queryClient: ReturnType<typeof useQueryClient>;
   pageSize: number;
 }) {
-  // 加载钱包方式/模板用于 inline select
-  const methodsQuery = useQuery({
-    queryKey: ["wallet-methods"],
-    queryFn: getWalletMethods
+  // CEO 2026-05-20 #134: 改用真实钱包列表(7 台湾 + 3 淘宝)
+  const walletsQuery = useQuery({
+    queryKey: ["sales-wallet-options"],
+    queryFn: getSalesWalletOptions
   });
-  const methods: WalletMethod[] = methodsQuery.data ?? [];
+  const walletGroups = walletsQuery.data ?? [];
+  // 扁平化为单选下拉 options(暂保留 methods 不删, 防其他地方 import 报错)
+  const methods: WalletMethod[] = [];
 
   // CEO 2026-05-15: 历史订单前端分页
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -594,10 +589,10 @@ function HistoryOrdersTable({
       productName: d.productName !== undefined ? d.productName : o.productName,
       salePrice: d.salePrice !== undefined ? d.salePrice : o.salePrice,
       saleCurrency: d.saleCurrency !== undefined ? d.saleCurrency : o.saleCurrency,
-      walletMethodId:
-        d.walletMethodId !== undefined ? d.walletMethodId : o.walletMethodId,
-      walletItemId:
-        d.walletItemId !== undefined ? d.walletItemId : o.walletItemId,
+      walletPoolId:
+        d.walletPoolId !== undefined ? d.walletPoolId : o.walletPoolId,
+      walletItemLabel:
+        d.walletPoolName !== undefined ? d.walletPoolName : o.walletItemLabel,
       remark: d.remark !== undefined ? d.remark : o.remark
     };
   };
@@ -630,14 +625,10 @@ function HistoryOrdersTable({
         draft.saleCurrency !== undefined
           ? (draft.saleCurrency as string | null)
           : original.saleCurrency,
-      walletMethodId:
-        draft.walletMethodId !== undefined
-          ? draft.walletMethodId
-          : original.walletMethodId,
-      walletItemId:
-        draft.walletItemId !== undefined
-          ? draft.walletItemId
-          : original.walletItemId,
+      walletPoolId:
+        draft.walletPoolId !== undefined ? draft.walletPoolId : original.walletPoolId,
+      walletItemLabel:
+        draft.walletPoolName !== undefined ? draft.walletPoolName : original.walletItemLabel,
       remark: draft.remark !== undefined ? draft.remark : original.remark
     };
     if (!_isRowComplete(merged)) return; // 必填没齐, 不存
@@ -649,8 +640,8 @@ function HistoryOrdersTable({
         productName: _trimOrUndef(merged.productName),
         salePrice: _trimOrUndef(merged.salePrice),
         saleCurrency: (merged.saleCurrency as SaleCurrency | null) ?? undefined,
-        walletMethodId: merged.walletMethodId ?? undefined,
-        walletItemId: merged.walletItemId ?? undefined,
+        walletPoolId: merged.walletPoolId ?? undefined,
+        walletItemLabel: _trimOrUndef(merged.walletItemLabel),
         remark: _trimOrUndef(merged.remark)
       });
       // 清掉这一行的 draft
@@ -735,8 +726,7 @@ function HistoryOrdersTable({
           <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">同步时间</TableHead>
           <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">商品名称</TableHead>
           <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap">经办人</TableHead>
-          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[150px]">收款方式</TableHead>
-          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[150px]">备注模板</TableHead>
+          <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[180px]">收款钱包</TableHead>
           <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[140px]">收款金额</TableHead>
           <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap min-w-[160px]">备注</TableHead>
           <TableHead className="h-12 px-3 text-xs font-medium text-muted-foreground whitespace-nowrap w-[112px] text-center">状态</TableHead>
@@ -745,12 +735,19 @@ function HistoryOrdersTable({
       <TableBody>
         {pagedOrders.map((order) => {
           const merged = merge(order);
-          const selectedMethod = methods.find((m) => m.id === merged.walletMethodId);
-          const itemOptions = (selectedMethod?.items ?? []).filter((it) => it.isActive);
-          const lockedCurrency =
-            (merged.saleCurrency as SaleCurrency | null | undefined) ??
-            (selectedMethod?.currency as SaleCurrency | null | undefined) ??
-            null;
+          // CEO 2026-05-20 #134: 真实钱包扁平列表 + 按当前 saleCurrency 过滤(若已选币种)
+          const lockedCurrency = (merged.saleCurrency as SaleCurrency | null | undefined) ?? null;
+          const walletOptions = walletGroups.flatMap((g) =>
+            g.wallets
+              .filter((w) => !lockedCurrency || w.currency === lockedCurrency)
+              .map((w) => ({
+                value: w.id,
+                label: `${w.name} (${g.groupLabel})`,
+                name: w.name,
+                currency: w.currency as SaleCurrency
+              }))
+          );
+          const selectedWallet = walletOptions.find((w) => w.value === merged.walletPoolId);
           // CEO 2026-05-14: 区分 "DB 实际存了"(savedComplete) 和 "客户端看到的合并状态"(mergedComplete)
           // 行颜色只看 savedComplete (是否真存到 DB), 防止"绿色但其实是草稿"误导客服。
           const savedComplete = _isRowComplete(order);
@@ -817,37 +814,19 @@ function HistoryOrdersTable({
                 )}
               </TableCell>
 
-              {/* 收款方式 - 选完自动锁币种 */}
+              {/* 收款钱包 - CEO 2026-05-20 #134: 砍中间层, 直接选真实钱包 */}
               <TableCell className="px-2 py-2">
                 <EditableSelectCell<number>
-                  value={merged.walletMethodId}
-                  options={methods
-                    .filter((m) => m.isActive)
-                    .map((m) => ({ value: m.id, label: m.label }))}
+                  value={merged.walletPoolId}
+                  options={walletOptions}
                   onSave={(v) => {
-                    const m = v != null ? methods.find((mm) => mm.id === v) : null;
+                    const w = v != null ? walletOptions.find((wo) => wo.value === v) : null;
                     onFieldChange(order.id, {
-                      walletMethodId: v ?? null,
-                      walletItemId: null, // 换方式时清空旧 item
-                      saleCurrency: (m?.currency as SaleCurrency | null) ?? null
+                      walletPoolId: v ?? null,
+                      walletPoolName: w?.name ?? null,
+                      // 同时锁币种(防客服误填)
+                      saleCurrency: (w?.currency as SaleCurrency | null) ?? merged.saleCurrency as SaleCurrency | null
                     });
-                    return Promise.resolve();
-                  }}
-                />
-              </TableCell>
-
-              {/* 备注模板 */}
-              <TableCell className="px-2 py-2">
-                <EditableSelectCell<number>
-                  value={merged.walletItemId}
-                  options={itemOptions.map((it) => ({
-                    value: it.id,
-                    label: it.label
-                  }))}
-                  disabled={!selectedMethod}
-                  placeholder={selectedMethod ? "请选择" : "先选收款方式"}
-                  onSave={(v) => {
-                    onFieldChange(order.id, { walletItemId: v ?? null });
                     return Promise.resolve();
                   }}
                 />

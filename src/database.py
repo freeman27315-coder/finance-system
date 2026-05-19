@@ -53,6 +53,7 @@ def init_db() -> None:
     _ensure_xbox_account_is_available_for_claim_column()
     _ensure_xbox_account_country_identified_column()
     _ensure_xbox_order_remark_column()
+    _ensure_xbox_order_wallet_pool_id_column()
     _migrate_xbox_sale_date_to_datetime()
 
 
@@ -175,6 +176,24 @@ def _ensure_xbox_order_remark_column() -> None:
         return
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE xbox_orders ADD COLUMN remark TEXT"))
+
+
+def _ensure_xbox_order_wallet_pool_id_column() -> None:
+    """CEO 2026-05-20 #134: 给 xbox_orders 加 wallet_pool_id (客服直选真实钱包)。
+
+    新订单走这个字段, 转销售记录时把它带到 sale_record 上。
+    老订单还用 wallet_method_id + wallet_item_id, 不冲突。
+    """
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    inspector = inspect(engine)
+    if "xbox_orders" not in inspector.get_table_names():
+        return
+    column_names = {column["name"] for column in inspector.get_columns("xbox_orders")}
+    if "wallet_pool_id" in column_names:
+        return
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE xbox_orders ADD COLUMN wallet_pool_id INTEGER"))
 
 
 def _migrate_xbox_sale_date_to_datetime() -> None:

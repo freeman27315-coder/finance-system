@@ -2,16 +2,16 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { completeOrder, getWalletMethods } from "@/lib/api";
+import { completeOrder, getSalesWalletOptions } from "@/lib/api";
 import { formatDateTimeSeconds, stripTrailingZeros } from "@/lib/utils";
 import type { OperatorOrder, SaleCurrency } from "@/types";
 
-// CEO 2026-05-14: 币种由"收款方式"自动锁定,客服不再手填。
-// 类型 SaleCurrency 保留供 payload 类型标注。
+// CEO 2026-05-20 #134: 砍掉收款方式 + 备注模板中间层, 客服直选真实钱包。
+// 7 个台湾真实子钱包 + 3 个淘宝供应商分组(丙火/兔仔/小小)。
 
 export function CompleteOrderModal({
   order,
@@ -29,53 +29,44 @@ export function CompleteOrderModal({
   const [salePrice, setSalePrice] = useState(
     stripTrailingZeros(order.salePrice)
   );
-  const [walletMethodId, setWalletMethodId] = useState<number | "">(
-    order.walletMethodId ?? ""
+  // 推断初始币种: order.saleCurrency(老数据) > 账号国家币种 fallback > CNY
+  const [saleCurrency, setSaleCurrency] = useState<SaleCurrency>(
+    (order.saleCurrency as SaleCurrency | null) ?? "CNY"
   );
-  const [walletItemId, setWalletItemId] = useState<number | "">(
-    order.walletItemId ?? ""
-  );
+  const [walletPoolId, setWalletPoolId] = useState<number | "">("");
+  const [showAllCurrencies, setShowAllCurrencies] = useState(false);
   const [remark, setRemark] = useState(order.remark ?? "");
   const [error, setError] = useState<string | null>(null);
 
-  const methodsQuery = useQuery({
-    queryKey: ["wallet-methods"],
-    queryFn: getWalletMethods
+  const walletsQuery = useQuery({
+    queryKey: ["sales-wallet-options"],
+    queryFn: getSalesWalletOptions
   });
 
-  const methods = methodsQuery.data ?? [];
-  const selectedMethod = methods.find((m) => m.id === walletMethodId);
-  const items = selectedMethod?.items ?? [];
+  const groups = walletsQuery.data ?? [];
 
-  // CEO 2026-05-14: 币种 = 收款方式自带的币种(后端推 method.currency)。
-  // 没选方式时 fallback 到 order 现存的 saleCurrency(老数据兼容)。
-  const saleCurrency: SaleCurrency | null =
-    (selectedMethod?.currency as SaleCurrency | null) ??
-    ((order.saleCurrency as SaleCurrency | null) ?? null);
-
-  // 切方式时清空旧的 item
-  useEffect(() => {
-    if (selectedMethod && walletItemId !== "") {
-      const stillValid = items.some((it) => it.id === walletItemId);
-      if (!stillValid) setWalletItemId("");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [walletMethodId]);
+  // 按销售币种过滤(打开"显示全部"才跨币种)
+  const filteredGroups = showAllCurrencies
+    ? groups
+    : groups
+        .map((g) => ({ ...g, wallets: g.wallets.filter((w) => w.currency === saleCurrency) }))
+        .filter((g) => g.wallets.length > 0);
+  const flatWallets = filteredGroups.flatMap((g) => g.wallets);
+  const selectedWallet = flatWallets.find((w) => w.id === walletPoolId);
 
   const mutation = useMutation({
     mutationFn: async () => {
       if (!productName.trim()) throw new Error("商品名不能为空");
       if (!salePrice.trim()) throw new Error("售价不能为空");
-      if (typeof walletMethodId !== "number") throw new Error("请选收款方式");
-      if (typeof walletItemId !== "number") throw new Error("请选备注模板");
-      if (!saleCurrency) throw new Error("收款方式未配置币种,请联系管理员");
+      if (typeof walletPoolId !== "number") throw new Error("请选收款钱包");
+      if (!selectedWallet) throw new Error("钱包未找到, 请重新选");
       return completeOrder(order.id, {
         operatorId,
         productName: productName.trim(),
         salePrice: salePrice.trim(),
         saleCurrency,
-        walletMethodId,
-        walletItemId,
+        walletPoolId,
+        walletItemLabel: selectedWallet.name,
         remark: remark.trim() || undefined
       });
     },
@@ -106,7 +97,7 @@ export function CompleteOrderModal({
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-xs font-medium text-muted-foreground">
-                销售日期（系统自动，精确到秒）
+                销售日期(系统自动)
               </label>
               <div className="flex h-10 items-center rounded-md border border-border bg-muted px-3 text-xs tabular-nums text-muted-foreground">
                 {formatDateTimeSeconds(order.saleDate ?? order.orderAt)}
@@ -114,7 +105,7 @@ export function CompleteOrderModal({
             </div>
             <div className="space-y-1">
               <label className="text-xs font-medium text-muted-foreground">
-                经办人（自动 = 登录客服）
+                经办人(自动 = 登录客服)
               </label>
               <div className="flex h-10 items-center rounded-md border border-border bg-muted px-3 text-sm text-muted-foreground">
                 {operatorDisplayName}
@@ -146,73 +137,68 @@ export function CompleteOrderModal({
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-medium text-muted-foreground">
-                币种 (自动)
+              <label className="text-xs font-medium">
+                币种 <span className="text-red-600">*</span>
               </label>
-              <div
-                className="flex h-10 items-center justify-center rounded-md border border-border bg-muted px-3 text-sm font-semibold tracking-wide"
-                title={
-                  saleCurrency
-                    ? `币种由收款方式自动锁定: ${saleCurrency}`
-                    : "选好收款方式后自动填上"
-                }
+              <select
+                className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+                value={saleCurrency}
+                onChange={(e) => {
+                  setSaleCurrency(e.target.value as SaleCurrency);
+                  setWalletPoolId("");  // 换币种清空钱包
+                }}
               >
-                {saleCurrency ?? <span className="text-xs text-muted-foreground/60">先选方式</span>}
-              </div>
+                <option value="CNY">CNY</option>
+                <option value="TWD">TWD</option>
+                <option value="USD">USD</option>
+                <option value="USDT">USDT</option>
+              </select>
             </div>
           </div>
 
           <div className="space-y-1">
-            <label className="text-xs font-medium">
-              收款方式 <span className="text-red-600">*</span>
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium">
+                收款钱包 <span className="text-red-600">*</span>
+              </label>
+              <label className="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showAllCurrencies}
+                  onChange={(e) => setShowAllCurrencies(e.target.checked)}
+                />
+                显示全部币种
+              </label>
+            </div>
             <select
               className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={walletMethodId}
+              value={walletPoolId}
               onChange={(e) =>
-                setWalletMethodId(e.target.value === "" ? "" : Number(e.target.value))
+                setWalletPoolId(e.target.value === "" ? "" : Number(e.target.value))
               }
-              disabled={methodsQuery.isLoading}
+              disabled={walletsQuery.isLoading}
             >
-              <option value="">{methodsQuery.isLoading ? "加载中…" : "请选择"}</option>
-              {methods
-                .filter((m) => m.isActive)
-                .map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
+              <option value="">{walletsQuery.isLoading ? "加载中…" : "请选择"}</option>
+              {filteredGroups.map((g) => (
+                <optgroup key={g.groupCode} label={`── ${g.groupLabel} (${g.wallets[0]?.currency ?? ""}) ──`}>
+                  {g.wallets.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
             </select>
+            {!showAllCurrencies && flatWallets.length === 0 && !walletsQuery.isLoading ? (
+              <div className="text-xs text-amber-600">
+                当前币种 ({saleCurrency}) 没有可用钱包,勾选"显示全部币种"或换币种
+              </div>
+            ) : null}
           </div>
 
           <div className="space-y-1">
             <label className="text-xs font-medium">
-              备注模板 <span className="text-red-600">*</span>
-            </label>
-            <select
-              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={walletItemId}
-              onChange={(e) =>
-                setWalletItemId(e.target.value === "" ? "" : Number(e.target.value))
-              }
-              disabled={!selectedMethod}
-            >
-              <option value="">
-                {selectedMethod ? "请选择" : "先选收款方式"}
-              </option>
-              {items
-                .filter((it) => it.isActive)
-                .map((it) => (
-                  <option key={it.id} value={it.id}>
-                    {it.label}
-                  </option>
-                ))}
-            </select>
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-medium">
-              备注（可自由填写）
+              备注(可自由填写)
             </label>
             <textarea
               className="min-h-[60px] w-full rounded-md border border-border bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary"
