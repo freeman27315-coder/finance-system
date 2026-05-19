@@ -114,16 +114,20 @@ def update_order_completion(
     sale_currency: Optional[str] = None,
     wallet_method_id: Optional[int] = None,
     wallet_item_id: Optional[int] = None,
+    wallet_pool_id: Optional[int] = None,
+    wallet_item_label: Optional[str] = None,
     auto_convert: bool = True,
 ) -> tuple[XboxOrder, Optional[int]]:
     """更新订单的补齐字段。所有必填都到位时自动转销售记录。
 
     返回 ``(order, sale_record_id_or_None)``。
 
-    CEO 2026-05-12: 销售日期(sale_date)默认 = order.order_at(微软抓订单的时间,
-    中国时区精确到秒,创建订单时已自动赋值)。客服一般无需传 sale_date;
-    传了会按 datetime 升级。
+    CEO 2026-05-20 #134: 新订单只用 wallet_pool_id 直接挂真实钱包,
+    不再走 wallet_method_id + wallet_item_id 中间层。
+    老订单字段保留(可空)。
     """
+    from src.models.wallet import Wallet  # 局部 import
+
     if sale_date is not None:
         if isinstance(sale_date, date) and not isinstance(sale_date, datetime):
             order.sale_date = datetime.combine(sale_date, datetime.min.time())
@@ -141,6 +145,14 @@ def update_order_completion(
         order.wallet_method_id = wallet_method_id
     if wallet_item_id is not None:
         order.wallet_item_id = wallet_item_id
+    # CEO 2026-05-20 #134: 新订单字段
+    if wallet_pool_id is not None:
+        # 在 XboxOrder 模型里没有 wallet_pool_id 字段, 我们把它放在临时变量,
+        # 用于触发转销售时传给 sale record
+        order._pending_wallet_pool_id = wallet_pool_id  # type: ignore[attr-defined]
+    if wallet_item_label is not None:
+        order._pending_wallet_item_label = wallet_item_label  # type: ignore[attr-defined]
+
     order.last_updated_at = china_now()
     session.flush()
 
@@ -148,50 +160,78 @@ def update_order_completion(
 
     # 检查是否所有补齐字段都到位 → 自动转销售
     if auto_convert and _all_completion_fields_set(order):
-        item = session.get(XboxWalletItem, order.wallet_item_id)
-        if item is None:
-            raise ValueError(f"备注模板 {order.wallet_item_id} 不存在")
-        if not item.is_active:
-            raise ValueError(f"备注模板 {item.label} 已停用")
-        method = session.get(XboxWalletMethod, order.wallet_method_id)
-        if method is None:
-            raise ValueError(f"收款方式 {order.wallet_method_id} 不存在")
-
-        account = session.get(XboxAccount, order.account_id)
-        record = create_or_merge_sale_record(
-            session,
-            account=account,
-            sale_date=order.sale_date,
-            product_name=order.product_name,
-            operator_name=order.operator_name,
-            sale_price=order.sale_price,
-            sale_currency=order.sale_currency,
-            wallet_method_id=order.wallet_method_id,
-            wallet_item_id=order.wallet_item_id,
-            wallet_item_label=item.label,
-            wallet_pool_id=item.wallet_pool_id,
-            order=order,
-        )
-        sale_record_id = record.id
-        _log_order_change(
-            session,
-            order.id,
-            "completed",
-            f"补齐转销售 #{record.id} ({item.label},{order.sale_price} {order.sale_currency})",
-        )
+        # CEO 2026-05-20 #134: 新订单走 wallet_pool_id 直挂真实钱包流程
+        pending_pool_id = getattr(order, "_pending_wallet_pool_id", None)
+        pending_label = getattr(order, "_pending_wallet_item_label", None)
+        if pending_pool_id is not None:
+            wallet = session.get(Wallet, pending_pool_id)
+            if wallet is None or wallet.deleted_at is not None:
+                raise ValueError(f"钱包 {pending_pool_id} 不存在或已废弃")
+            account = session.get(XboxAccount, order.account_id)
+            record = create_or_merge_sale_record(
+                session,
+                account=account,
+                sale_date=order.sale_date,
+                product_name=order.product_name,
+                operator_name=order.operator_name,
+                sale_price=order.sale_price,
+                sale_currency=order.sale_currency,
+                wallet_method_id=None,
+                wallet_item_id=None,
+                wallet_item_label=pending_label or wallet.name,
+                wallet_pool_id=pending_pool_id,
+                order=order,
+            )
+            sale_record_id = record.id
+            _log_order_change(
+                session,
+                order.id,
+                "completed",
+                f"补齐转销售 #{record.id} ({wallet.name},{order.sale_price} {order.sale_currency})",
+            )
+        else:
+            # 老流程兼容: 用 method+item 路径(老订单可能走这里)
+            item = session.get(XboxWalletItem, order.wallet_item_id) if order.wallet_item_id else None
+            if item is None:
+                raise ValueError("钱包未选(请填 walletPoolId 或老的 method/item)")
+            account = session.get(XboxAccount, order.account_id)
+            record = create_or_merge_sale_record(
+                session,
+                account=account,
+                sale_date=order.sale_date,
+                product_name=order.product_name,
+                operator_name=order.operator_name,
+                sale_price=order.sale_price,
+                sale_currency=order.sale_currency,
+                wallet_method_id=order.wallet_method_id,
+                wallet_item_id=order.wallet_item_id,
+                wallet_item_label=item.label,
+                wallet_pool_id=item.wallet_pool_id,
+                order=order,
+            )
+            sale_record_id = record.id
+            _log_order_change(
+                session,
+                order.id,
+                "completed",
+                f"补齐转销售 #{record.id} ({item.label},{order.sale_price} {order.sale_currency})",
+            )
 
     return order, sale_record_id
 
 
 def _all_completion_fields_set(order: XboxOrder) -> bool:
+    has_wallet = (
+        getattr(order, "_pending_wallet_pool_id", None) is not None
+        or (order.wallet_method_id is not None and order.wallet_item_id is not None)
+    )
     return (
         order.sale_date is not None
         and bool(order.product_name)
         and bool(order.operator_name)
         and order.sale_price is not None
         and bool(order.sale_currency)
-        and order.wallet_method_id is not None
-        and order.wallet_item_id is not None
+        and has_wallet
     )
 
 

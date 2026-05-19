@@ -347,7 +347,8 @@ function ExpandedOrdersForSaleModal({
           <div className="mt-1 text-xs text-muted-foreground">
             合并 {saleRecord.orderIds.length} 个订单 · 总售价{" "}
             {formatMoney(saleRecord.salePrice, saleRecord.saleCurrency as Currency)} ·
-            资金池 {saleRecord.walletItemLabel}
+            钱包 {saleRecord.walletName || saleRecord.walletItemLabel || "-"}
+            {saleRecord.walletDeleted ? " (已废弃)" : ""}
           </div>
         </CardHeader>
         <CardContent className="flex-1 overflow-y-auto">
@@ -1724,7 +1725,7 @@ function CreateOrderModal({
 function CompleteOrderModal({
   order,
   accounts,
-  walletMethods,
+  walletMethods: _walletMethods, // CEO 2026-05-20 #134: 不再用,保留 prop 兼容
   onClose
 }: {
   order: XboxOrder;
@@ -1745,23 +1746,40 @@ function CompleteOrderModal({
   const [saleCurrency, setSaleCurrency] = useState<XboxSaleCurrency>(
     order.saleCurrency ?? "CNY"
   );
-  const [walletMethodId, setWalletMethodId] = useState(order.walletMethodId ?? "");
-  const [walletItemId, setWalletItemId] = useState(order.walletItemId ?? "");
+  // CEO 2026-05-20 #134: 直接选真实钱包(walletPoolId), 不再走 method+item 两层
+  const [walletPoolId, setWalletPoolId] = useState("");
+  const [showAllWallets, setShowAllWallets] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [autoCountdown, setAutoCountdown] = useState<number | null>(null);
 
   const account = accounts.find((a) => a.id === order.accountId);
-  const selectedMethod = walletMethods.find((m) => m.id === walletMethodId);
-  const itemOptions = selectedMethod?.items ?? [];
 
-  // 合单提示: 查同账号 + 同 walletItemId 的现有销售记录
+  // 拉钱包列表(7 个台湾子钱包 + 3 个淘宝 group 钱包)
+  const { data: poolGroups = [] } = useQuery({
+    queryKey: ["xbox-pool-options"],
+    queryFn: () => getXboxWalletPoolOptions()
+  });
+
+  // 按账号币种过滤(账号币种来自销售币种 saleCurrency, 默认 CNY)
+  // - TWD 账号 → 只显示台湾(TWD)
+  // - CNY 账号 → 只显示淘宝(CNY)
+  // 客服可以打开"显示全部"开关跨币种选(罕见)
+  const filteredGroups = showAllWallets
+    ? poolGroups
+    : poolGroups
+        .map((g) => ({ ...g, wallets: g.wallets.filter((w) => w.currency === saleCurrency) }))
+        .filter((g) => g.wallets.length > 0);
+  const flatWallets = filteredGroups.flatMap((g) => g.wallets);
+  const selectedWallet = flatWallets.find((w) => w.id === walletPoolId);
+
+  // 合单提示: 查同账号 + 同 walletPoolId 的现有销售记录
   const { data: allSaleRecords = [] } = useQuery({
     queryKey: ["xbox-sale-records-all"],
     queryFn: () => getXboxSaleRecords({ accountId: order.accountId })
   });
-  const existingSaleRecord = walletItemId
+  const existingSaleRecord = walletPoolId
     ? allSaleRecords.find(
-        (r) => r.accountId === order.accountId && r.walletItemId === walletItemId
+        (r) => r.accountId === order.accountId && r.walletPoolId === walletPoolId
       )
     : null;
 
@@ -1770,16 +1788,15 @@ function CompleteOrderModal({
       if (!productName.trim()) throw new Error("商品名不能为空");
       if (!operatorName.trim()) throw new Error("经办人不能为空");
       if (!salePrice.trim()) throw new Error("售价不能为空");
-      if (!walletMethodId) throw new Error("请选收款方式");
-      if (!walletItemId) throw new Error("请选备注模板");
-      // saleDate 不再传 — 后端创建订单时已自动 = order_at(中国时区精确到秒)
+      if (!walletPoolId) throw new Error("请选收款钱包");
+      if (!selectedWallet) throw new Error("钱包未找到");
       return patchXboxOrder(order.id, {
         productName: productName.trim(),
         operatorName: operatorName.trim(),
         salePrice: salePrice.trim(),
         saleCurrency,
-        walletMethodId,
-        walletItemId
+        walletPoolId,
+        walletItemLabel: selectedWallet.name
       });
     },
     onSuccess: async () => {
@@ -1792,14 +1809,11 @@ function CompleteOrderModal({
     onError: (err) => setError(err instanceof Error ? err.message : "保存失败")
   });
 
-  // CEO 2026-05-08 Q4:A - 3 秒自动保存(双保险,手动按钮也保留)
-  // 仅当所有必填字段都填齐 + 还没在保存中 + 没出错才触发
   const allFieldsReady =
     productName.trim() !== "" &&
     operatorName.trim() !== "" &&
     salePrice.trim() !== "" &&
-    !!walletMethodId &&
-    !!walletItemId;
+    !!walletPoolId;
 
   useEffect(() => {
     if (!allFieldsReady || mutation.isPending) {
@@ -1823,7 +1837,7 @@ function CompleteOrderModal({
       setAutoCountdown(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [productName, operatorName, salePrice, saleCurrency, walletMethodId, walletItemId, allFieldsReady]);
+  }, [productName, operatorName, salePrice, saleCurrency, walletPoolId, allFieldsReady]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -1886,45 +1900,42 @@ function CompleteOrderModal({
             </div>
           </div>
           <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">收款方式 *</div>
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-muted-foreground">收款钱包 *</div>
+              <label className="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showAllWallets}
+                  onChange={(e) => setShowAllWallets(e.target.checked)}
+                />
+                显示全部币种
+              </label>
+            </div>
             <select
               className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={walletMethodId}
-              onChange={(event) => {
-                setWalletMethodId(event.target.value);
-                setWalletItemId("");
-              }}
+              value={walletPoolId}
+              onChange={(event) => setWalletPoolId(event.target.value)}
             >
               <option value="">-- 请选 --</option>
-              {walletMethods.filter((m) => m.isActive).map((m) => (
-                <option key={m.id} value={m.id}>{m.label}</option>
+              {filteredGroups.map((g) => (
+                <optgroup key={g.groupCode} label={`── ${g.groupLabel} (${g.wallets[0]?.currency ?? ""}) ──`}>
+                  {g.wallets.map((w) => (
+                    <option key={w.id} value={w.id}>{w.name}</option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </div>
-          <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">备注模板 *</div>
-            <select
-              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={walletItemId}
-              onChange={(event) => setWalletItemId(event.target.value)}
-              disabled={!selectedMethod}
-            >
-              <option value="">-- 请选 --</option>
-              {itemOptions.filter((it) => it.isActive).map((it) => (
-                <option key={it.id} value={it.id}>{it.label}</option>
-              ))}
-            </select>
-          </div>
-          {/* 合单提示（CEO 2026-05-08 业务流程优化 2B）*/}
-          {existingSaleRecord && walletItemId ? (
+          {/* 合单提示（同账号 + 同钱包 自动合并）*/}
+          {existingSaleRecord && walletPoolId ? (
             <div className="rounded-md bg-amber-50 border border-amber-200 p-2 text-xs text-amber-800">
-              ℹ️ 该账号 + 备注模板 已有销售记录 #{existingSaleRecord.id}（当前 {existingSaleRecord.saleCurrency}{" "}
+              ℹ️ 该账号 + 收款钱包 已有销售记录 #{existingSaleRecord.id}（当前 {existingSaleRecord.saleCurrency}{" "}
               {(existingSaleRecord.salePrice / 100).toFixed(2)}）。本订单的 {salePrice || 0} {saleCurrency}{" "}
               将累加合并到该记录。
             </div>
-          ) : walletItemId ? (
+          ) : walletPoolId ? (
             <div className="rounded-md bg-emerald-50 border border-emerald-200 p-2 text-xs text-emerald-700">
-              ✓ 该账号 + 备注模板 尚无销售记录,将新建一条销售记录。
+              ✓ 该账号 + 收款钱包 尚无销售记录,将新建一条销售记录。
             </div>
           ) : null}
 
@@ -2162,8 +2173,9 @@ function EditSaleRecordModal({
   const queryClient = useQueryClient();
   const [salePrice, setSalePrice] = useState("");  // 留空表示不改
   const [saleCurrency, setSaleCurrency] = useState<XboxSaleCurrency>(record.saleCurrency);
-  const [walletMethodId, setWalletMethodId] = useState(record.walletMethodId);
-  const [walletItemId, setWalletItemId] = useState(record.walletItemId);
+  // CEO 2026-05-20 #134: 改为直接选真实钱包
+  const [walletMethodId, setWalletMethodId] = useState(record.walletMethodId ?? "");
+  const [walletItemId, setWalletItemId] = useState(record.walletItemId ?? "");
   const [productName, setProductName] = useState(record.productName);
   const [operatorName, setOperatorName] = useState(record.operatorName);
   const [error, setError] = useState<string | null>(null);
@@ -2180,10 +2192,10 @@ function EditSaleRecordModal({
       };
       if (salePrice.trim() !== "") payload.salePrice = salePrice.trim();
       if (saleCurrency !== record.saleCurrency) payload.saleCurrency = saleCurrency;
-      if (walletMethodId !== record.walletMethodId) {
+      if (walletMethodId !== (record.walletMethodId ?? "")) {
         payload.walletMethodId = walletMethodId;
       }
-      if (walletItemId !== record.walletItemId && selectedItem) {
+      if (walletItemId !== (record.walletItemId ?? "") && selectedItem) {
         payload.walletItemId = walletItemId;
         payload.walletItemLabel = selectedItem.label;
         payload.walletPoolId = selectedItem.walletPoolId;
@@ -2250,14 +2262,15 @@ function EditSaleRecordModal({
             </div>
           </div>
           <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">收款方式</div>
+            <div className="text-sm text-muted-foreground">收款方式 (已废弃 #134)</div>
             <select
               className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={walletMethodId}
+              value={walletMethodId || ""}
               onChange={(event) => {
                 setWalletMethodId(event.target.value);
                 setWalletItemId("");
               }}
+              disabled
             >
               {walletMethods.filter((m) => m.isActive).map((m) => (
                 <option key={m.id} value={m.id}>{m.label}</option>
@@ -2265,11 +2278,12 @@ function EditSaleRecordModal({
             </select>
           </div>
           <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">备注模板（改后钱会从旧池移到新池）</div>
+            <div className="text-sm text-muted-foreground">备注模板 (已废弃 #134)</div>
             <select
               className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={walletItemId}
+              value={walletItemId || ""}
               onChange={(event) => setWalletItemId(event.target.value)}
+              disabled
             >
               {itemOptions.filter((it) => it.isActive).map((it) => (
                 <option key={it.id} value={it.id}>{it.label}</option>
@@ -2419,7 +2433,12 @@ function SaleRecordsTab({ highlightId }: { highlightId?: string | null }) {
                     <TableCell className="text-right tabular-nums font-semibold text-emerald-600">
                       {formatMoney(record.salePrice, record.saleCurrency as Currency)}
                     </TableCell>
-                    <TableCell className="text-xs">{record.walletItemLabel}</TableCell>
+                    <TableCell className="text-xs">
+                      {record.walletName || record.walletItemLabel || "-"}
+                      {record.walletDeleted ? (
+                        <span className="ml-1 text-red-500">(已废弃)</span>
+                      ) : null}
+                    </TableCell>
                     <TableCell className="text-right text-xs text-muted-foreground tabular-nums">
                       <button
                         type="button"
@@ -2906,50 +2925,66 @@ function WalletSettingsTab() {
 }
 
 
-type XboxTab = "accounts" | "orders" | "sale-records" | "wallet-settings" | "reconcile";
+type XboxTab = "accounts" | "orders" | "sale-records" | "reconcile";
 
 const TAB_META: { id: XboxTab; label: string; icon: React.ReactNode }[] = [
   { id: "accounts", label: "账号管理", icon: <Users className="h-4 w-4" /> },
   { id: "orders", label: "订单", icon: <Receipt className="h-4 w-4" /> },
   { id: "sale-records", label: "销售记录", icon: <Layers className="h-4 w-4" /> },
-  { id: "wallet-settings", label: "钱包设置", icon: <Settings2 className="h-4 w-4" /> },
+  // CEO 2026-05-20 #134: 钱包设置 tab 删除(备注模板 + 收款方式不再用)
   { id: "reconcile", label: "对账", icon: <GitCompare className="h-4 w-4" /> }
 ];
 
 
 // ===================================================================
-// 对账 Tab（CEO 2026-05-08 Q1A+Q2A+Q3A+Q4A）
+// 对账 Tab (CEO 2026-05-20 #134 路径 2 重写)
+// 砍掉理论钱包 / 备注模板 / 对账映射, 按真实钱包直接撞账。
 // ===================================================================
 
 function ReconcileTab() {
-  const queryClient = useQueryClient();
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [showAddMapping, setShowAddMapping] = useState<{ theoreticalWalletId: string } | null>(null);
 
-  const { data: poolGroupsXbox = [] } = useQuery({
-    queryKey: ["xbox-pool-options-only"],
-    queryFn: () => getXboxWalletPoolOptions({ xboxOnly: true })
-  });
-  const { data: poolGroupsAll = [] } = useQuery({
-    queryKey: ["xbox-pool-options-all-with-groups"],
-    // 含 group 钱包(店铺总钱包),让 CEO 能选总钱包当映射目标
-    queryFn: () => getXboxWalletPoolOptions({ xboxOnly: false, includeGroups: true })
-  });
-  const { data: mappings = [], refetch: refetchMappings } = useQuery({
-    queryKey: ["xbox-reconcile-mappings"],
-    queryFn: getXboxReconcileMappings
-  });
   const { data: report = [], isFetching, refetch: refetchReport } = useQuery({
     queryKey: ["xbox-reconcile-report", date],
     queryFn: () => getXboxReconcileReport(date)
   });
 
-  // 理论值钱包列表（XBOX_SALES_LEDGER 大类的叶子）
-  const theoreticalWallets = poolGroupsXbox.flatMap((g) => g.wallets);
-  // 实际值钱包列表（除 XBOX_SALES_LEDGER 大类之外）
-  const actualGroups = poolGroupsAll.filter((g) => g.groupCode !== "XBOX_SALES_LEDGER");
+  // 分两组: 未废弃的钱包 + 已废弃的钱包(老订单挂的)
+  const activeRows = report.filter((r: any) => !r.wallet?.deleted);
+  const deletedRows = report.filter((r: any) => r.wallet?.deleted);
 
-  const idx = buildPoolWalletIndex(poolGroupsAll);
+  const renderRow = (row: any) => {
+    const diff = Number(row.diff);
+    const diffColor =
+      diff === 0 ? "text-muted-foreground" : diff > 0 ? "text-blue-600" : "text-red-600";
+    const isDeleted = row.wallet?.deleted;
+    return (
+      <TableRow key={row.wallet.id} className={isDeleted ? "opacity-60" : ""}>
+        <TableCell className="font-medium">
+          {row.wallet.name}
+          {row.wallet.isGroup ? <span className="ml-1 text-xs text-muted-foreground">(组)</span> : null}
+          {isDeleted ? <span className="ml-1 text-xs text-red-500">(已废弃)</span> : null}
+        </TableCell>
+        <TableCell className="text-xs text-muted-foreground">{row.wallet.currency}</TableCell>
+        <TableCell className="text-right tabular-nums">
+          {Number(row.receivableTotal).toLocaleString("zh-CN", {
+            minimumFractionDigits: 2, maximumFractionDigits: 2
+          })}
+        </TableCell>
+        <TableCell className="text-right tabular-nums">
+          {Number(row.actualInTotal).toLocaleString("zh-CN", {
+            minimumFractionDigits: 2, maximumFractionDigits: 2
+          })}
+        </TableCell>
+        <TableCell className={cn("text-right tabular-nums font-semibold", diffColor)}>
+          {diff > 0 ? "+" : ""}
+          {Number(row.diff).toLocaleString("zh-CN", {
+            minimumFractionDigits: 2, maximumFractionDigits: 2
+          })}
+        </TableCell>
+      </TableRow>
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -2969,222 +3004,46 @@ function ReconcileTab() {
         </Button>
       </div>
 
-      {/* 对账报告 */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">{date} 对账</CardTitle>
           <div className="text-xs text-muted-foreground">
-            理论值（XBOX 销售归口）当日流入 vs 实际值钱包当日 IN 流水。差异 ≠ 0 表示客服可能填错出售渠道,
-            可在订单 tab 用「改字段」拆单纠错。
+            按真实钱包撞账: 应收(客服当天录的销售记录) vs 实收(钱包当天 IN 流水)。
+            差异 ≠ 0 表示客服钱包填错 / 客户未付 / 漏录 等。
           </div>
         </CardHeader>
         <CardContent className="p-0">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>理论值钱包</TableHead>
+                <TableHead>钱包</TableHead>
                 <TableHead>币种</TableHead>
-                <TableHead className="text-right">理论金额</TableHead>
-                <TableHead className="text-right">实际金额（合计）</TableHead>
+                <TableHead className="text-right">应收</TableHead>
+                <TableHead className="text-right">实收</TableHead>
                 <TableHead className="text-right">差异</TableHead>
-                <TableHead>映射的实际钱包</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {report.map((row) => {
-                const diff = Number(row.diff);
-                const diffColor =
-                  diff === 0 ? "text-muted-foreground" : diff > 0 ? "text-blue-600" : "text-red-600";
-                return (
-                  <TableRow key={row.theoreticalWallet.id}>
-                    <TableCell className="font-medium">{row.theoreticalWallet.name}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {row.theoreticalWallet.currency}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {Number(row.theoreticalTotal).toLocaleString("zh-CN", {
-                        minimumFractionDigits: 2, maximumFractionDigits: 2
-                      })}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {Number(row.actualTotal).toLocaleString("zh-CN", {
-                        minimumFractionDigits: 2, maximumFractionDigits: 2
-                      })}
-                    </TableCell>
-                    <TableCell className={cn("text-right tabular-nums font-semibold", diffColor)}>
-                      {diff > 0 ? "+" : ""}
-                      {Number(row.diff).toLocaleString("zh-CN", {
-                        minimumFractionDigits: 2, maximumFractionDigits: 2
-                      })}
-                    </TableCell>
-                    <TableCell className="text-xs">
-                      {row.actualWallets.length === 0 ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setShowAddMapping({
-                            theoreticalWalletId: String(row.theoreticalWallet.id)
-                          })}
-                        >
-                          <Plus className="h-3 w-3" />
-                          加映射
-                        </Button>
-                      ) : (
-                        <div className="flex flex-wrap gap-1 items-center">
-                          {row.actualWallets.map((aw) => {
-                            const mapping = mappings.find(
-                              (m) =>
-                                m.theoreticalWalletId === String(row.theoreticalWallet.id) &&
-                                m.actualWalletId === String(aw.id)
-                            );
-                            return (
-                              <Badge key={aw.id} tone="transfer">
-                                <span>{aw.name}</span>
-                                <span className="ml-1 tabular-nums">
-                                  ({aw.currency} {Number(aw.total).toLocaleString("zh-CN")})
-                                </span>
-                                {mapping ? (
-                                  <button
-                                    type="button"
-                                    className="ml-1 hover:text-red-600"
-                                    onClick={async () => {
-                                      if (confirm(`删除映射 ${row.theoreticalWallet.name} ↔ ${aw.name}?`)) {
-                                        await deleteXboxReconcileMapping(mapping.id);
-                                        refetchMappings();
-                                        refetchReport();
-                                      }
-                                    }}
-                                  >
-                                    <Trash2 className="h-3 w-3 inline" />
-                                  </button>
-                                ) : null}
-                              </Badge>
-                            );
-                          })}
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => setShowAddMapping({
-                              theoreticalWalletId: String(row.theoreticalWallet.id)
-                            })}
-                          >
-                            <Link2 className="h-3 w-3" />
-                            加
-                          </Button>
-                        </div>
-                      )}
+              {activeRows.map(renderRow)}
+              {deletedRows.length > 0 ? (
+                <>
+                  <TableRow>
+                    <TableCell colSpan={5} className="bg-muted/50 py-2 text-xs text-muted-foreground font-medium">
+                      已废弃钱包(老订单遗留, 仅供查阅)
                     </TableCell>
                   </TableRow>
-                );
-              })}
+                  {deletedRows.map(renderRow)}
+                </>
+              ) : null}
               {report.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                    暂无对账数据
+                  <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
+                    {date} 暂无销售记录
                   </TableCell>
                 </TableRow>
               ) : null}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
-
-      {showAddMapping ? (
-        <AddMappingModal
-          theoreticalWalletId={showAddMapping.theoreticalWalletId}
-          theoreticalWallets={theoreticalWallets}
-          actualGroups={actualGroups}
-          onClose={() => setShowAddMapping(null)}
-          onSuccess={() => {
-            queryClient.invalidateQueries({ queryKey: ["xbox-reconcile-mappings"] });
-            queryClient.invalidateQueries({ queryKey: ["xbox-reconcile-report"] });
-          }}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-function AddMappingModal({
-  theoreticalWalletId,
-  theoreticalWallets,
-  actualGroups,
-  onClose,
-  onSuccess
-}: {
-  theoreticalWalletId: string;
-  theoreticalWallets: { id: string; name: string; currency: string }[];
-  actualGroups: XboxPoolOptionGroup[];
-  onClose: () => void;
-  onSuccess: () => void;
-}) {
-  const [actualWalletId, setActualWalletId] = useState("");
-  const [error, setError] = useState<string | null>(null);
-
-  const theoretical = theoreticalWallets.find((w) => w.id === theoreticalWalletId);
-  // 只显示币种相同的实际钱包
-  const compatibleGroups = actualGroups
-    .map((g) => ({
-      ...g,
-      wallets: g.wallets.filter((w) => w.currency === theoretical?.currency)
-    }))
-    .filter((g) => g.wallets.length > 0);
-
-  const mutation = useMutation({
-    mutationFn: async () => {
-      if (!actualWalletId) throw new Error("请选实际钱包");
-      return createXboxReconcileMapping({
-        theoreticalWalletId,
-        actualWalletId
-      });
-    },
-    onSuccess: () => {
-      onSuccess();
-      onClose();
-    },
-    onError: (err) => setError(err instanceof Error ? err.message : "创建失败")
-  });
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>添加对账映射</CardTitle>
-          <div className="mt-1 text-xs text-muted-foreground">
-            理论值钱包: {theoretical?.name} ({theoretical?.currency})
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="space-y-1">
-            <div className="text-sm text-muted-foreground">关联到实际钱包（仅显示同币种）</div>
-            <select
-              className="h-10 w-full rounded-md border border-border bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-primary"
-              value={actualWalletId}
-              onChange={(e) => setActualWalletId(e.target.value)}
-            >
-              <option value="">-- 选实际钱包 --</option>
-              {compatibleGroups.map((g) => (
-                <optgroup key={g.groupCode} label={`── ${g.groupLabel} ──`}>
-                  {g.wallets.map((w) => (
-                    <option key={w.id} value={w.id}>
-                      {w.fullPath}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </div>
-          {error ? (
-            <div className="rounded-md border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">
-              {error}
-            </div>
-          ) : null}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>取消</Button>
-            <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
-              {mutation.isPending ? "添加中..." : "添加"}
-            </Button>
-          </div>
         </CardContent>
       </Card>
     </div>
@@ -3584,7 +3443,6 @@ export function XboxPage() {
       {tab === "accounts" ? <AccountsManagementTab /> : null}
       {tab === "orders" ? <OrdersTab onJumpToSaleRecord={jumpToSaleRecord} /> : null}
       {tab === "sale-records" ? <SaleRecordsTab highlightId={highlightSaleRecordId} /> : null}
-      {tab === "wallet-settings" ? <WalletSettingsTab /> : null}
       {tab === "reconcile" ? <ReconcileTab /> : null}
     </div>
   );

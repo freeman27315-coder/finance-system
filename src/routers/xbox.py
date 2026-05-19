@@ -472,6 +472,10 @@ class XboxOrderCompletion(BaseModel):
 
     CEO 2026-05-12: 销售日期(sale_date)系统自动填(= 订单时间, 中国时区精确到秒),
     客服无需传; 传了也会接受(datetime 字符串, ISO 8601)。
+
+    CEO 2026-05-20 #134: 砍掉收款方式/备注模板中间层, 客服直接传 walletPoolId
+    (真实钱包 id, 例如台湾 7 个子钱包之一 或 淘宝丙火/兔仔/小小 group)。
+    老 method_id/item_id 字段保留兼容(可空), 历史订单还会用到。
     """
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
@@ -483,6 +487,9 @@ class XboxOrderCompletion(BaseModel):
     sale_currency: Optional[str] = None
     wallet_method_id: Optional[int] = None
     wallet_item_id: Optional[int] = None
+    # CEO 2026-05-20 #134: 新订单直接传真实钱包 id
+    wallet_pool_id: Optional[int] = None
+    wallet_item_label: Optional[str] = None  # 冗余存钱包名便于老订单展示
 
 
 class XboxOrderOut(BaseModel):
@@ -519,10 +526,14 @@ class XboxSaleRecordOut(BaseModel):
     operator_name: str
     sale_price: Decimal
     sale_currency: str
-    wallet_method_id: int
-    wallet_item_id: int
-    wallet_item_label: str
+    # CEO 2026-05-20 #134: method/item 字段已废弃(老订单可能有值,新订单 NULL)
+    wallet_method_id: Optional[int] = None
+    wallet_item_id: Optional[int] = None
+    wallet_item_label: Optional[str] = None
     wallet_pool_id: int
+    # CEO 2026-05-20 #134: 钱包是否已废弃(老订单挂的 XBOX_SALES_LEDGER 钱包都已软删)
+    wallet_deleted: bool = False
+    wallet_name: Optional[str] = None
     bookkeeping_tx_id: Optional[int] = None
     order_ids: list[int] = Field(default_factory=list)
     created_at: str
@@ -597,7 +608,14 @@ def serialize_order(order: XboxOrder) -> XboxOrderOut:
     )
 
 
-def serialize_sale_record(record: XboxSaleRecord, order_ids: list[int]) -> XboxSaleRecordOut:
+def serialize_sale_record(
+    record: XboxSaleRecord,
+    order_ids: list[int],
+    wallet: Optional["Wallet"] = None,
+) -> XboxSaleRecordOut:
+    # CEO 2026-05-20 #134: 顺带返回钱包名 + 是否已废弃,前端老订单展示"(已废弃)"
+    wallet_name = wallet.name if wallet else (record.wallet_item_label or None)
+    wallet_deleted = bool(wallet and wallet.deleted_at is not None)
     return XboxSaleRecordOut(
         id=record.id,
         account_id=record.account_id,
@@ -610,6 +628,8 @@ def serialize_sale_record(record: XboxSaleRecord, order_ids: list[int]) -> XboxS
         wallet_item_id=record.wallet_item_id,
         wallet_item_label=record.wallet_item_label,
         wallet_pool_id=record.wallet_pool_id,
+        wallet_deleted=wallet_deleted,
+        wallet_name=wallet_name,
         bookkeeping_tx_id=record.bookkeeping_tx_id,
         order_ids=order_ids,
         created_at=record.created_at.isoformat() if record.created_at else "",
@@ -721,28 +741,20 @@ def patch_order_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="订单不存在")
 
     try:
-        # 已转销售 + 改 wallet_item_id → 拆单
-        if (
-            order.status == XboxOrderStatus.CONVERTED.value
-            and request.wallet_item_id is not None
-            and request.wallet_item_id != order.wallet_item_id
-        ):
-            new_method_id = request.wallet_method_id or order.wallet_method_id
-            move_order_to_different_sale_record(
-                db, order, new_method_id, request.wallet_item_id
-            )
-        else:
-            update_order_completion(
-                db,
-                order,
-                sale_date=request.sale_date,
-                product_name=request.product_name,
-                operator_name=request.operator_name,
-                sale_price=request.sale_price,
-                sale_currency=request.sale_currency,
-                wallet_method_id=request.wallet_method_id,
-                wallet_item_id=request.wallet_item_id,
-            )
+        # CEO 2026-05-20 #134: 新订单直传 walletPoolId, 不走拆单逻辑(老订单兼容保留)
+        update_order_completion(
+            db,
+            order,
+            sale_date=request.sale_date,
+            product_name=request.product_name,
+            operator_name=request.operator_name,
+            sale_price=request.sale_price,
+            sale_currency=request.sale_currency,
+            wallet_method_id=request.wallet_method_id,
+            wallet_item_id=request.wallet_item_id,
+            wallet_pool_id=request.wallet_pool_id,
+            wallet_item_label=request.wallet_item_label,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     db.commit()
@@ -763,6 +775,7 @@ def list_sale_records_endpoint(
     to_date: Optional[date] = Query(None, alias="to"),
     db: Session = Depends(get_db),
 ) -> list[XboxSaleRecordOut]:
+    from src.models.wallet import Wallet  # 局部 import 避免循环
     records = list_sale_records(
         db,
         account_id=account_id,
@@ -770,6 +783,12 @@ def list_sale_records_endpoint(
         from_date=from_date,
         to_date=to_date,
     )
+    # 批量取所有相关钱包(含软删)
+    pool_ids = {r.wallet_pool_id for r in records}
+    wallets_by_id = {
+        w.id: w
+        for w in db.scalars(select(Wallet).where(Wallet.id.in_(pool_ids)))
+    } if pool_ids else {}
     out: list[XboxSaleRecordOut] = []
     for record in records:
         order_ids = [
@@ -778,7 +797,7 @@ def list_sale_records_endpoint(
                 select(XboxOrder).where(XboxOrder.sale_record_id == record.id)
             )
         ]
-        out.append(serialize_sale_record(record, order_ids))
+        out.append(serialize_sale_record(record, order_ids, wallets_by_id.get(record.wallet_pool_id)))
     return out
 
 
@@ -818,7 +837,9 @@ def patch_sale_record_endpoint(
         o.id
         for o in db.scalars(select(XboxOrder).where(XboxOrder.sale_record_id == record.id))
     ]
-    return serialize_sale_record(record, order_ids)
+    from src.models.wallet import Wallet  # 局部 import
+    wallet = db.get(Wallet, record.wallet_pool_id)
+    return serialize_sale_record(record, order_ids, wallet)
 
 
 # ----- Wallet settings endpoints -----
@@ -830,17 +851,11 @@ def upsert_wallet_settings_endpoint(
     payload: list[dict] = Body(...),
     db: Session = Depends(get_db),
 ) -> dict:
-    """财务系统推送钱包设置（IF-02）。
-
-    Body 是 method 列表。每条 method 含 code/label/items[]。
-    item 含 code/label/walletPoolId/isActive。
-    """
-    try:
-        result = upsert_wallet_settings(db, payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    db.commit()
-    return result
+    """[废弃 #134] 钱包设置功能已废弃,客服直选真实钱包。"""
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="钱包设置已废弃(CEO 2026-05-20 #134),客服直接选真实钱包",
+    )
 
 
 @router.get(
@@ -852,23 +867,8 @@ def list_wallet_settings_endpoint(
     only_active: bool = Query(True, alias="onlyActive"),
     db: Session = Depends(get_db),
 ) -> list[XboxWalletMethodOut]:
-    from src.models.wallet import Wallet  # 局部 import 避免循环
-
-    methods = list_wallet_methods(db, only_active=only_active)
-    # CEO 2026-05-14: 预加载所有 item 对应钱包的币种, 注入 method.currency
-    # 同时把 only_active 透传给 serialize_method, 一并过滤掉软删除的备注模板
-    # (避免 CEO 在编辑钱包设置页删了之后刷新还看见)。
-    wallet_ids = {it.wallet_pool_id for m in methods for it in m.items if it.is_active or not only_active}
-    currency_map: dict[int, str] = {}
-    if wallet_ids:
-        wallets = db.scalars(select(Wallet).where(Wallet.id.in_(wallet_ids))).all()
-        for w in wallets:
-            cur = w.currency.value if hasattr(w.currency, "value") else w.currency
-            currency_map[w.id] = cur
-    return [
-        serialize_method(m, currency_map, only_active_items=only_active)
-        for m in methods
-    ]
+    """[废弃 #134] 永远返回空列表,前端兜底不崩。"""
+    return []
 
 
 # ----- 资金池可选钱包列表（CEO 2026-05-08 Q1A：全部钱包大类都能当资金池）-----
@@ -915,66 +915,62 @@ def list_wallet_pool_options(
     include_groups: bool = Query(False, alias="includeGroups"),
     db: Session = Depends(get_db),
 ) -> list[XboxPoolOptionGroup]:
-    """返回可作"资金池"的钱包,按大类分组。
+    """[#134 重写] 返回客服销售记录可选的真实钱包列表,按渠道分组。
 
-    CEO 2026-05-08 Q2:A - 默认 ``xboxOnly=true``,只返回 XBOX 销售归口理论值钱包,
-    防止客服误选实际值钱包。前端可显式传 ``?xboxOnly=false`` 取全部钱包(高级模式)。
+    新口径(CEO 2026-05-20 #134 路径 2):
+    - 台湾: 7 个真实子钱包(type=TAIWAN, is_group=False)
+    - 淘宝: 3 个供应商分组钱包(type=TAOBAO, is_group=True, parent_id=None) — 丙火/兔仔/小小
+    - 不再返回 XBOX_SALES_LEDGER(已废弃)
 
-    ``includeGroups`` (默认 false):
-    - true 时也返回 group 钱包(用于对账映射,允许选店铺总钱包)
-    - false 时只返回叶子钱包(给销售记录资金池下拉用,group 不能存余额)
-
-    校验规则: 销售记录创建/修改时, sale_currency 必须等于钱包 currency,
-    后端按币种校验拒绝不匹配的组合。
+    ``xboxOnly`` 参数保留兼容,实际上现在就两组渠道,默认全返。
     """
     from src.models.wallet import Wallet  # 局部 import 避免循环依赖问题
 
-    # 取所有未删除的钱包
-    stmt = select(Wallet).where(Wallet.deleted_at.is_(None))
-    if not include_groups:
-        stmt = stmt.where(Wallet.is_group.is_(False))
-    wallets = list(db.scalars(stmt.order_by(Wallet.id)))
+    # 台湾: 真实子钱包(非 group)
+    taiwan_wallets = list(db.scalars(
+        select(Wallet)
+        .where(
+            Wallet.type == "TAIWAN",
+            Wallet.is_group.is_(False),
+            Wallet.deleted_at.is_(None),
+            Wallet.parent_id.isnot(None),  # 排除老的顶级钱包
+        )
+        .order_by(Wallet.id)
+    ))
 
-    # 计算每个钱包的"完整路径"(从根到自己)
-    by_id = {w.id: w for w in db.scalars(select(Wallet))}
+    # 淘宝: 顶级分组钱包(丙火网络/兔仔电玩/小小电玩) — is_group=True, parent_id=None
+    taobao_groups = list(db.scalars(
+        select(Wallet)
+        .where(
+            Wallet.type == "TAOBAO",
+            Wallet.is_group.is_(True),
+            Wallet.parent_id.is_(None),
+            Wallet.deleted_at.is_(None),
+        )
+        .order_by(Wallet.id)
+    ))
 
-    def full_path(w: Wallet) -> str:
-        parts: list[str] = []
-        cur: Wallet | None = w
-        while cur is not None:
-            parts.append(cur.name)
-            cur = by_id.get(cur.parent_id) if cur.parent_id is not None else None
-        return " / ".join(reversed(parts))
-
-    # 按 type 分组
-    by_type: dict[str, list[Wallet]] = {}
-    for w in wallets:
-        type_value = w.type.value if hasattr(w.type, "value") else str(w.type)
-        by_type.setdefault(type_value, []).append(w)
+    def to_option(w: Wallet) -> XboxPoolOptionWallet:
+        return XboxPoolOptionWallet(
+            id=w.id,
+            name=w.name,
+            currency=w.currency.value if hasattr(w.currency, "value") else str(w.currency),
+            full_path=w.name,
+        )
 
     out: list[XboxPoolOptionGroup] = []
-    for type_code, label in _GROUP_META:
-        # xbox_only 模式只返回 XBOX_SALES_LEDGER 大类
-        if xbox_only and type_code != "XBOX_SALES_LEDGER":
-            continue
-        items = by_type.get(type_code, [])
-        if not items:
-            continue
-        out.append(
-            XboxPoolOptionGroup(
-                group_code=type_code,
-                group_label=label,
-                wallets=[
-                    XboxPoolOptionWallet(
-                        id=w.id,
-                        name=w.name,
-                        currency=w.currency.value if hasattr(w.currency, "value") else str(w.currency),
-                        full_path=full_path(w),
-                    )
-                    for w in items
-                ],
-            )
-        )
+    if taiwan_wallets:
+        out.append(XboxPoolOptionGroup(
+            group_code="TAIWAN",
+            group_label="台湾",
+            wallets=[to_option(w) for w in taiwan_wallets],
+        ))
+    if taobao_groups:
+        out.append(XboxPoolOptionGroup(
+            group_code="TAOBAO",
+            group_label="淘宝",
+            wallets=[to_option(w) for w in taobao_groups],
+        ))
     return out
 
 
@@ -1159,45 +1155,30 @@ def _serialize_mapping(m: XboxReconcileMapping) -> XboxReconcileMappingOut:
     response_model_by_alias=True,
 )
 def list_reconcile_mappings_endpoint(db: Session = Depends(get_db)) -> list[XboxReconcileMappingOut]:
-    return [_serialize_mapping(m) for m in list_mappings(db)]
+    """[废弃 #134] 永远返回空列表(前端兜底)。"""
+    return []
 
 
-@router.post(
-    "/reconcile-mappings",
-    response_model=XboxReconcileMappingOut,
-    response_model_by_alias=True,
-    status_code=status.HTTP_201_CREATED,
-)
+@router.post("/reconcile-mappings")
 def create_reconcile_mapping_endpoint(
-    request: XboxReconcileMappingCreate,
+    request: dict = Body(...),
     db: Session = Depends(get_db),
-) -> XboxReconcileMappingOut:
-    try:
-        mapping = create_mapping(
-            db,
-            theoretical_wallet_id=request.theoretical_wallet_id,
-            actual_wallet_id=request.actual_wallet_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    db.commit()
-    db.refresh(mapping)
-    return _serialize_mapping(mapping)
+):
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="对账映射已废弃(CEO 2026-05-20 #134),客服直选真实钱包不再需要映射",
+    )
 
 
-@router.delete(
-    "/reconcile-mappings/{mapping_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
+@router.delete("/reconcile-mappings/{mapping_id}")
 def delete_reconcile_mapping_endpoint(
     mapping_id: int,
     db: Session = Depends(get_db),
-) -> Response:
-    ok = delete_mapping(db, mapping_id)
-    if not ok:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="映射不存在")
-    db.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+):
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="对账映射已废弃(CEO 2026-05-20 #134)",
+    )
 
 
 @router.get(

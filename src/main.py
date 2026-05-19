@@ -46,11 +46,7 @@ from src.services.taiwan import ensure_default_taiwan_wallets
 from src.services.taobao import ensure_default_taobao_wallets
 from src.services.vendors import ensure_vendor_wallets
 from src.services.taobao import ensure_shop_total_group_wallets
-from src.services.xbox_sales_ledger import (
-    ensure_xbox_default_reconcile_mappings,
-    ensure_xbox_default_wallet_settings,
-    ensure_xbox_sales_ledger_wallets,
-)
+from src.services.xbox_sales_ledger import purge_legacy_ledger_layer
 
 
 @asynccontextmanager
@@ -64,11 +60,11 @@ async def lifespan(_: FastAPI):
         ensure_vendor_wallets(db)
         # CEO 2026-05-17: 旧的 soft_delete_old_taiwan_wallets 已弃用 —
         # 它会误删新的"银行卡" group(同名). 台湾钱包结构改造后不再需要.
-        leaf_id_by_name = ensure_xbox_sales_ledger_wallets(db)
-        ensure_xbox_default_wallet_settings(db, leaf_id_by_name)
-        # 淘宝店铺总钱包(group) + 自动配对账映射(CEO 2026-05-08 B+A)
+        # 淘宝店铺总钱包(group) — 这层还在用(丙火/兔仔/小小作为客服可选钱包)
         ensure_shop_total_group_wallets(db)
-        ensure_xbox_default_reconcile_mappings(db)
+        # CEO 2026-05-20 #134: 砍掉 XBOX_SALES_LEDGER 中间层 + 备注模板 + 收款方式 + 对账映射
+        # 启动时清一次, 幂等(已删的不重复处理)
+        purge_legacy_ledger_layer(db)
         db.commit()
     finally:
         db.close()

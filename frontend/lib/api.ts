@@ -816,6 +816,8 @@ export async function patchXboxOrder(
     saleCurrency?: XboxSaleCurrency;
     walletMethodId?: string;
     walletItemId?: string;
+    walletPoolId?: string;   // CEO 2026-05-20 #134: 新订单直挂真实钱包
+    walletItemLabel?: string; // 新订单冗余存钱包名,便于展示
   }
 ): Promise<XboxOrder> {
   const body: Record<string, unknown> = {};
@@ -826,6 +828,8 @@ export async function patchXboxOrder(
   if (payload.saleCurrency !== undefined) body.saleCurrency = payload.saleCurrency;
   if (payload.walletMethodId !== undefined) body.walletMethodId = payload.walletMethodId;
   if (payload.walletItemId !== undefined) body.walletItemId = payload.walletItemId;
+  if (payload.walletPoolId !== undefined) body.walletPoolId = payload.walletPoolId;
+  if (payload.walletItemLabel !== undefined) body.walletItemLabel = payload.walletItemLabel;
   const data = (await sendJson(`/api/xbox/orders/${orderId}`, "PATCH", body)) as XboxOrderResponse;
   return _normalizeOrder(data);
 }

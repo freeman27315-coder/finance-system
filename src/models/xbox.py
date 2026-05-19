@@ -214,17 +214,18 @@ class XboxSaleRecord(Base):
         Numeric(18, 6), nullable=False, default=Decimal("0")
     )
     sale_currency: Mapped[str] = mapped_column(String(8), nullable=False)  # CNY/USD/USDT/TWD
-    # 钱包设置映射
-    wallet_method_id: Mapped[int] = mapped_column(
-        ForeignKey("xbox_wallet_methods.id"), nullable=False
+    # CEO 2026-05-20 #134: 砍中间层 — 客服直接选真实钱包,不再走"收款方式 → 备注模板 → 资金池"三层
+    # 老订单这三个字段还有值, 新订单一律 NULL
+    wallet_method_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("xbox_wallet_methods.id"), nullable=True
     )
-    wallet_item_id: Mapped[int] = mapped_column(
-        ForeignKey("xbox_wallet_items.id"), nullable=False
+    wallet_item_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("xbox_wallet_items.id"), nullable=True
     )
-    wallet_item_label: Mapped[str] = mapped_column(String(120), nullable=False)  # 备注模板展示标签
+    wallet_item_label: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)  # 老订单备注模板展示标签;新订单可填钱包名
     wallet_pool_id: Mapped[int] = mapped_column(
         ForeignKey("wallets.id"), nullable=False, index=True
-    )  # 资金池=具体钱包 id（CEO Q1C）
+    )  # 直接指向真实钱包 id (TAIWAN / TAOBAO group / ASSET_* 等)
     # 内部记账：本销售记录在资金池写入了一笔 IN 流水（用于改字段时反向调整）
     bookkeeping_tx_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("wallet_transactions.id"), nullable=True

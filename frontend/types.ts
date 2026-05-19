@@ -122,6 +122,8 @@ export type XboxOrder = {
 };
 
 // 销售记录
+// CEO 2026-05-20 #134: walletMethodId / walletItemId / walletItemLabel 改 nullable
+// (老订单可能有值, 新订单一律 null), walletDeleted/walletName 用于老订单展示"已废弃"
 export type XboxSaleRecord = {
   id: string;
   accountId: string;
@@ -130,10 +132,12 @@ export type XboxSaleRecord = {
   operatorName: string;
   salePrice: number; // minor unit
   saleCurrency: XboxSaleCurrency;
-  walletMethodId: string;
-  walletItemId: string;
-  walletItemLabel: string;
+  walletMethodId: string | null;
+  walletItemId: string | null;
+  walletItemLabel: string | null;
   walletPoolId: string;
+  walletDeleted?: boolean;
+  walletName?: string | null;
   bookkeepingTxId: string | null;
   orderIds: string[];
   createdAt: string;
@@ -184,6 +188,7 @@ export type XboxChangeLog = {
 };
 
 // 对账映射（理论值钱包 ↔ 实际值钱包）
+// CEO 2026-05-20 #134: 已废弃, 保留类型定义兼容老代码
 export type XboxReconcileMapping = {
   id: string;
   theoreticalWalletId: string;
@@ -191,13 +196,18 @@ export type XboxReconcileMapping = {
   createdAt: string;
 };
 
-// 对账报告每行（一个理论值钱包 + 它配对的实际值钱包们）
+// 对账报告每行 (CEO 2026-05-20 #134 路径 2: 按真实钱包撞账)
 export type XboxReconcileReportRow = {
-  theoreticalWallet: { id: string; name: string; currency: string };
-  actualWallets: { id: string; name: string; currency: string; total: string }[];
-  theoreticalTotal: string;
-  actualTotal: string;
-  diff: string;
+  wallet: {
+    id: string;
+    name: string;
+    currency: string;
+    isGroup: boolean;
+    deleted: boolean;
+  };
+  receivableTotal: string;  // 应收 (客服当天录的销售记录汇总)
+  actualInTotal: string;    // 实收 (钱包当天 IN 流水汇总, group 递归)
+  diff: string;             // 实收 - 应收
 };
 
 export type XboxCountrySummary = {

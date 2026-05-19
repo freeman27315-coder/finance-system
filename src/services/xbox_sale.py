@@ -87,11 +87,26 @@ def _find_existing_sale_record(
     account_id: int,
     wallet_item_id: int,
 ) -> Optional[XboxSaleRecord]:
-    """合单查询：同账号 + 同 wallet_item_id 的现有销售记录。"""
+    """[legacy] 合单查询：同账号 + 同 wallet_item_id 的现有销售记录。
+    新流程改用 _find_existing_sale_record_by_pool。"""
     return session.scalar(
         select(XboxSaleRecord).where(
             XboxSaleRecord.account_id == account_id,
             XboxSaleRecord.wallet_item_id == wallet_item_id,
+        )
+    )
+
+
+def _find_existing_sale_record_by_pool(
+    session: Session,
+    account_id: int,
+    wallet_pool_id: int,
+) -> Optional[XboxSaleRecord]:
+    """#134 新合单查询: 同账号 + 同 wallet_pool_id(真实钱包) 的现有销售记录。"""
+    return session.scalar(
+        select(XboxSaleRecord).where(
+            XboxSaleRecord.account_id == account_id,
+            XboxSaleRecord.wallet_pool_id == wallet_pool_id,
         )
     )
 
@@ -116,23 +131,23 @@ def create_or_merge_sale_record(
     operator_name: str,
     sale_price: Decimal,
     sale_currency: str,
-    wallet_method_id: int,
-    wallet_item_id: int,
-    wallet_item_label: str,
+    wallet_method_id: Optional[int] = None,
+    wallet_item_id: Optional[int] = None,
+    wallet_item_label: Optional[str] = None,
     wallet_pool_id: int,
     order: Optional[XboxOrder] = None,
 ) -> XboxSaleRecord:
-    """创建销售记录或合并到现有的（FR-06）+ 资金池入账（FR-07）。
+    """创建销售记录或合并到现有的（FR-06）。
 
-    若同账号 + 同 wallet_item_id 已有销售记录 → 累加 sale_price + credit 差额。
-    否则新建销售记录 + credit 全额。
+    CEO 2026-05-20 #134: **不再 credit 真实钱包余额**。销售记录只是"应收"凭证,
+    钱包余额由台湾页/资产页的"更新余额"或手动 credit/debit 接口更新。
+    撞账逻辑: 真实钱包当天应收(SUM sale_price) vs 实收(钱包真实 IN 流水)。
+
+    合单规则: 同账号 + 同 wallet_pool_id → 视为同一销售记录,累加 sale_price。
+    (老规则按 wallet_item_id 合,但新订单 item_id 全 NULL,所以改按 pool_id)
 
     传入 ``order`` 时,会把订单的 sale_record_id 指向新/旧记录,
     并把订单 status 改成 converted。
-
-    CEO 2026-05-12: sale_date 是 datetime(中国时区精确到秒)。
-    当 ``order`` 提供时,如果 sale_date 是 date(只到天),会被升级为 order.order_at
-    (微软抓订单的时间)。
     """
     pool = _validate_pool_currency(session, wallet_pool_id, sale_currency)
     sale_price = Decimal(sale_price)
@@ -147,10 +162,11 @@ def create_or_merge_sale_record(
     if sale_dt is None:
         raise ValueError("销售日期不能为空")
 
-    existing = _find_existing_sale_record(session, account.id, wallet_item_id)
+    # 新订单按 wallet_pool_id 合单(老规则按 wallet_item_id, 新订单 item_id 一律 NULL)
+    existing = _find_existing_sale_record_by_pool(session, account.id, wallet_pool_id)
 
     if existing is None:
-        # 新建销售记录
+        # 新建销售记录(不动钱包余额)
         record = XboxSaleRecord(
             account_id=account.id,
             sale_date=sale_dt,
@@ -160,40 +176,25 @@ def create_or_merge_sale_record(
             sale_currency=sale_currency,
             wallet_method_id=wallet_method_id,
             wallet_item_id=wallet_item_id,
-            wallet_item_label=wallet_item_label,
+            wallet_item_label=wallet_item_label or pool.name,
             wallet_pool_id=wallet_pool_id,
         )
         session.add(record)
         session.flush()
-
-        # credit 全额入账（除非 sale_price=0,叠加档）
-        if sale_price > 0:
-            tx = credit(
-                session,
-                wallet_pool_id,
-                sale_price,
-                remark=f"XBOX 销售 #{record.id} {product_name}",
-            )
-            record.bookkeeping_tx_id = tx.id
 
         _log_change(
             session,
             "sale_record",
             record.id,
             "created",
-            f"售价={sale_price} {sale_currency}, 资金池 wallet#{wallet_pool_id} ({wallet_item_label})",
+            f"售价={sale_price} {sale_currency}, 钱包 wallet#{wallet_pool_id} ({pool.name})",
         )
 
     else:
-        # 合单：累加 sale_price + credit 差额
+        # 合单：累加 sale_price(不动钱包余额)
         if existing.sale_currency != sale_currency:
             raise ValueError(
                 f"合单失败：币种不一致(已有 {existing.sale_currency},新 {sale_currency})"
-            )
-        if existing.wallet_pool_id != wallet_pool_id:
-            raise ValueError(
-                f"合单失败：资金池不一致(已有 wallet_pool_id={existing.wallet_pool_id},"
-                f"新 {wallet_pool_id})"
             )
         old_price = Decimal(existing.sale_price)
         new_total = old_price + sale_price
@@ -201,23 +202,10 @@ def create_or_merge_sale_record(
 
         existing.sale_price = new_total
         existing.last_updated_at = china_now()
-        if existing.wallet_item_label != wallet_item_label:
-            existing.wallet_item_label = wallet_item_label
 
         # 更新 product_name 为合单后追加（保留原来 + 新订单）
         if product_name and product_name not in (existing.product_name or ""):
             existing.product_name = f"{existing.product_name}; {product_name}"
-
-        # credit 差额到资金池
-        if diff > 0:
-            tx = credit(
-                session,
-                wallet_pool_id,
-                diff,
-                remark=f"XBOX 销售 #{existing.id} 合单追加 {product_name}",
-            )
-            # 注意：bookkeeping_tx_id 仅记最后一次（实际有多笔流水）
-            existing.bookkeeping_tx_id = tx.id
 
         _log_change(
             session,
@@ -274,26 +262,12 @@ def update_sale_record_fields(
     if pool_changed or currency_changed:
         _validate_pool_currency(session, new_pool_id, new_currency)
 
-    # 1) 资金池变更（含 currency 变更）→ 旧池 debit 全额,新池 credit 全额
+    # CEO 2026-05-20 #134: 改字段不再动真实钱包余额。改的只是"应收"记录,
+    # 撞账时按当时的 wallet_pool_id + sale_price 汇总即可。
     if pool_changed or currency_changed:
         old_pool_id = record.wallet_pool_id
         old_currency = record.sale_currency
         old_amount = Decimal(record.sale_price)
-        if old_amount > 0:
-            debit(
-                session,
-                record.wallet_pool_id,
-                old_amount,
-                remark=f"XBOX 销售 #{record.id} 切换资金池(撤旧池)",
-            )
-        if new_price > 0:
-            tx = credit(
-                session,
-                new_pool_id,
-                new_price,
-                remark=f"XBOX 销售 #{record.id} 切换资金池(入新池)",
-            )
-            record.bookkeeping_tx_id = tx.id
         record.wallet_pool_id = new_pool_id
         record.sale_currency = new_currency
         record.sale_price = new_price
@@ -302,34 +276,18 @@ def update_sale_record_fields(
             "sale_record",
             record.id,
             "wallet_pool_changed",
-            f"资金池 wallet#{old_pool_id}({old_currency}) → wallet#{new_pool_id}({new_currency}), 售价 {old_amount} → {new_price}",
+            f"钱包 wallet#{old_pool_id}({old_currency}) → wallet#{new_pool_id}({new_currency}), 售价 {old_amount} → {new_price}",
         )
     elif price_changed:
-        # 2) 仅价格变更 → diff 调整本池
         old_price = Decimal(record.sale_price)
         diff = new_price - old_price
-        if diff > 0:
-            tx = credit(
-                session,
-                record.wallet_pool_id,
-                diff,
-                remark=f"XBOX 销售 #{record.id} 售价调整 +{diff}",
-            )
-            record.bookkeeping_tx_id = tx.id
-        elif diff < 0:
-            debit(
-                session,
-                record.wallet_pool_id,
-                -diff,
-                remark=f"XBOX 销售 #{record.id} 售价调整 {diff}",
-            )
         record.sale_price = new_price
         _log_change(
             session,
             "sale_record",
             record.id,
             "updated",
-            f"售价 {old_price} → {new_price} ({record.sale_currency})",
+            f"售价 {old_price} → {new_price} ({record.sale_currency}), diff={diff}",
         )
 
     # 3) 更新其他普通字段

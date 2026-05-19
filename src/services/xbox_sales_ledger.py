@@ -313,6 +313,56 @@ def ensure_xbox_default_reconcile_mappings(session: Session) -> int:
     return created
 
 
+def purge_legacy_ledger_layer(session: Session) -> dict:
+    """CEO 2026-05-20 #134 整改: 砍掉 XBOX 销售归口中间层。
+
+    操作:
+    1. 软删全部 XBOX_SALES_LEDGER 类型钱包(理论钱包: 银行卡A/B/袋鼠8591/.../丙火/兔仔/小小/TOM等)
+    2. 物理删 XboxReconcileMapping(对账映射)全部数据
+    3. 物理删 XboxWalletItem(备注模板) + XboxWalletMethod(收款方式)全部数据
+       注意: 老 XboxSaleRecord 的 wallet_method_id/wallet_item_id 字段已改 Optional,
+       这些数据删了之后, 老订单字段值"悬空"但不影响读取(前端展示加"(已废弃)")
+
+    幂等: 已删的不重复处理, 返回各项计数.
+    """
+    from src.models.xbox import XboxReconcileMapping  # 局部 import 避免循环
+
+    counts = {"wallets_soft_deleted": 0, "mappings_deleted": 0, "items_deleted": 0, "methods_deleted": 0}
+
+    # 1. 软删 XBOX_SALES_LEDGER 钱包(包含 group 和 leaf)
+    ledger_wallets = list(session.scalars(
+        select(Wallet).where(
+            Wallet.type == WalletType.XBOX_SALES_LEDGER.value,
+            Wallet.deleted_at.is_(None),
+        )
+    ))
+    now = china_now()
+    for w in ledger_wallets:
+        w.deleted_at = now
+        counts["wallets_soft_deleted"] += 1
+
+    # 2. 物理删 XboxReconcileMapping
+    mappings = list(session.scalars(select(XboxReconcileMapping)))
+    for m in mappings:
+        session.delete(m)
+        counts["mappings_deleted"] += 1
+
+    # 3. 物理删 XboxWalletItem + XboxWalletMethod (item 先删, 防 FK)
+    items = list(session.scalars(select(XboxWalletItem)))
+    for item in items:
+        session.delete(item)
+        counts["items_deleted"] += 1
+    session.flush()
+
+    methods = list(session.scalars(select(XboxWalletMethod)))
+    for method in methods:
+        session.delete(method)
+        counts["methods_deleted"] += 1
+
+    session.flush()
+    return counts
+
+
 def soft_delete_old_taiwan_wallets(session: Session) -> list[str]:
     """CEO 2026-05-08 Q3:B - 台湾现有 3 个空钱包(8591余额/银行卡/超商代收金流余额)删除。
 
