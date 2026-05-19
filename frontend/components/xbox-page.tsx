@@ -22,9 +22,11 @@ import {
   Plus,
   Receipt,
   RefreshCcw,
+  RotateCcw,
   Settings2,
   ShieldAlert,
   Trash2,
+  Undo2,
   Unlock,
   Users
 } from "lucide-react";
@@ -69,6 +71,8 @@ import {
   triggerXboxSync,
   updateXboxAccount
 } from "@/lib/api";
+import { XboxRefundList } from "@/components/xbox-refund-list";
+import { XboxRefundModal } from "@/components/xbox-refund-modal";
 import type { XboxRefreshJobStatus } from "@/lib/api";
 import { formatMoney, minorUnit } from "@/lib/money";
 import { cn } from "@/lib/utils";
@@ -2302,6 +2306,7 @@ function SaleRecordsTab({ highlightId }: { highlightId?: string | null }) {
   const [editTarget, setEditTarget] = useState<XboxSaleRecord | null>(null);
   const [expandTarget, setExpandTarget] = useState<XboxSaleRecord | null>(null);
   const [logsTarget, setLogsTarget] = useState<XboxSaleRecord | null>(null);
+  const [refundTarget, setRefundTarget] = useState<XboxSaleRecord | null>(null);
   const [dateRange, setDateRange] = useState(defaultDateRange);
 
   const { data: records = [], isFetching, refetch } = useQuery({
@@ -2408,15 +2413,30 @@ function SaleRecordsTab({ highlightId }: { highlightId?: string | null }) {
               {records.map((record) => {
                 const account = accounts.find((a) => a.id === record.accountId);
                 const isHighlighted = highlightId === record.id;
+                const isRefunded = record.status === "refunded";
                 return (
-                  <TableRow key={record.id} className={cn(isHighlighted && "bg-emerald-50")}>
+                  <TableRow key={record.id} className={cn(isHighlighted && "bg-emerald-50", isRefunded && "bg-red-50/40")}>
                     <TableCell className="text-xs tabular-nums">{formatDateTimeSeconds(record.saleDate)}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {account?.accountNo ?? account?.name ?? "-"}
                     </TableCell>
-                    <TableCell className="truncate max-w-[200px]">{record.productName}</TableCell>
+                    <TableCell className="truncate max-w-[200px]">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className={cn(isRefunded && "line-through text-muted-foreground")}>
+                          {record.productName}
+                        </span>
+                        {isRefunded ? (
+                          <Badge tone="danger" className="text-[10px]">
+                            已退款{record.refundedAt ? ` · ${record.refundedAt.slice(0, 10)}` : ""}
+                          </Badge>
+                        ) : null}
+                      </div>
+                    </TableCell>
                     <TableCell className="text-xs text-muted-foreground">{record.operatorName}</TableCell>
-                    <TableCell className="text-right tabular-nums font-semibold text-emerald-600">
+                    <TableCell className={cn(
+                      "text-right tabular-nums font-semibold",
+                      isRefunded ? "text-muted-foreground line-through" : "text-emerald-600"
+                    )}>
                       {formatMoney(record.salePrice, record.saleCurrency as Currency)}
                     </TableCell>
                     <TableCell className="text-xs">{record.walletItemLabel}</TableCell>
@@ -2441,6 +2461,17 @@ function SaleRecordsTab({ highlightId }: { highlightId?: string | null }) {
                           <Pencil className="h-3.5 w-3.5" />
                           修改
                         </Button>
+                        {!isRefunded ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-red-600 border-red-300 hover:bg-red-50"
+                            onClick={() => setRefundTarget(record)}
+                          >
+                            <Undo2 className="h-3.5 w-3.5" />
+                            退款
+                          </Button>
+                        ) : null}
                         <Button size="sm" variant="ghost" onClick={() => setLogsTarget(record)}>
                           <History className="h-3.5 w-3.5" />
                           历史
@@ -2480,6 +2511,12 @@ function SaleRecordsTab({ highlightId }: { highlightId?: string | null }) {
           title={`销售 #${logsTarget.id} ${logsTarget.productName}`}
           fetchLogs={() => getXboxSaleRecordChangeLogs(logsTarget.id)}
           onClose={() => setLogsTarget(null)}
+        />
+      ) : null}
+      {refundTarget ? (
+        <XboxRefundModal
+          saleRecord={refundTarget}
+          onClose={() => setRefundTarget(null)}
         />
       ) : null}
     </div>
@@ -2906,12 +2943,13 @@ function WalletSettingsTab() {
 }
 
 
-type XboxTab = "accounts" | "orders" | "sale-records" | "wallet-settings" | "reconcile";
+type XboxTab = "accounts" | "orders" | "sale-records" | "refunds" | "wallet-settings" | "reconcile";
 
 const TAB_META: { id: XboxTab; label: string; icon: React.ReactNode }[] = [
   { id: "accounts", label: "账号管理", icon: <Users className="h-4 w-4" /> },
   { id: "orders", label: "订单", icon: <Receipt className="h-4 w-4" /> },
   { id: "sale-records", label: "销售记录", icon: <Layers className="h-4 w-4" /> },
+  { id: "refunds", label: "退款", icon: <Undo2 className="h-4 w-4" /> },
   { id: "wallet-settings", label: "钱包设置", icon: <Settings2 className="h-4 w-4" /> },
   { id: "reconcile", label: "对账", icon: <GitCompare className="h-4 w-4" /> }
 ];
@@ -2974,7 +3012,8 @@ function ReconcileTab() {
         <CardHeader>
           <CardTitle className="text-base">{date} 对账</CardTitle>
           <div className="text-xs text-muted-foreground">
-            理论值（XBOX 销售归口）当日流入 vs 实际值钱包当日 IN 流水。差异 ≠ 0 表示客服可能填错出售渠道,
+            理论值（XBOX 销售归口）当日 vs 实际值钱包当日 IN/OUT 流水。
+            IN 差异 ≠ 0 表示客服可能填错出售渠道; OUT 差异 ≠ 0 表示退款时实际钱包选错。
             可在订单 tab 用「改字段」拆单纠错。
           </div>
         </CardHeader>
@@ -2984,9 +3023,12 @@ function ReconcileTab() {
               <TableRow>
                 <TableHead>理论值钱包</TableHead>
                 <TableHead>币种</TableHead>
-                <TableHead className="text-right">理论金额</TableHead>
-                <TableHead className="text-right">实际金额（合计）</TableHead>
-                <TableHead className="text-right">差异</TableHead>
+                <TableHead className="text-right text-emerald-700">理论 IN</TableHead>
+                <TableHead className="text-right text-emerald-700">实际 IN</TableHead>
+                <TableHead className="text-right text-emerald-700">IN 差异</TableHead>
+                <TableHead className="text-right text-red-700">理论 OUT</TableHead>
+                <TableHead className="text-right text-red-700">实际 OUT</TableHead>
+                <TableHead className="text-right text-red-700">OUT 差异</TableHead>
                 <TableHead>映射的实际钱包</TableHead>
               </TableRow>
             </TableHeader>
@@ -2995,6 +3037,10 @@ function ReconcileTab() {
                 const diff = Number(row.diff);
                 const diffColor =
                   diff === 0 ? "text-muted-foreground" : diff > 0 ? "text-blue-600" : "text-red-600";
+                const outDiff = Number(row.outDiff ?? "0");
+                const outDiffColor =
+                  outDiff === 0 ? "text-muted-foreground" : "text-amber-600";
+                const outDiffBg = outDiff !== 0 ? "bg-amber-50" : "";
                 return (
                   <TableRow key={row.theoreticalWallet.id}>
                     <TableCell className="font-medium">{row.theoreticalWallet.name}</TableCell>
@@ -3014,6 +3060,22 @@ function ReconcileTab() {
                     <TableCell className={cn("text-right tabular-nums font-semibold", diffColor)}>
                       {diff > 0 ? "+" : ""}
                       {Number(row.diff).toLocaleString("zh-CN", {
+                        minimumFractionDigits: 2, maximumFractionDigits: 2
+                      })}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      {Number(row.theoreticalOutTotal ?? "0").toLocaleString("zh-CN", {
+                        minimumFractionDigits: 2, maximumFractionDigits: 2
+                      })}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      {Number(row.actualOutTotal ?? "0").toLocaleString("zh-CN", {
+                        minimumFractionDigits: 2, maximumFractionDigits: 2
+                      })}
+                    </TableCell>
+                    <TableCell className={cn("text-right tabular-nums font-semibold", outDiffColor, outDiffBg)}>
+                      {outDiff > 0 ? "+" : ""}
+                      {Number(row.outDiff ?? "0").toLocaleString("zh-CN", {
                         minimumFractionDigits: 2, maximumFractionDigits: 2
                       })}
                     </TableCell>
@@ -3037,11 +3099,13 @@ function ReconcileTab() {
                                 m.theoreticalWalletId === String(row.theoreticalWallet.id) &&
                                 m.actualWalletId === String(aw.id)
                             );
+                            const hasOut = aw.outTotal !== undefined && Number(aw.outTotal) > 0;
                             return (
                               <Badge key={aw.id} tone="transfer">
                                 <span>{aw.name}</span>
                                 <span className="ml-1 tabular-nums">
-                                  ({aw.currency} {Number(aw.total).toLocaleString("zh-CN")})
+                                  ({aw.currency} IN {Number(aw.total).toLocaleString("zh-CN")}
+                                  {hasOut ? ` · OUT ${Number(aw.outTotal ?? "0").toLocaleString("zh-CN")}` : ""})
                                 </span>
                                 {mapping ? (
                                   <button
@@ -3079,7 +3143,7 @@ function ReconcileTab() {
               })}
               {report.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                  <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">
                     暂无对账数据
                   </TableCell>
                 </TableRow>
@@ -3584,6 +3648,7 @@ export function XboxPage() {
       {tab === "accounts" ? <AccountsManagementTab /> : null}
       {tab === "orders" ? <OrdersTab onJumpToSaleRecord={jumpToSaleRecord} /> : null}
       {tab === "sale-records" ? <SaleRecordsTab highlightId={highlightSaleRecordId} /> : null}
+      {tab === "refunds" ? <XboxRefundList /> : null}
       {tab === "wallet-settings" ? <WalletSettingsTab /> : null}
       {tab === "reconcile" ? <ReconcileTab /> : null}
     </div>

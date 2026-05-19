@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDownLeft,
+  ArrowLeftRight,
   ArrowUpRight,
   ChevronDown,
   ChevronUp,
@@ -31,6 +32,8 @@ import {
 import { formatMoney } from "@/lib/money";
 import { cn } from "@/lib/utils";
 import type { TaiwanWallet } from "@/types";
+import { WalletTransferList } from "@/components/wallet-transfer-list";
+import { WalletTransferModal } from "@/components/wallet-transfer-modal";
 
 // CEO 2026-05-18: 操作人名字存在 localStorage, 跨刷新保持
 const OP_NAME_KEY = "taiwan-operator-name";
@@ -52,12 +55,16 @@ function SummaryHeader({
   total,
   count,
   isFetching,
+  showTransfers,
+  onToggleTransfers,
   onRefresh,
   onCreateClick
 }: {
   total: number;
   count: number;
   isFetching: boolean;
+  showTransfers: boolean;
+  onToggleTransfers: () => void;
   onRefresh: () => void;
   onCreateClick: () => void;
 }) {
@@ -79,6 +86,14 @@ function SummaryHeader({
         <Button variant="outline" size="sm" onClick={onRefresh} disabled={isFetching}>
           <RefreshCcw className={cn("h-3.5 w-3.5", isFetching && "animate-spin")} />
           <span className="ml-1.5">刷新</span>
+        </Button>
+        <Button
+          variant={showTransfers ? "default" : "outline"}
+          size="sm"
+          onClick={onToggleTransfers}
+        >
+          <ArrowLeftRight className="h-3.5 w-3.5" />
+          <span className="ml-1.5">划转记录</span>
         </Button>
         <Button size="sm" onClick={onCreateClick}>
           <Plus className="h-3.5 w-3.5" />
@@ -498,12 +513,14 @@ function ChildWalletCard({
   wallet,
   onUpdate,
   onEdit,
-  onShowTransactions
+  onShowTransactions,
+  onTransfer
 }: {
   wallet: TaiwanWallet;
   onUpdate: () => void;
   onEdit: () => void;
   onShowTransactions: () => void;
+  onTransfer: () => void;
 }) {
   // CEO: 解析 remark 里的"卡号:" 和 "注册人:" 行
   const parseRemark = () => {
@@ -562,6 +579,10 @@ function ChildWalletCard({
             <ArrowUpRight className="h-3 w-3 text-red-100 -ml-1" />
             <span className="ml-1 text-xs">更新余额</span>
           </Button>
+          <Button size="sm" variant="outline" onClick={onTransfer} className="h-7 px-2.5">
+            <ArrowLeftRight className="h-3 w-3" />
+            <span className="ml-1 text-xs">划转</span>
+          </Button>
           <Button size="sm" variant="outline" onClick={onShowTransactions} className="h-7 px-2.5">
             <ListOrdered className="h-3 w-3" />
             <span className="ml-1 text-xs">流水</span>
@@ -578,7 +599,8 @@ function GroupCard({
   defaultOpen,
   onUpdate,
   onEdit,
-  onShowTransactions
+  onShowTransactions,
+  onTransfer
 }: {
   group: TaiwanWallet;
   children: TaiwanWallet[];
@@ -586,6 +608,7 @@ function GroupCard({
   onUpdate: (w: TaiwanWallet) => void;
   onEdit: (w: TaiwanWallet) => void;
   onShowTransactions: (w: TaiwanWallet) => void;
+  onTransfer: (w: TaiwanWallet) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const groupTotal = children.reduce((s, c) => s + c.balanceMinor, 0);
@@ -633,6 +656,7 @@ function GroupCard({
                   onUpdate={() => onUpdate(w)}
                   onEdit={() => onEdit(w)}
                   onShowTransactions={() => onShowTransactions(w)}
+                  onTransfer={() => onTransfer(w)}
                 />
               ))}
             </div>
@@ -648,6 +672,8 @@ export function TaiwanPage() {
   const [updateTarget, setUpdateTarget] = useState<TaiwanWallet | null>(null);
   const [editTarget, setEditTarget] = useState<TaiwanWallet | null>(null);
   const [transactionsTarget, setTransactionsTarget] = useState<TaiwanWallet | null>(null);
+  const [transferTarget, setTransferTarget] = useState<TaiwanWallet | null>(null);
+  const [showTransferList, setShowTransferList] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
 
   const { data: wallets = [], isFetching } = useQuery({
@@ -684,12 +710,16 @@ export function TaiwanPage() {
         total={summary?.totalBalanceMinor ?? 0}
         count={summary?.walletCount ?? 0}
         isFetching={isFetching}
+        showTransfers={showTransferList}
+        onToggleTransfers={() => setShowTransferList((v) => !v)}
         onRefresh={() => {
           queryClient.invalidateQueries({ queryKey: ["taiwan-wallets"] });
           queryClient.invalidateQueries({ queryKey: ["taiwan-summary"] });
         }}
         onCreateClick={() => setShowCreate(true)}
       />
+
+      {showTransferList ? <WalletTransferList title="台湾相关划转记录" /> : null}
 
       <div className="space-y-4">
         {groups.map((group) => (
@@ -701,6 +731,7 @@ export function TaiwanPage() {
             onUpdate={setUpdateTarget}
             onEdit={setEditTarget}
             onShowTransactions={setTransactionsTarget}
+            onTransfer={setTransferTarget}
           />
         ))}
         {groups.length === 0 && !isFetching ? (
@@ -727,6 +758,11 @@ export function TaiwanPage() {
       {showCreate ? (
         <CreateWalletModal groups={groups} onClose={() => setShowCreate(false)} />
       ) : null}
+      <WalletTransferModal
+        open={transferTarget !== null}
+        onClose={() => setTransferTarget(null)}
+        defaultFromWalletId={transferTarget?.id}
+      />
     </div>
   );
 }
