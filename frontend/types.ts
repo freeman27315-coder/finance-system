@@ -246,6 +246,37 @@ export type TaiwanSummary = {
 };
 
 // ---------------------------------------------------------------------------
+// 划转单 (Issue #129) - 钱包间转账, 一笔 transfer = 两条流水, 记录汇率
+// ---------------------------------------------------------------------------
+
+export type WalletTransferTransactionRef = {
+  id: string;
+  walletId: string;
+  direction: "in" | "out";
+  amount: string;
+  remark: string | null;
+};
+
+export type WalletTransfer = {
+  id: string;
+  fromWalletId: string;
+  toWalletId: string;
+  fromWalletName: string | null;
+  toWalletName: string | null;
+  fromAmount: string;
+  toAmount: string;
+  rate: string;
+  fromCurrency: string;
+  toCurrency: string;
+  businessDate: string | null;
+  operatorName: string | null;
+  note: string | null;
+  createdAt: string;
+  deletedAt: string | null;
+  transactions: WalletTransferTransactionRef[];
+};
+
+// ---------------------------------------------------------------------------
 // Taobao（PR #65/#67/#69/#73 后的新结构：3 店铺 × 5 钱包 + storeAlipayWallet 必填带 type）
 // ---------------------------------------------------------------------------
 

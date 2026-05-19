@@ -38,6 +38,8 @@ import type {
   Vendor,
   VendorTransaction,
   WalletBalance,
+  WalletTransfer,
+  WalletTransferTransactionRef,
   WalletType,
   XboxAccount,
   XboxAccountAuditLog,
@@ -1709,6 +1711,137 @@ export async function getTaiwanSummary(): Promise<TaiwanSummary> {
   } catch {
     return mockTaiwanSummary;
   }
+}
+
+// ---------------------------------------------------------------------------
+// 划转单 (Issue #129) - 钱包间转账 (POST/GET/GET-by-id/DELETE)
+// ---------------------------------------------------------------------------
+
+type WalletTransferTxResponse = {
+  id: string | number;
+  wallet_id?: string | number;
+  walletId?: string | number;
+  direction: "in" | "out";
+  amount: string | number;
+  remark?: string | null;
+};
+
+type WalletTransferResponse = {
+  id: string | number;
+  from_wallet_id?: string | number;
+  fromWalletId?: string | number;
+  to_wallet_id?: string | number;
+  toWalletId?: string | number;
+  from_wallet_name?: string | null;
+  fromWalletName?: string | null;
+  to_wallet_name?: string | null;
+  toWalletName?: string | null;
+  from_amount: string | number;
+  to_amount: string | number;
+  rate: string | number;
+  from_currency: string;
+  to_currency: string;
+  business_date?: string | null;
+  businessDate?: string | null;
+  operator_name?: string | null;
+  operatorName?: string | null;
+  note?: string | null;
+  created_at?: string;
+  createdAt?: string;
+  deleted_at?: string | null;
+  deletedAt?: string | null;
+  transactions?: WalletTransferTxResponse[];
+};
+
+function normalizeWalletTransferTx(tx: WalletTransferTxResponse): WalletTransferTransactionRef {
+  return {
+    id: String(tx.id),
+    walletId: String(tx.wallet_id ?? tx.walletId ?? ""),
+    direction: tx.direction,
+    amount: String(tx.amount),
+    remark: tx.remark ?? null
+  };
+}
+
+function normalizeWalletTransfer(t: WalletTransferResponse): WalletTransfer {
+  return {
+    id: String(t.id),
+    fromWalletId: String(t.from_wallet_id ?? t.fromWalletId ?? ""),
+    toWalletId: String(t.to_wallet_id ?? t.toWalletId ?? ""),
+    fromWalletName: t.from_wallet_name ?? t.fromWalletName ?? null,
+    toWalletName: t.to_wallet_name ?? t.toWalletName ?? null,
+    fromAmount: String(t.from_amount),
+    toAmount: String(t.to_amount),
+    rate: String(t.rate),
+    fromCurrency: t.from_currency,
+    toCurrency: t.to_currency,
+    businessDate: t.business_date ?? t.businessDate ?? null,
+    operatorName: t.operator_name ?? t.operatorName ?? null,
+    note: t.note ?? null,
+    createdAt: t.created_at ?? t.createdAt ?? "",
+    deletedAt: t.deleted_at ?? t.deletedAt ?? null,
+    transactions: (t.transactions ?? []).map(normalizeWalletTransferTx)
+  };
+}
+
+export async function createWalletTransfer(payload: {
+  fromWalletId: string;
+  toWalletId: string;
+  fromAmount: string;
+  toAmount: string;
+  businessDate?: string;
+  operatorName?: string;
+  note?: string;
+}): Promise<WalletTransfer> {
+  const body: Record<string, unknown> = {
+    from_wallet_id: Number(payload.fromWalletId),
+    to_wallet_id: Number(payload.toWalletId),
+    from_amount: payload.fromAmount,
+    to_amount: payload.toAmount
+  };
+  if (payload.businessDate) body.business_date = payload.businessDate;
+  if (payload.operatorName) body.operator_name = payload.operatorName;
+  if (payload.note) body.note = payload.note;
+  const data = (await postJson("/api/wallet-transfers", body)) as WalletTransferResponse;
+  return normalizeWalletTransfer(data);
+}
+
+export async function listWalletTransfers(filters?: {
+  fromWalletId?: string;
+  toWalletId?: string;
+  fromDate?: string;
+  toDate?: string;
+  operatorName?: string;
+  includeDeleted?: boolean;
+}): Promise<WalletTransfer[]> {
+  try {
+    const params = new URLSearchParams();
+    if (filters?.fromWalletId) params.set("from_wallet_id", filters.fromWalletId);
+    if (filters?.toWalletId) params.set("to_wallet_id", filters.toWalletId);
+    if (filters?.fromDate) params.set("from_date", filters.fromDate);
+    if (filters?.toDate) params.set("to_date", filters.toDate);
+    if (filters?.operatorName) params.set("operator_name", filters.operatorName);
+    if (filters?.includeDeleted) params.set("include_deleted", "true");
+    const qs = params.toString();
+    const path = qs ? `/api/wallet-transfers?${qs}` : "/api/wallet-transfers";
+    const data = await fetchJson<WalletTransferResponse[]>(path);
+    return data.map(normalizeWalletTransfer);
+  } catch {
+    return [];
+  }
+}
+
+export async function getWalletTransfer(transferId: string): Promise<WalletTransfer> {
+  const data = await fetchJson<WalletTransferResponse>(`/api/wallet-transfers/${transferId}`);
+  return normalizeWalletTransfer(data);
+}
+
+export async function cancelWalletTransfer(transferId: string): Promise<WalletTransfer> {
+  const data = (await sendJson(
+    `/api/wallet-transfers/${transferId}`,
+    "DELETE"
+  )) as WalletTransferResponse;
+  return normalizeWalletTransfer(data);
 }
 
 // ---------------------------------------------------------------------------
