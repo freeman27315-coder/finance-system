@@ -48,6 +48,7 @@ import type {
   XboxOrder,
   XboxOrderStatus,
   XboxPoolOptionGroup,
+  XboxRefund,
   XboxSaleCurrency,
   XboxSaleRecord,
   XboxSummary,
@@ -662,6 +663,12 @@ type XboxSaleRecordResponse = {
   created_at?: string;
   lastUpdatedAt?: string;
   last_updated_at?: string;
+  // Issue #130
+  status?: string;
+  refundedAt?: string | null;
+  refunded_at?: string | null;
+  refundId?: string | number | null;
+  refund_id?: string | number | null;
 };
 
 type XboxWalletMethodResponse = {
@@ -730,6 +737,9 @@ function _normalizeOrder(o: XboxOrderResponse): XboxOrder {
 
 function _normalizeSaleRecord(r: XboxSaleRecordResponse): XboxSaleRecord {
   const currency = (r.saleCurrency ?? r.sale_currency ?? "CNY") as XboxSaleCurrency;
+  const rawStatus = r.status ?? "active";
+  const status: "active" | "refunded" = rawStatus === "refunded" ? "refunded" : "active";
+  const refundIdRaw = r.refundId ?? r.refund_id ?? null;
   return {
     id: String(r.id),
     accountId: String(r.accountId ?? r.account_id ?? ""),
@@ -748,7 +758,10 @@ function _normalizeSaleRecord(r: XboxSaleRecordResponse): XboxSaleRecord {
         : String(r.bookkeepingTxId ?? r.bookkeeping_tx_id),
     orderIds: (r.orderIds ?? r.order_ids ?? []).map((x) => String(x)),
     createdAt: r.createdAt ?? r.created_at ?? "",
-    lastUpdatedAt: r.lastUpdatedAt ?? r.last_updated_at ?? ""
+    lastUpdatedAt: r.lastUpdatedAt ?? r.last_updated_at ?? "",
+    status,
+    refundedAt: r.refundedAt ?? r.refunded_at ?? null,
+    refundId: refundIdRaw == null ? null : String(refundIdRaw)
   };
 }
 
@@ -2145,4 +2158,147 @@ export async function returnClaim(
     body
   )) as OperatorClaimResponse;
   return _normalizeClaim(data);
+}
+
+// ---------------------------------------------------------------------------
+// XBOX 退款单 (Issue #130) — 全额退, 关联原销售记录, 实际钱包 + 理论钱包都 OUT
+// ---------------------------------------------------------------------------
+
+type XboxRefundSaleSummaryResponse = {
+  id: string | number;
+  accountId?: string | number;
+  account_id?: string | number;
+  accountNo?: string | null;
+  account_no?: string | null;
+  accountName?: string | null;
+  account_name?: string | null;
+  productName?: string;
+  product_name?: string;
+  operatorName?: string;
+  operator_name?: string;
+  salePrice?: string | number;
+  sale_price?: string | number;
+  saleCurrency?: string;
+  sale_currency?: string;
+  walletItemLabel?: string;
+  wallet_item_label?: string;
+};
+
+type XboxRefundResponse = {
+  id: string | number;
+  originalSaleRecordId?: string | number;
+  original_sale_record_id?: string | number;
+  refundAmount?: string | number;
+  refund_amount?: string | number;
+  refundCurrency?: string;
+  refund_currency?: string;
+  actualWalletId?: string | number;
+  actual_wallet_id?: string | number;
+  theoreticalWalletId?: string | number;
+  theoretical_wallet_id?: string | number;
+  businessDate?: string | null;
+  business_date?: string | null;
+  operatorName?: string | null;
+  operator_name?: string | null;
+  note?: string | null;
+  actualBookkeepingTxId?: string | number | null;
+  actual_bookkeeping_tx_id?: string | number | null;
+  theoreticalBookkeepingTxId?: string | number | null;
+  theoretical_bookkeeping_tx_id?: string | number | null;
+  createdAt?: string;
+  created_at?: string;
+  saleRecord?: XboxRefundSaleSummaryResponse | null;
+  sale_record?: XboxRefundSaleSummaryResponse | null;
+  actualWalletName?: string | null;
+  actual_wallet_name?: string | null;
+  theoreticalWalletName?: string | null;
+  theoretical_wallet_name?: string | null;
+};
+
+function _normalizeRefundSaleSummary(s: XboxRefundSaleSummaryResponse | null | undefined): XboxRefund["saleRecord"] {
+  if (!s) return null;
+  return {
+    id: String(s.id),
+    accountId: String(s.accountId ?? s.account_id ?? ""),
+    accountNo: s.accountNo ?? s.account_no ?? null,
+    accountName: s.accountName ?? s.account_name ?? null,
+    productName: s.productName ?? s.product_name ?? "",
+    operatorName: s.operatorName ?? s.operator_name ?? "",
+    salePrice: String(s.salePrice ?? s.sale_price ?? "0"),
+    saleCurrency: s.saleCurrency ?? s.sale_currency ?? "CNY",
+    walletItemLabel: s.walletItemLabel ?? s.wallet_item_label ?? ""
+  };
+}
+
+function _normalizeXboxRefund(r: XboxRefundResponse): XboxRefund {
+  return {
+    id: String(r.id),
+    originalSaleRecordId: String(r.originalSaleRecordId ?? r.original_sale_record_id ?? ""),
+    refundAmount: String(r.refundAmount ?? r.refund_amount ?? "0"),
+    refundCurrency: r.refundCurrency ?? r.refund_currency ?? "CNY",
+    actualWalletId: String(r.actualWalletId ?? r.actual_wallet_id ?? ""),
+    theoreticalWalletId: String(r.theoreticalWalletId ?? r.theoretical_wallet_id ?? ""),
+    businessDate: r.businessDate ?? r.business_date ?? null,
+    operatorName: r.operatorName ?? r.operator_name ?? null,
+    note: r.note ?? null,
+    actualBookkeepingTxId:
+      r.actualBookkeepingTxId == null && r.actual_bookkeeping_tx_id == null
+        ? null
+        : String(r.actualBookkeepingTxId ?? r.actual_bookkeeping_tx_id),
+    theoreticalBookkeepingTxId:
+      r.theoreticalBookkeepingTxId == null && r.theoretical_bookkeeping_tx_id == null
+        ? null
+        : String(r.theoreticalBookkeepingTxId ?? r.theoretical_bookkeeping_tx_id),
+    createdAt: r.createdAt ?? r.created_at ?? "",
+    saleRecord: _normalizeRefundSaleSummary(r.saleRecord ?? r.sale_record ?? null),
+    actualWalletName: r.actualWalletName ?? r.actual_wallet_name ?? null,
+    theoreticalWalletName: r.theoreticalWalletName ?? r.theoretical_wallet_name ?? null
+  };
+}
+
+export async function createXboxRefund(payload: {
+  saleRecordId: string;
+  actualWalletId: string;
+  businessDate?: string;
+  operatorName?: string;
+  note?: string;
+}): Promise<XboxRefund> {
+  const body: Record<string, unknown> = {
+    sale_record_id: payload.saleRecordId,
+    actual_wallet_id: payload.actualWalletId
+  };
+  if (payload.businessDate) body.business_date = payload.businessDate;
+  if (payload.operatorName) body.operator_name = payload.operatorName;
+  if (payload.note) body.note = payload.note;
+  const data = (await postJson("/api/xbox/refunds", body)) as XboxRefundResponse;
+  return _normalizeXboxRefund(data);
+}
+
+export async function listXboxRefunds(filters?: {
+  fromDate?: string;
+  toDate?: string;
+  actualWalletId?: string;
+  operatorName?: string;
+}): Promise<XboxRefund[]> {
+  const qs = new URLSearchParams();
+  if (filters?.fromDate) qs.set("from_date", filters.fromDate);
+  if (filters?.toDate) qs.set("to_date", filters.toDate);
+  if (filters?.actualWalletId) qs.set("actual_wallet_id", filters.actualWalletId);
+  if (filters?.operatorName) qs.set("operator_name", filters.operatorName);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  try {
+    const data = await fetchJson<XboxRefundResponse[]>(`/api/xbox/refunds${suffix}`);
+    return data.map(_normalizeXboxRefund);
+  } catch {
+    return [];
+  }
+}
+
+export async function getXboxRefund(refundId: string): Promise<XboxRefund> {
+  const data = await fetchJson<XboxRefundResponse>(`/api/xbox/refunds/${refundId}`);
+  return _normalizeXboxRefund(data);
+}
+
+export async function cancelXboxRefund(refundId: string): Promise<void> {
+  await sendJson(`/api/xbox/refunds/${refundId}`, "DELETE");
 }

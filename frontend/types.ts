@@ -122,6 +122,8 @@ export type XboxOrder = {
 };
 
 // 销售记录
+export type XboxSaleRecordStatus = "active" | "refunded";
+
 export type XboxSaleRecord = {
   id: string;
   accountId: string;
@@ -138,6 +140,40 @@ export type XboxSaleRecord = {
   orderIds: string[];
   createdAt: string;
   lastUpdatedAt: string;
+  // Issue #130 - 退款单
+  status: XboxSaleRecordStatus;
+  refundedAt: string | null;
+  refundId: string | null;
+};
+
+// 退款单 (Issue #130) — XBOX 销售记录全额退款
+export type XboxRefund = {
+  id: string;
+  originalSaleRecordId: string;
+  refundAmount: string; // 后端 Decimal 字符串
+  refundCurrency: string;
+  actualWalletId: string;
+  theoreticalWalletId: string;
+  businessDate: string | null;
+  operatorName: string | null;
+  note: string | null;
+  actualBookkeepingTxId: string | null;
+  theoreticalBookkeepingTxId: string | null;
+  createdAt: string;
+  // 列表 / 详情时后端附带的销售记录摘要 (可选)
+  saleRecord?: {
+    id: string;
+    accountId: string;
+    accountNo: string | null;
+    accountName: string | null;
+    productName: string;
+    operatorName: string;
+    salePrice: string;
+    saleCurrency: string;
+    walletItemLabel: string;
+  } | null;
+  actualWalletName?: string | null;
+  theoreticalWalletName?: string | null;
 };
 
 // 钱包设置 - 备注模板
@@ -192,12 +228,25 @@ export type XboxReconcileMapping = {
 };
 
 // 对账报告每行（一个理论值钱包 + 它配对的实际值钱包们）
+// Issue #130 - 新增 OUT 方向字段(退款), 后端在 actualWallets 每个项里也加了 outTotal
+export type XboxReconcileReportActualWallet = {
+  id: string;
+  name: string;
+  currency: string;
+  total: string;
+  outTotal?: string;
+};
+
 export type XboxReconcileReportRow = {
   theoreticalWallet: { id: string; name: string; currency: string };
-  actualWallets: { id: string; name: string; currency: string; total: string }[];
+  actualWallets: XboxReconcileReportActualWallet[];
   theoreticalTotal: string;
   actualTotal: string;
   diff: string;
+  // Issue #130 退款方向(OUT)对账, 后端可能未返回, 兜底为 "0"
+  theoreticalOutTotal?: string;
+  actualOutTotal?: string;
+  outDiff?: string;
 };
 
 export type XboxCountrySummary = {
